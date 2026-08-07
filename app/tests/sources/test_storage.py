@@ -85,3 +85,32 @@ def test_delete_project_removes_only_validated_project_directory(tmp_path: Path)
     assert storage.resolve(other_saved.relative_path).read_bytes() == b"other"
     with pytest.raises(ValueError, match="Недопустимый идентификатор"):
         storage.delete_project("../project-2")
+
+
+def test_save_rejects_projects_directory_symlinked_outside_data_dir(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    external_projects = tmp_path / "external-projects"
+    data_dir.mkdir()
+    external_projects.mkdir()
+    (data_dir / "projects").symlink_to(external_projects, target_is_directory=True)
+    storage = LocalStorage(data_dir)
+
+    with pytest.raises(ValueError, match="Недопустимый путь"):
+        storage.save("project-1", "source-1", "file.pdf", BytesIO(b"safe"))
+
+    assert not (external_projects / "project-1").exists()
+
+
+def test_delete_project_rejects_symlink_to_another_project(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    target_project = projects_dir / "project-2"
+    target_project.mkdir(parents=True)
+    sentinel = target_project / "keep.txt"
+    sentinel.write_bytes(b"keep")
+    (projects_dir / "project-1").symlink_to(target_project, target_is_directory=True)
+    storage = LocalStorage(tmp_path)
+
+    storage.delete_project("project-1")
+
+    assert sentinel.read_bytes() == b"keep"
+    assert not (projects_dir / "project-1").is_symlink()

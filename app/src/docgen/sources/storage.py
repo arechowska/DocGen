@@ -25,7 +25,7 @@ class LocalStorage:
     def save(
         self, project_id: str, source_id: str, filename: str, stream: BinaryIO
     ) -> StoredFile:
-        project_dir = self._project_dir(project_id)
+        project_dir = self._resolved_project_dir(project_id)
         validated_source_id = self._validated_identifier(source_id)
         sources_dir = project_dir / "sources"
         sources_dir.mkdir(parents=True, exist_ok=True)
@@ -60,11 +60,12 @@ class LocalStorage:
         path.unlink(missing_ok=True)
 
     def delete_project(self, project_id: str) -> None:
-        project_dir = self._project_dir(project_id)
-        if not project_dir.exists():
+        project_path = self._project_path(project_id)
+        if project_path.is_symlink():
+            project_path.unlink()
             return
-        if project_dir.is_symlink():
-            project_dir.unlink()
+        project_dir = self._resolved_project_dir(project_id)
+        if not project_dir.exists():
             return
         shutil.rmtree(project_dir)
 
@@ -76,9 +77,19 @@ class LocalStorage:
         self._require_within(resolved_path, self._data_dir)
         return resolved_path
 
-    def _project_dir(self, project_id: str) -> Path:
+    def _project_path(self, project_id: str) -> Path:
         validated_project_id = self._validated_identifier(project_id)
-        project_dir = (self._projects_dir / validated_project_id).resolve()
+        projects_dir = self._projects_dir.resolve()
+        self._require_within(projects_dir, self._data_dir)
+        if self._projects_dir.is_symlink():
+            raise ValueError("Недопустимый путь")
+        return self._projects_dir / validated_project_id
+
+    def _resolved_project_dir(self, project_id: str) -> Path:
+        project_path = self._project_path(project_id)
+        if project_path.is_symlink():
+            raise ValueError("Недопустимый путь")
+        project_dir = project_path.resolve()
         self._require_within(project_dir, self._projects_dir.resolve())
         return project_dir
 
