@@ -15,3 +15,7 @@ class Settings(BaseSettings):
     confluence_hosts: tuple[str, ...] = ("confluence.local",)
     confluence_api_base: AnyHttpUrl | None = None
     confluence_token: SecretStr | None = None
+    local_text_base_url: AnyHttpUrl | None = None
+    local_text_model: str | None = None
+    local_vision_base_url: AnyHttpUrl | None = None
+    local_vision_model: str | None = None
