@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from docgen.ai.grounding import GroundingValidator
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import Provenance
@@ -31,6 +33,37 @@ def test_grounding_allows_empty_gap_only_when_flagged() -> None:
     )
 
     assert GroundingValidator().validate(document, set()) == []
+
+
+@pytest.mark.parametrize("text", [None, ""])
+def test_grounding_allows_none_or_empty_text_for_flagged_gap(text: str | None) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                id="gap-1", kind=NodeKind.GAP, text=text, flags=["missing-source-data"]
+            )
+        ],
+    )
+
+    assert GroundingValidator().validate(document, set()) == []
+
+
+def test_grounding_rejects_gap_with_whitespace_text() -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                id="gap-1", kind=NodeKind.GAP, text=" ", flags=["missing-source-data"]
+            )
+        ],
+    )
+
+    assert GroundingValidator().validate(document, set()) == [
+        "Узел gap-1 типа gap не должен содержать текст или данные"
+    ]
 
 
 def test_grounding_rejects_gap_with_text_or_missing_flag() -> None:

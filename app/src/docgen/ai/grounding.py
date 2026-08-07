@@ -19,7 +19,7 @@ class GroundingValidator:
     def _validate_gap(node: DocumentNode, errors: list[str]) -> None:
         if "missing-source-data" not in node.flags:
             errors.append(f"Узел {node.id} типа gap должен иметь флаг missing-source-data")
-        if node.text or node.data or node.children:
+        if node.text not in (None, "") or node.data or node.children:
             errors.append(f"Узел {node.id} типа gap не должен содержать текст или данные")
 
     @staticmethod
