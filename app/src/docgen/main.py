@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from .config import Settings
 from .db import Base, build_session_factory
 from .projects.models import Project  # noqa: F401
+from .projects.routes import router as projects_router
 from .sources.models import Source  # noqa: F401
 
 
@@ -22,6 +23,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="DocGen", lifespan=lifespan)
     app.state.settings = app_settings
+    app.include_router(projects_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
