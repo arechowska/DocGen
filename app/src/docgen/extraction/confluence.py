@@ -10,9 +10,9 @@ from bs4 import BeautifulSoup, Tag
 from pydantic import SecretStr
 
 from docgen.config import Settings
+from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
-from docgen.workflows.normalize import VirtualPageCalculator
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5_000_000
 _TIMEOUT_SECONDS = 30.0

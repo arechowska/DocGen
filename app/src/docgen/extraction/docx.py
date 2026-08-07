@@ -10,6 +10,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from lxml.etree import XMLSyntaxError
 
+from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
@@ -35,7 +36,11 @@ class DocxExtractor:
             elif element.tag.endswith("}tbl"):
                 table_index += 1
                 blocks.append(self._table_block(source, Table(element, document), table_index))
-        return ExtractionResult(blocks=blocks, page_units=1, warnings=[])
+        return ExtractionResult(
+            blocks=blocks,
+            page_units=VirtualPageCalculator().from_blocks(blocks),
+            warnings=[],
+        )
 
     @staticmethod
     def _paragraph_block(source: Source, paragraph: Paragraph, index: int) -> NormalizedBlock:

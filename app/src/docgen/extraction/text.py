@@ -5,6 +5,7 @@ from pathlib import Path
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
@@ -21,7 +22,11 @@ class TextExtractor:
             blocks = self._extract_markdown(source, text)
         else:
             blocks = self._extract_text(source, text)
-        return ExtractionResult(blocks=blocks, page_units=1, warnings=[])
+        return ExtractionResult(
+            blocks=blocks,
+            page_units=VirtualPageCalculator().from_blocks(blocks),
+            warnings=[],
+        )
 
     @staticmethod
     def _is_markdown(source: Source, path: Path) -> bool:

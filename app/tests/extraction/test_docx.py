@@ -66,6 +66,24 @@ def test_docx_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
     assert [block.id for block in first_result.blocks] == [block.id for block in second_result.blocks]
 
 
+def test_docx_counts_virtual_page_boundaries(tmp_path: Path) -> None:
+    path = tmp_path / "input.docx"
+    extractor = DocxExtractor()
+    document = Document()
+    document.add_paragraph("a" * 1800)
+    document.save(path)
+
+    exact_page = extractor.extract(make_source(), path)
+
+    document = Document()
+    document.add_paragraph("a" * 1801)
+    document.save(path)
+    next_page = extractor.extract(make_source(), path)
+
+    assert exact_page.page_units == 1
+    assert next_page.page_units == 2
+
+
 def test_docx_returns_safe_error_when_file_cannot_be_read(tmp_path: Path) -> None:
     with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
         DocxExtractor().extract(make_source(), tmp_path / "missing.docx")

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from docgen.extraction.registry import ExtractionResult
+from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source, SourceKind
 from docgen.workflows.normalize import (
@@ -58,6 +58,24 @@ class FakeExtractors:
 class FakeConfluence:
     def fetch(self, url: str) -> ExtractionResult:
         raise AssertionError("a file source must not use the Confluence client")
+
+
+@dataclass
+class StaticSources:
+    source: Source
+
+    def list_for_project(self, project_id: str) -> list[Source]:
+        assert project_id == self.source.project_id
+        return [self.source]
+
+
+@dataclass
+class StaticStorage:
+    path: Path
+
+    def resolve(self, relative_path: str) -> Path:
+        assert relative_path == "projects/p1/sources/source-1.txt"
+        return self.path
 
 
 @pytest.fixture
@@ -134,6 +152,33 @@ def test_normalization_includes_source_warnings_and_adds_long_processing_warning
     result = workflow.run("p1")
 
     assert result.warnings == ["source warning", "Обработка может занять более пяти минут"]
+
+
+def test_normalization_enforces_limit_for_actual_text_extraction(tmp_path: Path) -> None:
+    path = tmp_path / "input.txt"
+    source = Source(
+        id="source-1",
+        project_id="p1",
+        kind=SourceKind.FILE,
+        display_name="input.txt",
+        media_type="text/plain",
+        size_bytes=1,
+        storage_path="projects/p1/sources/source-1.txt",
+        status="stored",
+    )
+    workflow = NormalizationWorkflow(
+        StaticSources(source),
+        StaticStorage(path),
+        ExtractorRegistry.default(),
+        FakeConfluence(),
+    )
+
+    path.write_text("a" * 270_000, encoding="utf-8")
+    assert workflow.run("p1").total_pages == 150
+
+    path.write_text("a" * 270_001, encoding="utf-8")
+    with pytest.raises(PageLimitExceeded, match="Максимальный объём — 150 страниц"):
+        workflow.run("p1")
 
 
 def _block(block_id: str, kind: BlockKind, text: str) -> NormalizedBlock:

@@ -50,6 +50,24 @@ def test_txt_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
     assert [block.id for block in first_result.blocks] == [block.id for block in second_result.blocks]
 
 
+@pytest.mark.parametrize(("media_type", "suffix"), (("text/plain", ".txt"), ("text/markdown", ".md")))
+def test_non_paginated_text_counts_virtual_page_boundaries(
+    tmp_path: Path,
+    media_type: str,
+    suffix: str,
+) -> None:
+    path = tmp_path / f"input{suffix}"
+    extractor = TextExtractor()
+
+    path.write_text("a" * 1800, encoding="utf-8")
+    exact_page = extractor.extract(make_source(media_type), path)
+    path.write_text("a" * 1801, encoding="utf-8")
+    next_page = extractor.extract(make_source(media_type), path)
+
+    assert exact_page.page_units == 1
+    assert next_page.page_units == 2
+
+
 def test_txt_rejects_non_utf8_content(tmp_path: Path) -> None:
     path = tmp_path / "input.txt"
     path.write_bytes(b"\xff\xfe")

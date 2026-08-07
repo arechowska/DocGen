@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
-from math import ceil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
-from docgen.extraction.schemas import BlockKind, NormalizedBlock
+from docgen.extraction.schemas import NormalizedBlock
 from docgen.models import Source, SourceKind
 from docgen.sources.repository import SourceRepository
 from docgen.sources.storage import LocalStorage
@@ -20,27 +19,16 @@ _LONG_PROCESSING_THRESHOLD = 101
 _PAGE_LIMIT_MESSAGE = "Максимальный объём — 150 страниц"
 _LONG_PROCESSING_WARNING = "Обработка может занять более пяти минут"
 
+__all__ = [
+    "NormalizationWorkflow",
+    "NormalizedProject",
+    "PageLimitExceeded",
+    "VirtualPageCalculator",
+]
+
 
 class PageLimitExceeded(ValueError):
     """Raised before downstream model work for a project over the page limit."""
-
-
-@dataclass(frozen=True)
-class VirtualPageCalculator:
-    chars_per_page: int = 1800
-
-    def __post_init__(self) -> None:
-        if self.chars_per_page <= 0:
-            raise ValueError("chars_per_page must be positive")
-
-    def from_text(self, text: str) -> int:
-        non_whitespace_characters = sum(not character.isspace() for character in text)
-        return ceil(max(1, non_whitespace_characters) / self.chars_per_page)
-
-    def from_blocks(self, blocks: Iterable[NormalizedBlock]) -> int:
-        block_list = list(blocks)
-        text = "".join(block.text for block in block_list if block.kind is not BlockKind.IMAGE)
-        return self.from_text(text) + sum(block.kind is BlockKind.IMAGE for block in block_list)
 
 
 @dataclass(frozen=True)
