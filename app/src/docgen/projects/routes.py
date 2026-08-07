@@ -1,20 +1,18 @@
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from docgen.sources.service import SourceService
 from docgen.sources.storage import LocalStorage
+from docgen.web import templates
 
 from .repository import ProjectRepository
 from .service import ProjectService
 
 router = APIRouter(prefix="/projects")
-templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
 
 def get_session(request: Request) -> Iterator[Session]:

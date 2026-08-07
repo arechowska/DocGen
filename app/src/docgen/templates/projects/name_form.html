@@ -1,4 +1,12 @@
-<form hx-patch="/projects/{{ project.id }}" hx-target="this" hx-trigger="change delay:500ms" class="max-w-2xl" method="post">
+<form
+  hx-patch="/projects/{{ project.id }}"
+  hx-target="this"
+  hx-swap="outerHTML"
+  hx-trigger="change delay:500ms"
+  hx-on::before-swap="if (event.detail.xhr.status === 422) { event.detail.shouldSwap = true; event.detail.isError = false }"
+  class="max-w-2xl"
+  method="post"
+>
   <label class="text-sm font-medium text-[#707070]" for="project-name">Название проекта</label>
   <input id="project-name" name="name" value="{{ name | default(project.name) }}" class="mt-3 w-full rounded-full bg-[#f5f5f7] px-5 py-4 text-3xl font-semibold tracking-tight outline-none ring-[#0071e3] focus:ring-2" type="text">
   {% if error %}

@@ -1,3 +1,5 @@
+from html.parser import HTMLParser
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -55,7 +57,9 @@ def test_autosave_renames_project_and_returns_name_form(
 
     assert response.status_code == 200
     assert "Переименованный проект" in response.text
-    assert 'hx-patch="/projects/' in response.text
+    form = _single_form(response.text)
+    assert form["hx-patch"].startswith("/projects/")
+    assert form["hx-swap"] == "outerHTML"
 
     session = client.app.state.session_factory()
     try:
@@ -78,6 +82,10 @@ def test_blank_autosave_returns_inline_error(
     assert response.status_code == 422
     assert "Название проекта обязательно" in response.text
     assert 'value="   "' in response.text
+    form = _single_form(response.text)
+    assert form["hx-swap"] == "outerHTML"
+    assert "422" in form["hx-on::before-swap"]
+    assert "shouldSwap = true" in form["hx-on::before-swap"]
 
 
 def test_delete_project_redirects_to_listing(
@@ -101,3 +109,20 @@ def test_htmx_delete_redirects_the_browser_to_listing(
 
     assert response.status_code == 200
     assert response.headers["hx-redirect"] == "/projects"
+
+
+class _FormParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.forms: list[dict[str, str | None]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "form":
+            self.forms.append(dict(attrs))
+
+
+def _single_form(markup: str) -> dict[str, str | None]:
+    parser = _FormParser()
+    parser.feed(markup)
+    assert len(parser.forms) == 1
+    return parser.forms[0]

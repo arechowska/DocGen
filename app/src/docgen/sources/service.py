@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import urlsplit
@@ -15,6 +16,7 @@ from .storage import LocalStorage
 
 ALLOWED_EXTENSIONS = frozenset({".docx", ".pdf", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"})
 _CONFLUENCE_URL_ERROR = "Разрешены только ссылки Confluence"
+logger = logging.getLogger(__name__)
 
 
 class SourceService:
@@ -82,7 +84,21 @@ class SourceService:
             raise
 
         if storage_path is not None:
-            self._storage.delete(storage_path)
+            try:
+                self._storage.delete(storage_path)
+            except Exception:
+                logger.exception(
+                    "source_cleanup_failed project_id=%s source_id=%s storage_path=%s",
+                    project_id,
+                    source_id,
+                    storage_path,
+                    extra={
+                        "project_id": project_id,
+                        "source_id": source_id,
+                        "storage_path": storage_path,
+                    },
+                )
+                raise
 
     def _require_project(self, project_id: str) -> None:
         if self._project_repository.get(project_id) is None:

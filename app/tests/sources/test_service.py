@@ -1,3 +1,4 @@
+import logging
 from io import BytesIO
 
 import pytest
@@ -152,3 +153,49 @@ def test_project_deletion_cascades_source_records_and_project_files(session: Ses
 def test_project_deletion_rejects_missing_project(session: Session, tmp_path) -> None:
     with pytest.raises(LookupError, match="Проект не найден"):
         ProjectService(session, LocalStorage(tmp_path / "data")).delete("missing")
+
+
+def test_source_cleanup_failure_is_logged_after_database_commit(
+    session: Session, tmp_path, monkeypatch, caplog
+) -> None:
+    storage = LocalStorage(tmp_path / "data")
+    service = SourceService(session, storage, confluence_hosts=("wiki.example.test",))
+    create_project(session)
+    source = service.add_file("project-1", "case.txt", "text/plain", BytesIO(b"text"))
+
+    def fail_delete(relative_path: str) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(storage, "delete", fail_delete)
+    with (
+        caplog.at_level(logging.ERROR, logger="docgen.sources.service"),
+        pytest.raises(OSError, match="cleanup failed"),
+    ):
+        service.delete("project-1", source.id)
+
+    assert session.get(Source, source.id) is None
+    record = next(record for record in caplog.records if record.msg.startswith("source_cleanup_failed"))
+    assert record.project_id == "project-1"
+    assert record.source_id == source.id
+    assert record.storage_path == source.storage_path
+
+
+def test_project_cleanup_failure_is_logged_after_database_commit(
+    session: Session, tmp_path, monkeypatch, caplog
+) -> None:
+    storage = LocalStorage(tmp_path / "data")
+    create_project(session)
+
+    def fail_delete_project(project_id: str) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(storage, "delete_project", fail_delete_project)
+    with (
+        caplog.at_level(logging.ERROR, logger="docgen.projects.service"),
+        pytest.raises(OSError, match="cleanup failed"),
+    ):
+        ProjectService(session, storage).delete("project-1")
+
+    assert session.get(Project, "project-1") is None
+    record = next(record for record in caplog.records if record.msg.startswith("project_cleanup_failed"))
+    assert record.project_id == "project-1"

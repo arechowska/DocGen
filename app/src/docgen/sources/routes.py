@@ -1,17 +1,15 @@
-from pathlib import Path
-from typing import Annotated
+from typing import Annotated, BinaryIO
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
-from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from docgen.projects.routes import SessionDependency
+from docgen.web import templates
 
 from .service import SourceService
 from .storage import LocalStorage
 
 router = APIRouter(prefix="/projects/{project_id}/sources")
-templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
 
 def get_source_service(request: Request, session: SessionDependency) -> SourceService:
@@ -42,6 +40,18 @@ def _source_list_response(request: Request, project_id: str, service: SourceServ
     )
 
 
+def _add_file_response(
+    request: Request,
+    project_id: str,
+    filename: str,
+    media_type: str,
+    stream: BinaryIO,
+    service: SourceService,
+):
+    service.add_file(project_id, filename, media_type, stream)
+    return _source_list_response(request, project_id, service)
+
+
 @router.post("/files")
 async def add_file(
     request: Request,
@@ -50,14 +60,15 @@ async def add_file(
     service: SourceServiceDependency,
 ):
     try:
-        await run_in_threadpool(
-            service.add_file,
+        return await run_in_threadpool(
+            _add_file_response,
+            request,
             project_id,
             file.filename or "",
             file.content_type or "application/octet-stream",
             file.file,
+            service,
         )
-        return _source_list_response(request, project_id, service)
     except ValueError as error:
         return _error_response(request, error, status.HTTP_422_UNPROCESSABLE_CONTENT)
     except LookupError as error:

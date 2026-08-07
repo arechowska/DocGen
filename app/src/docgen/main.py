@@ -18,9 +18,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         app_settings.data_dir.mkdir(parents=True, exist_ok=True)
         session_factory = build_session_factory(app_settings.database_url)
-        Base.metadata.create_all(session_factory.kw["bind"])
-        application.state.session_factory = session_factory
-        yield
+        engine = session_factory.kw["bind"]
+        try:
+            Base.metadata.create_all(engine)
+            application.state.session_factory = session_factory
+            yield
+        finally:
+            engine.dispose()
 
     app = FastAPI(title="DocGen", lifespan=lifespan)
     app.state.settings = app_settings

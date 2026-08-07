@@ -1,8 +1,12 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from docgen.sources.storage import LocalStorage
 
 from .repository import ProjectRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectService:
@@ -20,4 +24,12 @@ class ProjectService:
         except Exception:
             self._session.rollback()
             raise
-        self._storage.delete_project(project_id)
+        try:
+            self._storage.delete_project(project_id)
+        except Exception:
+            logger.exception(
+                "project_cleanup_failed project_id=%s",
+                project_id,
+                extra={"project_id": project_id},
+            )
+            raise

@@ -55,6 +55,21 @@ rm -rf var
 
 If `DOCGEN_DATABASE_URL` or `DOCGEN_DATA_DIR` points elsewhere, remove or replace only those configured local paths.
 
+## Recovery after filesystem cleanup failure
+
+Project and source deletion commits the database transaction before removing local files. If
+that final cleanup fails, DocGen logs `project_cleanup_failed` or `source_cleanup_failed` with
+the project ID and, for a source, its source ID and relative storage path. The database deletion
+has already completed at that point.
+
+After correcting the filesystem problem, stop DocGen and retry only the logged cleanup operation:
+
+- for a source, remove the exact logged relative path below `DOCGEN_DATA_DIR`;
+- for a project, remove only `DOCGEN_DATA_DIR/projects/<logged-project-id>`.
+
+Resolve and inspect the exact target first. It must remain inside `DOCGEN_DATA_DIR`; do not use
+globs or a broad recursive target. Restart DocGen after the orphaned path has been removed.
+
 ## Stage 1 boundary
 
 Stage 1 accepts supported source files and stores allowed Confluence URLs as source records. It does not connect to Confluence or read its content. Stage 2 will retrieve and interpret the stored Confluence content.

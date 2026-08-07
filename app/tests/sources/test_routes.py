@@ -66,6 +66,9 @@ def test_upload_service_runs_off_event_loop_and_closes_file(
 
         assert service.add_file_thread is not None
         assert service.add_file_thread != event_loop_thread
+        if error is None:
+            assert service.list_thread is not None
+            assert service.list_thread != event_loop_thread
         return response_status
 
     assert asyncio.run(exercise_route()) == expected_status
@@ -194,6 +197,7 @@ class _RecordingSourceService:
     def __init__(self, error: Exception | None) -> None:
         self._error = error
         self.add_file_thread: int | None = None
+        self.list_thread: int | None = None
 
     def add_file(self, project_id: str, filename: str, media_type: str, stream: BytesIO) -> None:
         self.add_file_thread = get_ident()
@@ -201,6 +205,7 @@ class _RecordingSourceService:
             raise self._error
 
     def list(self, project_id: str) -> list[object]:
+        self.list_thread = get_ident()
         return []
 
 
