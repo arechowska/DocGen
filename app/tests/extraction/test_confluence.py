@@ -111,6 +111,7 @@ def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
         "attachment": "architecture.png",
     }
     assert result.blocks[0].text == "architecture.png"
+    assert result.page_units == 3
 
 
 def test_confluence_images_each_count_as_one_virtual_page() -> None:
@@ -131,6 +132,20 @@ def test_confluence_images_each_count_as_one_virtual_page() -> None:
     result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
 
     assert result.page_units == 3
+
+
+def test_empty_confluence_content_has_one_virtual_text_page() -> None:
+    transport = httpx.MockTransport(lambda request: _page_response("<p> \n\t </p>"))
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=transport,
+    )
+
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert result.page_units == 1
 
 
 def test_fetch_uses_stable_ids_and_counts_virtual_pages() -> None:

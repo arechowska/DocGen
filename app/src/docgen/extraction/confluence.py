@@ -259,7 +259,7 @@ def _virtual_page_units(blocks: list[NormalizedBlock]) -> int:
         for character in block.text
         if not character.isspace()
     )
-    text_units = math.ceil(len(normalized_text) / 1800) if normalized_text else 0
+    text_units = math.ceil(max(1, len(normalized_text)) / 1800)
     return text_units + sum(block.kind is BlockKind.IMAGE for block in blocks)
 
 
