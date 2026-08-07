@@ -48,8 +48,11 @@ def test_image_extractor_returns_dimensions_and_local_path(tmp_path: Path) -> No
     path = tmp_path / "diagram.png"
     Image.new("RGB", (16, 9), "white").save(path)
 
-    result = ImageExtractor().extract(make_source("image/png"), path)
+    extractor = ImageExtractor()
+    result = extractor.extract(make_source("image/png"), path)
+    repeated_result = extractor.extract(make_source("image/png"), path)
 
     assert result.page_units == 1
     assert result.blocks[0].data == {"width": 16, "height": 9, "storage_path": str(path)}
     assert result.blocks[0].provenance[0].locator == "image:1"
+    assert result.blocks[0].id == repeated_result.blocks[0].id

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
-from docgen.extraction.registry import ExtractionError, ExtractionResult
+from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
 
@@ -19,6 +19,7 @@ class ImageExtractor:
             raise ExtractionError("Не удалось прочитать изображение") from error
 
         block = NormalizedBlock(
+            id=stable_block_id(source.id, BlockKind.IMAGE, "image:1", ""),
             kind=BlockKind.IMAGE,
             text="",
             data={"width": width, "height": height, "storage_path": str(path)},

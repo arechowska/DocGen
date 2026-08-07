@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
 from docx import Document
 
 from docgen.extraction.docx import DocxExtractor
+from docgen.extraction.registry import ExtractionError
 from docgen.extraction.schemas import BlockKind
 from docgen.models import Source, SourceKind
 
@@ -48,3 +50,21 @@ def test_docx_preserves_document_order_and_structure(tmp_path: Path) -> None:
     assert result.blocks[0].data == {"level": 1}
     assert result.blocks[2].data == {"style": "List Bullet"}
     assert result.blocks[3].data == {"rows": [["Ключ", "Значение"]]}
+
+
+def test_docx_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
+    path = tmp_path / "input.docx"
+    document = Document()
+    document.add_paragraph("Повторяемый текст")
+    document.save(path)
+    extractor = DocxExtractor()
+
+    first_result = extractor.extract(make_source(), path)
+    second_result = extractor.extract(make_source(), path)
+
+    assert [block.id for block in first_result.blocks] == [block.id for block in second_result.blocks]
+
+
+def test_docx_returns_safe_error_when_file_cannot_be_read(tmp_path: Path) -> None:
+    with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
+        DocxExtractor().extract(make_source(), tmp_path / "missing.docx")

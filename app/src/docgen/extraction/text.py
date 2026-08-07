@@ -5,7 +5,7 @@ from pathlib import Path
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from docgen.extraction.registry import ExtractionError, ExtractionResult
+from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
 
@@ -111,6 +111,7 @@ def _block(
     data: dict | None = None,
 ) -> NormalizedBlock:
     return NormalizedBlock(
+        id=stable_block_id(source.id, kind, locator, text),
         kind=kind,
         text=text,
         data=data or {},

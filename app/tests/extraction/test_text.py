@@ -39,6 +39,17 @@ def test_txt_decodes_a_utf8_bom(tmp_path: Path) -> None:
     assert result.blocks[0].text == "Текст"
 
 
+def test_txt_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
+    path = tmp_path / "input.txt"
+    path.write_text("Повторяемый текст", encoding="utf-8")
+    extractor = TextExtractor()
+
+    first_result = extractor.extract(make_source("text/plain"), path)
+    second_result = extractor.extract(make_source("text/plain"), path)
+
+    assert [block.id for block in first_result.blocks] == [block.id for block in second_result.blocks]
+
+
 def test_txt_rejects_non_utf8_content(tmp_path: Path) -> None:
     path = tmp_path / "input.txt"
     path.write_bytes(b"\xff\xfe")

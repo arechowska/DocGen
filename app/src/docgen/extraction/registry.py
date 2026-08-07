@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from uuid import NAMESPACE_URL, uuid5
 
-from docgen.extraction.schemas import NormalizedBlock
+from docgen.extraction.schemas import BlockKind, NormalizedBlock
 from docgen.models import Source, SourceKind
 
 
@@ -21,6 +22,10 @@ class ExtractionResult:
 
 class Extractor(Protocol):
     def extract(self, source: Source, path: Path) -> ExtractionResult: ...
+
+
+def stable_block_id(source_id: str, kind: BlockKind, locator: str, text: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"{source_id}\n{kind.value}\n{locator}\n{text}"))
 
 
 class ExtractorRegistry:

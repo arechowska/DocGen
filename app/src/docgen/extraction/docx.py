@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from zipfile import BadZipFile
 
 from docx import Document
+from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-from docgen.extraction.registry import ExtractionResult
+from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
 
@@ -16,7 +18,10 @@ _HEADING_STYLE = re.compile(r"^Heading\s+(\d+)$", re.IGNORECASE)
 
 class DocxExtractor:
     def extract(self, source: Source, path: Path) -> ExtractionResult:
-        document = Document(path)
+        try:
+            document = Document(path)
+        except (BadZipFile, OSError, PackageNotFoundError, ValueError) as error:
+            raise ExtractionError("Не удалось прочитать DOCX-файл") from error
         blocks: list[NormalizedBlock] = []
         paragraph_index = 0
         table_index = 0
@@ -45,6 +50,7 @@ class DocxExtractor:
             kind = BlockKind.TEXT
             data = {}
         return NormalizedBlock(
+            id=stable_block_id(source.id, kind, f"paragraph:{index}", paragraph.text.strip()),
             kind=kind,
             text=paragraph.text.strip(),
             data=data,
@@ -56,6 +62,12 @@ class DocxExtractor:
     def _table_block(source: Source, table: Table, index: int) -> NormalizedBlock:
         rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
         return NormalizedBlock(
+            id=stable_block_id(
+                source.id,
+                BlockKind.TABLE,
+                f"table:{index}",
+                "\n".join("\t".join(row) for row in rows),
+            ),
             kind=BlockKind.TABLE,
             text="\n".join("\t".join(row) for row in rows),
             data={"rows": rows},
