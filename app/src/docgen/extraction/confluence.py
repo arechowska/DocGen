@@ -68,12 +68,9 @@ class ConfluenceClient:
         response_body = self._get_page(page_id, token)
         storage_html = self._storage_html(response_body)
         blocks = _normalize_storage_html(page_id, storage_html)
-        normalized_text = "".join(
-            character for block in blocks for character in block.text if not character.isspace()
-        )
         return ExtractionResult(
             blocks=blocks,
-            page_units=math.ceil(max(1, len(normalized_text)) / 1800),
+            page_units=_virtual_page_units(blocks),
             warnings=[],
         )
 
@@ -185,7 +182,9 @@ def _normalize_storage_html(page_id: str, storage_html: str) -> list[NormalizedB
     source_id = f"confluence:{page_id}"
     counters: dict[str, int] = {"heading": 0, "paragraph": 0, "list": 0, "table": 0, "image": 0}
     blocks: list[NormalizedBlock] = []
-    for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "table", "img"]):
+    for element in soup.find_all(
+        ["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "table", "img", "ac:image"]
+    ):
         block = _block_from_element(element, source_id, counters)
         if block is not None:
             blocks.append(block)
@@ -236,7 +235,32 @@ def _block_from_element(
         if not isinstance(src, str) or not isinstance(alt, str):
             return None
         return _make_block(source_id, BlockKind.IMAGE, "image", alt or src, {"src": src, "alt": alt}, counters)
+    if element.name == "ac:image":
+        attachment = element.find("ri:attachment")
+        filename = attachment.get("ri:filename") if attachment is not None else None
+        if not isinstance(filename, str):
+            return None
+        return _make_block(
+            source_id,
+            BlockKind.IMAGE,
+            "image",
+            filename,
+            {"src": f"attachment:{filename}", "alt": "", "attachment": filename},
+            counters,
+        )
     return None
+
+
+def _virtual_page_units(blocks: list[NormalizedBlock]) -> int:
+    normalized_text = "".join(
+        character
+        for block in blocks
+        if block.kind is not BlockKind.IMAGE
+        for character in block.text
+        if not character.isspace()
+    )
+    text_units = math.ceil(len(normalized_text) / 1800) if normalized_text else 0
+    return text_units + sum(block.kind is BlockKind.IMAGE for block in blocks)
 
 
 def _make_block(

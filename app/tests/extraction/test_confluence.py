@@ -82,7 +82,55 @@ def test_fetch_confluence_page_maps_storage_html_to_normalized_blocks(
         "alt": "Diagram",
     }
     assert result.blocks[0].provenance[0].source_id == "confluence:42"
-    assert result.page_units == 1
+    assert result.page_units == 2
+
+
+def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
+    transport = httpx.MockTransport(
+        lambda request: _page_response(
+            '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+            '<ac:image><ri:attachment ri:filename="flow.svg" /></ac:image>'
+        )
+    )
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=transport,
+    )
+
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert [block.kind for block in result.blocks] == [BlockKind.IMAGE, BlockKind.IMAGE]
+    assert [block.provenance[0].locator for block in result.blocks] == [
+        "confluence:42#image-1",
+        "confluence:42#image-2",
+    ]
+    assert result.blocks[0].data == {
+        "src": "attachment:architecture.png",
+        "alt": "",
+        "attachment": "architecture.png",
+    }
+    assert result.blocks[0].text == "architecture.png"
+
+
+def test_confluence_images_each_count_as_one_virtual_page() -> None:
+    exact_text_page = "a" * 1800
+    transport = httpx.MockTransport(
+        lambda request: _page_response(
+            f"<p>{exact_text_page}</p>"
+            '<ac:image><ri:attachment ri:filename="one.png" /></ac:image>'
+            '<ac:image><ri:attachment ri:filename="two.png" /></ac:image>'
+        )
+    )
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=transport,
+    )
+
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.page_units == 3
 
 
 def test_fetch_uses_stable_ids_and_counts_virtual_pages() -> None:
