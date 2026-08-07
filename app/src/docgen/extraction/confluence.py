@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Iterable
 from typing import Protocol
 from urllib.parse import parse_qs, urlsplit
@@ -13,6 +12,7 @@ from pydantic import SecretStr
 from docgen.config import Settings
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
+from docgen.workflows.normalize import VirtualPageCalculator
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5_000_000
 _TIMEOUT_SECONDS = 30.0
@@ -70,7 +70,7 @@ class ConfluenceClient:
         blocks = _normalize_storage_html(page_id, storage_html)
         return ExtractionResult(
             blocks=blocks,
-            page_units=_virtual_page_units(blocks),
+            page_units=VirtualPageCalculator().from_blocks(blocks),
             warnings=[],
         )
 
@@ -249,18 +249,6 @@ def _block_from_element(
             counters,
         )
     return None
-
-
-def _virtual_page_units(blocks: list[NormalizedBlock]) -> int:
-    normalized_text = "".join(
-        character
-        for block in blocks
-        if block.kind is not BlockKind.IMAGE
-        for character in block.text
-        if not character.isspace()
-    )
-    text_units = math.ceil(max(1, len(normalized_text)) / 1800)
-    return text_units + sum(block.kind is BlockKind.IMAGE for block in blocks)
 
 
 def _make_block(

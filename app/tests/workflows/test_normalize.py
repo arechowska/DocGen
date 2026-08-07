@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pytest
+
+from docgen.extraction.registry import ExtractionResult
+from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
+from docgen.models import Source, SourceKind
+from docgen.workflows.normalize import (
+    NormalizationWorkflow,
+    PageLimitExceeded,
+    VirtualPageCalculator,
+)
+
+
+@dataclass
+class FakeSources:
+    results: list[ExtractionResult] = field(default_factory=list)
+    project_id: str | None = None
+
+    def list_for_project(self, project_id: str) -> list[Source]:
+        self.project_id = project_id
+        return [
+            Source(
+                id=f"source-{index}",
+                project_id=project_id,
+                kind=SourceKind.FILE,
+                display_name=f"source-{index}.txt",
+                media_type="text/plain",
+                size_bytes=1,
+                storage_path=f"projects/{project_id}/sources/source-{index}.txt",
+                status="stored",
+            )
+            for index in range(1, len(self.results) + 1)
+        ]
+
+
+class FakeStorage:
+    def resolve(self, relative_path: str) -> Path:
+        return Path(relative_path)
+
+
+class FakeExtractors:
+    def __init__(self, sources: FakeSources) -> None:
+        self._sources = sources
+        self.extracted_source_ids: list[str] = []
+
+    def for_source(self, _source: Source) -> FakeExtractors:
+        return self
+
+    def extract(self, source: Source, path: Path) -> ExtractionResult:
+        self.extracted_source_ids.append(source.id)
+        return self._sources.results[int(source.id.removeprefix("source-")) - 1]
+
+
+class FakeConfluence:
+    def fetch(self, url: str) -> ExtractionResult:
+        raise AssertionError("a file source must not use the Confluence client")
+
+
+@pytest.fixture
+def sources() -> FakeSources:
+    return FakeSources()
+
+
+@pytest.fixture
+def extractors(sources: FakeSources) -> FakeExtractors:
+    return FakeExtractors(sources)
+
+
+@pytest.fixture
+def workflow(
+    sources: FakeSources,
+    extractors: FakeExtractors,
+) -> NormalizationWorkflow:
+    return NormalizationWorkflow(sources, FakeStorage(), extractors, FakeConfluence())
+
+
+def test_page_limit_accepts_150_and_rejects_151(
+    workflow: NormalizationWorkflow,
+    sources: FakeSources,
+) -> None:
+    sources.results = [ExtractionResult(blocks=[], page_units=150, warnings=[])]
+
+    assert workflow.run("p1").total_pages == 150
+
+    sources.results = [ExtractionResult(blocks=[], page_units=151, warnings=[])]
+
+    with pytest.raises(PageLimitExceeded, match="Максимальный объём — 150 страниц"):
+        workflow.run("p1")
+
+
+def test_virtual_page_count_is_deterministic() -> None:
+    assert VirtualPageCalculator(chars_per_page=1800).from_text("а" * 1801) == 2
+
+
+def test_virtual_pages_keep_one_text_page_and_add_one_for_each_image() -> None:
+    calculator = VirtualPageCalculator(chars_per_page=1800)
+    blocks = [
+        _block("text", BlockKind.TEXT, " \n\t "),
+        _block("image-1", BlockKind.IMAGE, "diagram.png"),
+        _block("image-2", BlockKind.IMAGE, "flow.png"),
+    ]
+
+    assert calculator.from_blocks(blocks) == 3
+
+
+def test_normalization_preserves_source_order_and_makes_block_ids_unique(
+    workflow: NormalizationWorkflow,
+    sources: FakeSources,
+    extractors: FakeExtractors,
+) -> None:
+    sources.results = [
+        ExtractionResult(blocks=[_block("shared", BlockKind.TEXT, "first")], page_units=1, warnings=[]),
+        ExtractionResult(blocks=[_block("shared", BlockKind.TEXT, "second")], page_units=1, warnings=[]),
+    ]
+
+    result = workflow.run("p1")
+
+    assert sources.project_id == "p1"
+    assert extractors.extracted_source_ids == ["source-1", "source-2"]
+    assert [block.id for block in result.blocks] == ["source-1:shared", "source-2:shared"]
+    assert len({block.id for block in result.blocks}) == len(result.blocks)
+
+
+def test_normalization_includes_source_warnings_and_adds_long_processing_warning(
+    workflow: NormalizationWorkflow,
+    sources: FakeSources,
+) -> None:
+    sources.results = [ExtractionResult(blocks=[], page_units=101, warnings=["source warning"])]
+
+    result = workflow.run("p1")
+
+    assert result.warnings == ["source warning", "Обработка может занять более пяти минут"]
+
+
+def _block(block_id: str, kind: BlockKind, text: str) -> NormalizedBlock:
+    return NormalizedBlock(
+        id=block_id,
+        kind=kind,
+        text=text,
+        provenance=[Provenance(source_id="original-source", locator="locator")],
+        confidence=1.0,
+    )
