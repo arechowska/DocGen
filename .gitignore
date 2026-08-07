@@ -1,0 +1,13 @@
+.worktrees/
+
+# Local Python artifacts
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Local DocGen runtime data
+app/var/
+
+# Secrets
+.env
