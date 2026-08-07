@@ -1,4 +1,5 @@
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from docx import Document
@@ -68,3 +69,23 @@ def test_docx_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
 def test_docx_returns_safe_error_when_file_cannot_be_read(tmp_path: Path) -> None:
     with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
         DocxExtractor().extract(make_source(), tmp_path / "missing.docx")
+
+
+def test_docx_returns_safe_error_for_zip_missing_ooxml_members(tmp_path: Path) -> None:
+    path = tmp_path / "missing-members.docx"
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("placeholder.txt", "not an OOXML package")
+
+    with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
+        DocxExtractor().extract(make_source(), path)
+
+
+def test_docx_returns_safe_error_for_malformed_package_xml(tmp_path: Path) -> None:
+    path = tmp_path / "malformed-xml.docx"
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types>")
+        archive.writestr("_rels/.rels", "<Relationships>")
+        archive.writestr("word/document.xml", "<document>")
+
+    with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
+        DocxExtractor().extract(make_source(), path)

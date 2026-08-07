@@ -8,6 +8,7 @@ from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table
 from docx.text.paragraph import Paragraph
+from lxml.etree import XMLSyntaxError
 
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
@@ -20,7 +21,7 @@ class DocxExtractor:
     def extract(self, source: Source, path: Path) -> ExtractionResult:
         try:
             document = Document(path)
-        except (BadZipFile, OSError, PackageNotFoundError, ValueError) as error:
+        except (BadZipFile, KeyError, OSError, PackageNotFoundError, ValueError, XMLSyntaxError) as error:
             raise ExtractionError("Не удалось прочитать DOCX-файл") from error
         blocks: list[NormalizedBlock] = []
         paragraph_index = 0
