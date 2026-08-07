@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from .config import Settings
 from .db import Base, build_session_factory
 from .projects.models import Project  # noqa: F401
+from .sources.models import Source  # noqa: F401
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

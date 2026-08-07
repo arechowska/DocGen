@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import DateTime, String
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
 from docgen.db import Base
+
+if TYPE_CHECKING:
+    from docgen.sources.models import Source
 
 
 def utc_now() -> datetime:
@@ -42,4 +48,7 @@ class Project(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    sources: Mapped[list[Source]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
     )

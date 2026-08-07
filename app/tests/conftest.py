@@ -25,11 +25,12 @@ def client(tmp_path: Path) -> TestClient:
 def engine() -> Engine:
     from docgen.db import Base
     from docgen.projects.models import Project
+    from docgen.sources.models import Source
 
     database_engine = create_engine("sqlite://")
-    Base.metadata.create_all(database_engine, tables=(Project.__table__,))
+    Base.metadata.create_all(database_engine, tables=(Project.__table__, Source.__table__))
     yield database_engine
-    Base.metadata.drop_all(database_engine, tables=(Project.__table__,))
+    Base.metadata.drop_all(database_engine, tables=(Source.__table__, Project.__table__))
     database_engine.dispose()
 
 
@@ -49,3 +50,15 @@ def project_repository(session: Session):
     from docgen.projects.repository import ProjectRepository
 
     return ProjectRepository(session)
+
+
+@pytest.fixture
+def source_service(session: Session, tmp_path: Path):
+    from docgen.sources.service import SourceService
+    from docgen.sources.storage import LocalStorage
+
+    return SourceService(
+        session,
+        LocalStorage(tmp_path / "data"),
+        confluence_hosts=("wiki.example.test",),
+    )
