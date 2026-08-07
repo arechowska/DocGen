@@ -23,7 +23,7 @@ _PLACEHOLDER_MARKERS = (
 )
 
 
-def _validate_russian_text(value: str, *, concrete: bool) -> str:
+def _validate_russian_text(value: str, *, minimum_length: int | None = None) -> str:
     normalized_value = " ".join(value.split())
     normalized_casefold = normalized_value.casefold()
     marker = next(
@@ -31,9 +31,16 @@ def _validate_russian_text(value: str, *, concrete: bool) -> str:
     )
     if marker:
         raise ValueError(f"Текст не должен содержать заполнитель: {marker}")
-    if not _CYRILLIC_RE.search(normalized_value):
-        raise ValueError("Текст должен содержать кириллицу")
-    if concrete and len(normalized_value) < 10:
+    alphabetic_characters = [character for character in normalized_value if character.isalpha()]
+    cyrillic_count = sum(
+        _CYRILLIC_RE.fullmatch(character) is not None for character in alphabetic_characters
+    )
+    if not alphabetic_characters or cyrillic_count * 2 < len(alphabetic_characters):
+        raise ValueError(
+            "Текст должен содержать кириллицу: не менее 50% алфавитных символов должны быть "
+            "кириллическими"
+        )
+    if minimum_length is not None and len(normalized_value) < minimum_length:
         raise ValueError("Текст должен быть конкретной русской инструкцией")
     return normalized_value
 
@@ -49,12 +56,12 @@ class SemanticSection(BaseModel):
     @field_validator("title")
     @classmethod
     def validate_title(cls, value: str) -> str:
-        return _validate_russian_text(value, concrete=False)
+        return _validate_russian_text(value)
 
     @field_validator("description")
     @classmethod
     def validate_description(cls, value: str) -> str:
-        return _validate_russian_text(value, concrete=True)
+        return _validate_russian_text(value)
 
 
 class SemanticRule(BaseModel):
@@ -68,7 +75,7 @@ class SemanticRule(BaseModel):
     @field_validator("instruction")
     @classmethod
     def validate_instruction(cls, value: str) -> str:
-        return _validate_russian_text(value, concrete=True)
+        return _validate_russian_text(value, minimum_length=10)
 
 
 class SemanticTemplate(BaseModel):
@@ -84,12 +91,12 @@ class SemanticTemplate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        return _validate_russian_text(value, concrete=False)
+        return _validate_russian_text(value)
 
     @field_validator("style_rules")
     @classmethod
     def validate_style_rules(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(_validate_russian_text(style_rule, concrete=True) for style_rule in value)
+        return tuple(_validate_russian_text(style_rule) for style_rule in value)
 
     @model_validator(mode="after")
     def validate_semantics(self) -> SemanticTemplate:

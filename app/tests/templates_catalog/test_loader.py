@@ -181,6 +181,49 @@ def test_catalog_rejects_english_section_description(tmp_path: Path) -> None:
         TemplateCatalog(tmp_path).list()
 
 
+@pytest.mark.parametrize(
+    ("source", "replacement"),
+    [
+        ("name: Корректный шаблон", "name: English template Я"),
+        ("title: Обзор", "title: English title Я"),
+        ("Кратко описывает назначение документа.", "English description Я"),
+        ("Проверьте порядок обязательных разделов.", "English instruction Я"),
+        (
+            "Используйте нейтральный деловой стиль.",
+            "English style instruction Я",
+        ),
+    ],
+)
+def test_catalog_rejects_text_without_cyrillic_majority(
+    tmp_path: Path, source: str, replacement: str
+) -> None:
+    """Fails if one Cyrillic letter can disguise otherwise English template text."""
+    write_complete_catalog(tmp_path)
+    mixed_language_text = template_with_id("faq").replace(source, replacement, 1)
+    write_yaml(tmp_path / "faq.yaml", mixed_language_text)
+
+    with pytest.raises(TemplateConfigurationError, match="не менее 50%"):
+        TemplateCatalog(tmp_path).list()
+
+
+@pytest.mark.parametrize(
+    ("source", "replacement"),
+    [
+        ("Кратко описывает назначение документа.", "Кратко"),
+        ("Используйте нейтральный деловой стиль.", "Кратко"),
+    ],
+)
+def test_catalog_accepts_short_russian_description_and_style_rule(
+    tmp_path: Path, source: str, replacement: str
+) -> None:
+    """Fails if the concrete-instruction limit is applied outside rule instructions."""
+    write_complete_catalog(tmp_path)
+    short_russian_text = template_with_id("faq").replace(source, replacement, 1)
+    write_yaml(tmp_path / "faq.yaml", short_russian_text)
+
+    assert TemplateCatalog(tmp_path).get("faq").id == "faq"
+
+
 def test_catalog_rejects_placeholder_rule_instruction(tmp_path: Path) -> None:
     """Fails if a rule ships with a placeholder instead of an evaluable instruction."""
     write_complete_catalog(tmp_path)
