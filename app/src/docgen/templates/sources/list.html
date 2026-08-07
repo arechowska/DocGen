@@ -1,0 +1,78 @@
+<section
+  id="sources-panel"
+  class="mt-6"
+  hx-on::response-error="if (event.detail.elt.closest('#sources-panel')) document.getElementById('sources-error').innerHTML = event.detail.xhr.responseText"
+>
+  <div id="sources-error" aria-live="polite"></div>
+
+  <div class="grid gap-4 lg:grid-cols-2">
+    <form
+      hx-post="/projects/{{ project_id }}/sources/files"
+      hx-encoding="multipart/form-data"
+      hx-target="#sources-panel"
+      hx-swap="outerHTML"
+      hx-indicator="#source-request-indicator"
+      class="rounded-3xl bg-[#f5f5f7] p-5"
+    >
+      <label class="block text-sm font-medium" for="source-file">Загрузить файл</label>
+      <input
+        id="source-file"
+        name="file"
+        type="file"
+        accept=".docx,.pdf,.txt,.md,.png,.jpg,.jpeg,.webp"
+        required
+        class="mt-3 block w-full text-sm text-[#707070] file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-medium file:text-[#0066cc]"
+      >
+      <button type="submit" class="mt-4 rounded-full bg-[#0066cc] px-4 py-2 text-sm font-medium text-white">Добавить файл</button>
+    </form>
+
+    <form
+      hx-post="/projects/{{ project_id }}/sources/confluence"
+      hx-target="#sources-panel"
+      hx-swap="outerHTML"
+      hx-indicator="#source-request-indicator"
+      class="rounded-3xl bg-[#f5f5f7] p-5"
+    >
+      <label class="block text-sm font-medium" for="confluence-url">Ссылка Confluence</label>
+      <input
+        id="confluence-url"
+        name="url"
+        type="url"
+        placeholder="https://wiki.example.test/display/..."
+        required
+        class="mt-3 block w-full rounded-2xl border-0 bg-white px-4 py-3 text-sm outline-none ring-1 ring-[#e0e0e0] focus:ring-2 focus:ring-[#0066cc]"
+      >
+      <button type="submit" class="mt-4 rounded-full bg-[#0066cc] px-4 py-2 text-sm font-medium text-white">Добавить ссылку</button>
+    </form>
+  </div>
+
+  <p id="source-request-indicator" class="htmx-indicator mt-4 text-sm text-[#707070]">Загрузка…</p>
+
+  <div class="mt-6 space-y-3">
+    {% for source in sources %}
+      <article class="flex items-center justify-between gap-4 rounded-3xl bg-[#f5f5f7] px-5 py-4">
+        <div class="min-w-0">
+          <p class="truncate text-sm font-medium">{{ source.display_name }}</p>
+          <p class="mt-1 text-xs text-[#707070]">
+            {% if source.kind.value == "file" %}Файл{% else %}Confluence{% endif %}
+            ·
+            {% if source.status == "stored" %}Сохранён{% else %}Подключён{% endif %}
+          </p>
+        </div>
+        <button
+          type="button"
+          hx-delete="/projects/{{ project_id }}/sources/{{ source.id }}"
+          hx-target="#sources-panel"
+          hx-swap="outerHTML"
+          hx-indicator="#source-request-indicator"
+          hx-confirm="Удалить источник?"
+          class="shrink-0 rounded-full px-3 py-2 text-sm font-medium text-[#0066cc]"
+        >Удалить</button>
+      </article>
+    {% else %}
+      <div class="rounded-3xl bg-[#f5f5f7] px-6 py-12 text-center">
+        <p class="text-[#707070]">Источники пока не добавлены.</p>
+      </div>
+    {% endfor %}
+  </div>
+</section>

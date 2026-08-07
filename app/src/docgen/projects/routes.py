@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from docgen.sources.service import SourceService
 from docgen.sources.storage import LocalStorage
 
 from .repository import ProjectRepository
@@ -81,12 +82,26 @@ def create_project(
 
 
 @router.get("/{project_id}")
-def project_detail(request: Request, project_id: str, repository: ProjectRepositoryDependency):
+def project_detail(
+    request: Request,
+    project_id: str,
+    repository: ProjectRepositoryDependency,
+    session: SessionDependency,
+):
     project = _project_or_404(repository, project_id)
+    source_service = SourceService(
+        session,
+        LocalStorage(request.app.state.settings.data_dir),
+        request.app.state.settings.confluence_hosts,
+    )
     return templates.TemplateResponse(
         request=request,
         name="projects/detail.html",
-        context={"project": project},
+        context={
+            "project": project,
+            "project_id": project_id,
+            "sources": source_service.list(project_id),
+        },
     )
 
 
