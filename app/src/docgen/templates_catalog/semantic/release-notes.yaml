@@ -1,0 +1,43 @@
+id: release-notes
+name: Примечания к выпуску
+version: "1.0"
+sections:
+  - id: release-summary
+    title: Состав выпуска
+    required: true
+    description: Кратко описывает назначение и границы выпуска.
+  - id: changes
+    title: Изменения
+    required: true
+    description: Перечисляет добавленные, изменённые и исправленные возможности.
+  - id: compatibility
+    title: Совместимость и ограничения
+    required: true
+    description: Описывает влияние выпуска на пользователей и интеграции.
+  - id: verification
+    title: Проверка выпуска
+    required: true
+    description: Указывает выполненные проверки и известные ограничения.
+rules:
+  - id: release-notes-structure
+    dimension: structure
+    severity: error
+    instruction: Проверьте, что изменения сгруппированы по понятным для пользователя категориям.
+  - id: release-notes-completeness
+    dimension: completeness
+    severity: error
+    instruction: Проверьте, что существенные изменения и ограничения из источников отражены в выпуске.
+  - id: release-notes-terminology
+    dimension: terminology
+    severity: warning
+    instruction: Проверьте, что названия компонентов и функций соответствуют исходным материалам.
+  - id: release-notes-contradiction
+    dimension: contradiction
+    severity: error
+    instruction: Проверьте, что сведения о совместимости не противоречат описанию изменений.
+  - id: release-notes-style
+    dimension: style
+    severity: warning
+    instruction: Проверьте, что текст сообщает факты выпуска без рекламных или оценочных обещаний.
+style_rules:
+  - Описывайте изменения в прошедшем времени и указывайте их практический эффект.

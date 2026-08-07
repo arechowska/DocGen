@@ -26,6 +26,9 @@ dev = ["pytest>=8.3,<9", "ruff>=0.9,<1"]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.package-data]
+"docgen.templates_catalog" = ["semantic/*.yaml"]
+
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 pythonpath = ["src"]

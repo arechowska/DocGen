@@ -1,0 +1,43 @@
+id: api-docs
+name: Документация API
+version: "1.0"
+sections:
+  - id: overview
+    title: Обзор API
+    required: true
+    description: Определяет назначение интерфейса и область его применения.
+  - id: authentication
+    title: Аутентификация и доступ
+    required: true
+    description: Описывает способ подтверждения прав и ограничения доступа.
+  - id: operations
+    title: Операции API
+    required: true
+    description: Содержит методы, параметры, ответы и коды ошибок.
+  - id: examples
+    title: Примеры запросов и ответов
+    required: true
+    description: Показывает корректные варианты взаимодействия с интерфейсом.
+rules:
+  - id: api-docs-structure
+    dimension: structure
+    severity: error
+    instruction: Проверьте, что у каждой операции описаны запрос, ответ и возможные ошибки.
+  - id: api-docs-completeness
+    dimension: completeness
+    severity: error
+    instruction: Проверьте, что обязательные параметры и ограничения их значений не пропущены.
+  - id: api-docs-terminology
+    dimension: terminology
+    severity: warning
+    instruction: Проверьте, что имена ресурсов, полей и кодов ошибок единообразны во всём документе.
+  - id: api-docs-contradiction
+    dimension: contradiction
+    severity: error
+    instruction: Проверьте, что примеры не противоречат описанию операций и параметров.
+  - id: api-docs-style
+    dimension: style
+    severity: warning
+    instruction: Проверьте, что формулировки точно разделяют обязательные и необязательные параметры.
+style_rules:
+  - Приводите примеры в формате, соответствующем описанному интерфейсу.

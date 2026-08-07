@@ -1,0 +1,39 @@
+id: faq
+name: Часто задаваемые вопросы
+version: "1.0"
+sections:
+  - id: purpose
+    title: Назначение
+    required: true
+    description: Объясняет предмет и границы набора вопросов.
+  - id: questions
+    title: Вопросы и ответы
+    required: true
+    description: Содержит вопросы пользователей и подтверждённые ответы.
+  - id: references
+    title: Источники сведений
+    required: true
+    description: Указывает материалы, на которых основаны ответы.
+rules:
+  - id: faq-structure
+    dimension: structure
+    severity: error
+    instruction: Проверьте, что каждый ответ расположен сразу после соответствующего вопроса.
+  - id: faq-completeness
+    dimension: completeness
+    severity: error
+    instruction: Проверьте, что по каждому существенному вопросу из источников дан ответ.
+  - id: faq-terminology
+    dimension: terminology
+    severity: warning
+    instruction: Проверьте, что названия функций и сущностей совпадают с исходными материалами.
+  - id: faq-contradiction
+    dimension: contradiction
+    severity: error
+    instruction: Проверьте, что ответы не противоречат друг другу и источникам.
+  - id: faq-style
+    dimension: style
+    severity: warning
+    instruction: Проверьте, что ответы сформулированы кратко и без разговорных оборотов.
+style_rules:
+  - Формулируйте вопросы от лица пользователя и отвечайте полными предложениями.

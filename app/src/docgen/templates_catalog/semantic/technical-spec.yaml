@@ -1,0 +1,43 @@
+id: technical-spec
+name: Техническая спецификация
+version: "1.0"
+sections:
+  - id: scope
+    title: Область действия
+    required: true
+    description: Определяет назначение и границы спецификации.
+  - id: requirements
+    title: Требования
+    required: true
+    description: Содержит проверяемые функциональные и нефункциональные требования.
+  - id: interfaces
+    title: Интерфейсы и данные
+    required: true
+    description: Описывает внешние взаимодействия и передаваемые данные.
+  - id: acceptance
+    title: Критерии приёмки
+    required: true
+    description: Устанавливает условия подтверждения выполнения требований.
+rules:
+  - id: technical-spec-structure
+    dimension: structure
+    severity: error
+    instruction: Проверьте, что требования отделены от описания интерфейсов и критериев приёмки.
+  - id: technical-spec-completeness
+    dimension: completeness
+    severity: error
+    instruction: Проверьте, что для каждого требования указан проверяемый ожидаемый результат.
+  - id: technical-spec-terminology
+    dimension: terminology
+    severity: warning
+    instruction: Проверьте, что одинаковые сущности и операции названы единообразно во всех разделах.
+  - id: technical-spec-contradiction
+    dimension: contradiction
+    severity: error
+    instruction: Проверьте, что требования не задают несовместимые значения или условия.
+  - id: technical-spec-style
+    dimension: style
+    severity: warning
+    instruction: Проверьте, что требования выражены однозначными утверждениями без неопределённых оценок.
+style_rules:
+  - Используйте формулировки, допускающие проверку по результату работы системы.
