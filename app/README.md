@@ -31,7 +31,18 @@ Configuration uses `DOCGEN_` environment variables. The defaults store the SQLit
 - `DOCGEN_DATA_DIR` sets the directory for uploaded files, for example `./var/data`.
 - `DOCGEN_CONFLUENCE_HOSTS` is a JSON array of allowed Confluence host names, for example `'["wiki.example.test", "confluence.internal.example"]'`.
 
-Use a local `.env` file or your environment manager for private values. Never commit `.env`, credentials, tokens, passwords, or other secrets.
+Keep private values only in the repository-root file `Проекты/DocGen/.env`. Never commit that file, credentials, tokens, passwords, or other secrets. `Settings` does not load `.env` automatically: load its `DOCGEN_*` assignments into the process before starting the application, without printing their values:
+
+```bash
+cd Проекты/DocGen
+set -a
+. ./.env
+set +a
+cd app
+.venv/bin/uvicorn docgen.main:app --reload
+```
+
+The `.env` file must contain only trusted shell-compatible `DOCGEN_*` assignments, including a JSON value for `DOCGEN_CONFLUENCE_HOSTS` when it is set.
 
 ## Reset local data
 
