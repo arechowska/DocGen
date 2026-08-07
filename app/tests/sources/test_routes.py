@@ -1,9 +1,15 @@
+import asyncio
+from io import BytesIO
+from threading import get_ident
+
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from docgen.projects.models import Project
 from docgen.projects.repository import ProjectRepository
 from docgen.sources.repository import SourceRepository
+from docgen.sources.routes import add_file
 
 
 @pytest.fixture
@@ -29,6 +35,41 @@ def test_upload_file_returns_updated_source_list(
     assert response.status_code == 200
     assert "case.md" in response.text
     assert "Файл" in response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    (
+        (None, 200),
+        (ValueError("Формат файла не поддерживается"), 422),
+        (LookupError("Проект не найден"), 404),
+        (RuntimeError("storage failed"), None),
+    ),
+)
+def test_upload_service_runs_off_event_loop_and_closes_file(
+    error: Exception | None, expected_status: int | None
+) -> None:
+    service = _RecordingSourceService(error)
+    upload = _RecordingUpload()
+
+    async def exercise_route() -> int | None:
+        event_loop_thread = get_ident()
+        request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+
+        if isinstance(error, RuntimeError):
+            with pytest.raises(RuntimeError, match="storage failed"):
+                await add_file(request, "project-1", upload, service)
+            response_status = None
+        else:
+            response = await add_file(request, "project-1", upload, service)
+            response_status = response.status_code
+
+        assert service.add_file_thread is not None
+        assert service.add_file_thread != event_loop_thread
+        return response_status
+
+    assert asyncio.run(exercise_route()) == expected_status
+    assert upload.closed
 
 
 def test_add_confluence_link_returns_updated_source_list(
@@ -147,3 +188,29 @@ def _source_id(client: TestClient, project_id: str) -> str:
         return SourceRepository(session).list_for_project(project_id)[0].id
     finally:
         session.close()
+
+
+class _RecordingSourceService:
+    def __init__(self, error: Exception | None) -> None:
+        self._error = error
+        self.add_file_thread: int | None = None
+
+    def add_file(self, project_id: str, filename: str, media_type: str, stream: BytesIO) -> None:
+        self.add_file_thread = get_ident()
+        if self._error is not None:
+            raise self._error
+
+    def list(self, project_id: str) -> list[object]:
+        return []
+
+
+class _RecordingUpload:
+    filename = "case.md"
+    content_type = "text/markdown"
+
+    def __init__(self) -> None:
+        self.file = BytesIO(b"# Case")
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True

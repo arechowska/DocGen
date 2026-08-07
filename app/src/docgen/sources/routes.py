@@ -3,6 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from docgen.projects.routes import SessionDependency
 
@@ -49,7 +50,8 @@ async def add_file(
     service: SourceServiceDependency,
 ):
     try:
-        service.add_file(
+        await run_in_threadpool(
+            service.add_file,
             project_id,
             file.filename or "",
             file.content_type or "application/octet-stream",
