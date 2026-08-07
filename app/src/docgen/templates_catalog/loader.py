@@ -9,6 +9,10 @@ from pydantic import ValidationError
 
 from docgen.templates_catalog.schemas import SemanticTemplate
 
+REQUIRED_TEMPLATE_IDS = frozenset(
+    {"faq", "use-case", "technical-spec", "release-notes", "api-docs"}
+)
+
 
 class TemplateConfigurationError(ValueError):
     """Raised when a semantic-template catalog cannot be loaded safely."""
@@ -50,6 +54,20 @@ class TemplateCatalog:
                 )
             template_ids.add(template.id)
             templates.append(template)
+        if template_ids != REQUIRED_TEMPLATE_IDS:
+            missing_ids = sorted(REQUIRED_TEMPLATE_IDS - template_ids)
+            unexpected_ids = sorted(template_ids - REQUIRED_TEMPLATE_IDS)
+            details: list[str] = []
+            if missing_ids:
+                details.append("отсутствуют: " + ", ".join(missing_ids))
+            if unexpected_ids:
+                details.append("лишние: " + ", ".join(unexpected_ids))
+            raise TemplateConfigurationError(
+                "Полный набор идентификаторов шаблонов должен быть "
+                + ", ".join(sorted(REQUIRED_TEMPLATE_IDS))
+                + "; "
+                + "; ".join(details)
+            )
         return templates
 
     def get(self, template_id: str) -> SemanticTemplate:
