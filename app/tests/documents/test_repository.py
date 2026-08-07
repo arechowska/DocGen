@@ -6,6 +6,7 @@ from docgen.db import Base
 from docgen.documents.models import ProjectArtifact
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, DocumentNode, NodeKind, WorkingDocument
+from docgen.jobs.models import Job
 from docgen.projects.models import Project
 from docgen.projects.repository import ProjectRepository
 from docgen.sources.models import Source
@@ -15,13 +16,15 @@ from docgen.sources.models import Source
 def artifact_session() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(
-        engine, tables=(Project.__table__, Source.__table__, ProjectArtifact.__table__)
+        engine,
+        tables=(Project.__table__, Source.__table__, ProjectArtifact.__table__, Job.__table__),
     )
     session = Session(engine)
     yield session
     session.close()
     Base.metadata.drop_all(
-        engine, tables=(ProjectArtifact.__table__, Source.__table__, Project.__table__)
+        engine,
+        tables=(Job.__table__, ProjectArtifact.__table__, Source.__table__, Project.__table__),
     )
     engine.dispose()
 

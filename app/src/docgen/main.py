@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from .config import Settings
 from .db import Base, build_session_factory
+from .jobs.models import Job  # noqa: F401
 from .projects.models import Project  # noqa: F401
 from .projects.routes import router as projects_router
 from .sources.models import Source  # noqa: F401

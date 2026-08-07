@@ -25,16 +25,19 @@ def client(tmp_path: Path) -> TestClient:
 def engine() -> Engine:
     from docgen.db import Base
     from docgen.documents.models import ProjectArtifact
+    from docgen.jobs.models import Job
     from docgen.projects.models import Project
     from docgen.sources.models import Source
 
     database_engine = create_engine("sqlite://")
     Base.metadata.create_all(
-        database_engine, tables=(Project.__table__, Source.__table__, ProjectArtifact.__table__)
+        database_engine,
+        tables=(Project.__table__, Source.__table__, ProjectArtifact.__table__, Job.__table__),
     )
     yield database_engine
     Base.metadata.drop_all(
-        database_engine, tables=(ProjectArtifact.__table__, Source.__table__, Project.__table__)
+        database_engine,
+        tables=(Job.__table__, ProjectArtifact.__table__, Source.__table__, Project.__table__),
     )
     database_engine.dispose()
 
