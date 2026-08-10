@@ -8,6 +8,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 app/build/
+app/.tmp*/
 
 # Local DocGen runtime data
 app/var/

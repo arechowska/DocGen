@@ -1,0 +1,9 @@
+<div class="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+  <p>Документ уже изменён. Обновите рабочую область.</p>
+  <button
+    class="mt-2 rounded border border-amber-300 px-3 py-1 text-sm hover:bg-amber-100"
+    hx-get="/projects/{{ project_id }}/editor"
+    hx-target="#editor-shell"
+    hx-swap="outerHTML"
+  >Обновить</button>
+</div>
