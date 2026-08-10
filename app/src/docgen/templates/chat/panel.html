@@ -1,0 +1,14 @@
+<aside class="w-full max-w-sm border-l border-slate-200 pl-6" id="chat-panel">
+  <h2 class="mb-3 text-lg font-semibold text-slate-950">Чат правок</h2>
+  <div class="mb-3 space-y-2" id="chat-messages"></div>
+  <form
+    class="space-y-2"
+    hx-post="/projects/{{ project_id }}/chat"
+    hx-target="#chat-messages"
+    hx-swap="beforeend"
+  >
+    <textarea class="min-h-24 w-full rounded border border-slate-300 px-3 py-2 text-sm" name="message"></textarea>
+    <input type="hidden" name="revision" value="{{ revision }}">
+    <button class="rounded bg-slate-950 px-4 py-2 text-sm text-white hover:bg-slate-800" type="submit">Отправить</button>
+  </form>
+</aside>
