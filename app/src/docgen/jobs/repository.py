@@ -173,23 +173,41 @@ class JobRepository:
         )
 
     def recover_interrupted(self, error_message: str) -> int:
-        jobs = list(
-            self._session.scalars(
-                select(Job).where(
-                    Job.status == JobStatus.RUNNING,
-                    Job.worker_id == self._worker_id,
-                )
-            )
-        )
         now = utc_now()
-        for job in jobs:
-            job.status = JobStatus.FAILED
-            job.status_message = _FAILED_MESSAGE
-            job.error_message = error_message
-            job.finished_at = now
-            job.updated_at = now
+        failed_result = self._session.execute(
+            update(Job)
+            .where(
+                Job.status == JobStatus.RUNNING,
+                Job.worker_id == self._worker_id,
+                Job.cancel_requested.is_(False),
+            )
+            .values(
+                status=JobStatus.FAILED,
+                status_message=_FAILED_MESSAGE,
+                error_message=error_message,
+                finished_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        cancelled_result = self._session.execute(
+            update(Job)
+            .where(
+                Job.status == JobStatus.RUNNING,
+                Job.worker_id == self._worker_id,
+                Job.cancel_requested.is_(True),
+            )
+            .values(
+                status=JobStatus.CANCELLED,
+                status_message=_CANCELLED_MESSAGE,
+                error_message=None,
+                finished_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
         self._commit()
-        return len(jobs)
+        return failed_result.rowcount + cancelled_result.rowcount
 
     def _required(self, job_id: str) -> Job:
         job = self.get(job_id)

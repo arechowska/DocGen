@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -13,6 +15,34 @@ from docgen.db import Base
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.repository import InvalidJobTransition, JobRepository
 from docgen.projects.models import Project
+
+
+def _install_recovery_race(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    concurrent_change: Callable[[], None],
+) -> None:
+    original_scalars = session.scalars
+    original_execute = session.execute
+    triggered = False
+
+    def trigger_once() -> None:
+        nonlocal triggered
+        if not triggered:
+            triggered = True
+            concurrent_change()
+
+    def racing_scalars(*args: Any, **kwargs: Any) -> Any:
+        rows = list(original_scalars(*args, **kwargs))
+        trigger_once()
+        return iter(rows)
+
+    def racing_execute(*args: Any, **kwargs: Any) -> Any:
+        trigger_once()
+        return original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(session, "scalars", racing_scalars)
+    monkeypatch.setattr(session, "execute", racing_execute)
 
 
 @pytest.fixture
@@ -292,9 +322,72 @@ def test_recovery_fails_only_jobs_owned_by_same_interrupted_worker(
         other_job = session.get(Job, second_job.id)
         assert recovered_job is not None
         assert recovered_job.status is JobStatus.FAILED
+        assert recovered_job.status_message == "Задание завершилось с ошибкой"
         assert recovered_job.error_message == "Обработка была прервана; запустите её повторно"
+        assert recovered_job.finished_at is not None
         assert other_job is not None
         assert other_job.status is JobStatus.RUNNING
+
+
+def test_recovery_does_not_fail_job_cancelled_after_selection(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with session_factory() as worker_session:
+        worker = JobRepository(worker_session, worker_id="stable-worker")
+        worker.enqueue("p1", JobKind.ASSEMBLE, "faq")
+        running = worker.claim_next()
+        assert running is not None
+
+    with session_factory() as recovery_session:
+        recovery = JobRepository(recovery_session, worker_id="stable-worker")
+
+        def cancel_concurrently() -> None:
+            with session_factory() as cancelling_session:
+                JobRepository(cancelling_session).request_cancel(running.id)
+
+        _install_recovery_race(recovery_session, monkeypatch, cancel_concurrently)
+        recovered = recovery.recover_interrupted(
+            "Обработка была прервана; запустите её повторно"
+        )
+
+    assert recovered == 1
+    with session_factory() as observer_session:
+        cancelled = observer_session.get(Job, running.id)
+        assert cancelled is not None
+        assert cancelled.status is JobStatus.CANCELLED
+        assert cancelled.status_message == "Задание отменено"
+        assert cancelled.cancel_requested is True
+        assert cancelled.error_message is None
+        assert cancelled.finished_at is not None
+
+
+def test_recovery_tolerates_project_and_job_deleted_after_selection(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with session_factory() as worker_session:
+        worker = JobRepository(worker_session, worker_id="stable-worker")
+        worker.enqueue("p1", JobKind.CHECK, "use-case")
+        running = worker.claim_next()
+        assert running is not None
+
+    with session_factory() as recovery_session:
+        recovery = JobRepository(recovery_session, worker_id="stable-worker")
+
+        def delete_project_concurrently() -> None:
+            with session_factory() as deleting_session:
+                project = deleting_session.get(Project, running.project_id)
+                assert project is not None
+                deleting_session.delete(project)
+                deleting_session.commit()
+
+        _install_recovery_race(recovery_session, monkeypatch, delete_project_concurrently)
+        recovered = recovery.recover_interrupted(
+            "Обработка была прервана; запустите её повторно"
+        )
+
+    assert recovered == 0
+    with session_factory() as observer_session:
+        assert observer_session.get(Job, running.id) is None
 
 
 def test_claim_does_not_commit_unrelated_caller_changes(
