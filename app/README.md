@@ -1,75 +1,122 @@
 # DocGen
 
-DocGen Stage 1 provides a local workspace for creating projects and collecting source files and Confluence URLs.
+DocGen — локальное веб-приложение для проектов с источниками, сборки документов по смысловым шаблонам и проверки уже загруженных или собранных документов. Веб-процесс ставит длительные операции в SQLite-очередь, а отдельный worker выполняет их и сохраняет документ и отчёт.
 
-## Setup and launch
+## Установка
 
-Run the following commands from the workspace root:
-
-```bash
-cd Проекты/DocGen/app
-python -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/uvicorn docgen.main:app --reload
-```
-
-Open `http://127.0.0.1:8000/projects` to use the workspace.
-
-## Test and lint
+Команды POSIX (из корня репозитория):
 
 ```bash
-cd Проекты/DocGen/app
-.venv/bin/pytest -v
-.venv/bin/ruff check .
-```
-
-## Local configuration
-
-Configuration uses `DOCGEN_` environment variables. The defaults store the SQLite database at `./var/docgen.db` and uploaded files below `./var/data`.
-
-- `DOCGEN_DATABASE_URL` sets the SQLAlchemy database URL, for example `sqlite:///./var/docgen.db`.
-- `DOCGEN_DATA_DIR` sets the directory for uploaded files, for example `./var/data`.
-- `DOCGEN_CONFLUENCE_HOSTS` is a JSON array of allowed Confluence host names, for example `'["wiki.example.test", "confluence.internal.example"]'`.
-
-Keep private values only in the repository-root file `Проекты/DocGen/.env`. Never commit that file, credentials, tokens, passwords, or other secrets. `Settings` does not load `.env` automatically: load its `DOCGEN_*` assignments into the process before starting the application, without printing their values:
-
-```bash
-cd Проекты/DocGen
-set -a
-. ./.env
-set +a
 cd app
-.venv/bin/uvicorn docgen.main:app --reload
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
 ```
 
-The `.env` file must contain only trusted shell-compatible `DOCGEN_*` assignments, including a JSON value for `DOCGEN_CONFLUENCE_HOSTS` when it is set.
+Команды Windows PowerShell (из корня репозитория):
 
-## Reset local data
+```powershell
+cd app
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
 
-Stop the server first. The following removes the local default database and all uploaded files irreversibly:
+## Запуск web и worker
+
+Web и worker должны работать одновременно в двух терминалах. Сначала задайте стабильный и уникальный для этого worker-процесса `DOCGEN_WORKER_ID` в окружении процесса.
+
+POSIX, терминал web:
 
 ```bash
-cd Проекты/DocGen/app
-rm -rf var
+cd app
+.venv/bin/uvicorn docgen.main:app --port 8000
 ```
 
-If `DOCGEN_DATABASE_URL` or `DOCGEN_DATA_DIR` points elsewhere, remove or replace only those configured local paths.
+POSIX, терминал worker:
 
-## Recovery after filesystem cleanup failure
+```bash
+cd app
+.venv/bin/python -m docgen.jobs.worker
+```
 
-Project and source deletion commits the database transaction before removing local files. If
-that final cleanup fails, DocGen logs `project_cleanup_failed` or `source_cleanup_failed` with
-the project ID and, for a source, its source ID and relative storage path. The database deletion
-has already completed at that point.
+Windows PowerShell, терминал web:
 
-After correcting the filesystem problem, stop DocGen and retry only the logged cleanup operation:
+```powershell
+cd app
+.\.venv\Scripts\python.exe -m uvicorn docgen.main:app --port 8000
+```
 
-- for a source, remove the exact logged relative path below `DOCGEN_DATA_DIR`;
-- for a project, remove only `DOCGEN_DATA_DIR/projects/<logged-project-id>`.
+Windows PowerShell, терминал worker:
 
-Resolve and inspect the exact target first. It must remain inside `DOCGEN_DATA_DIR`; do not use
-globs or a broad recursive target. Restart DocGen after the orphaned path has been removed.
+```powershell
+cd app
+.\.venv\Scripts\python.exe -m docgen.jobs.worker
+```
 
-## Stage 1 boundary
+Интерфейс доступен по `http://127.0.0.1:8000/projects`.
 
-Stage 1 accepts supported source files and stores allowed Confluence URLs as source records. It does not connect to Confluence or read its content. Stage 2 will retrieve and interpret the stored Confluence content.
+## Конфигурация
+
+`Settings` автоматически загружает файл `.env` из корня репозитория. Переменные окружения процесса имеют приоритет. Вручную выполнять `. ./.env` для полей `Settings` не требуется. `DOCGEN_WORKER_ID` читается worker напрямую из окружения процесса и не является полем `Settings`.
+
+Поддерживаются все следующие имена:
+
+- `DOCGEN_DATABASE_URL` — URL базы SQLAlchemy;
+- `DOCGEN_DATA_DIR` — каталог загруженных файлов;
+- `DOCGEN_CONFLUENCE_HOSTS` — JSON-массив разрешённых имён хостов Confluence;
+- `DOCGEN_CONFLUENCE_API_BASE` — базовый URL Confluence REST API;
+- `DOCGEN_CONFLUENCE_TOKEN` — токен Confluence;
+- `DOCGEN_LOCAL_TEXT_BASE_URL` — базовый URL OpenAI-совместимой текстовой модели;
+- `DOCGEN_LOCAL_TEXT_MODEL` — имя текстовой модели;
+- `DOCGEN_LOCAL_VISION_BASE_URL` — базовый URL OpenAI-совместимой мультимодальной модели;
+- `DOCGEN_LOCAL_VISION_MODEL` — имя мультимодальной модели;
+- `DOCGEN_WORKER_ID` — стабильный уникальный идентификатор worker-слота.
+
+Секреты хранятся только в корневом `.env`. Не печатайте его содержимое, не копируйте значения в команды, код, конфигурацию или заметки и не добавляйте `.env` в Git.
+
+Web запускается без настроенных моделей и Confluence. Worker также может собрать зависимости без этих необязательных интеграций, но не запускается без `DOCGEN_WORKER_ID`. Запуск сборки или проверки возвращает `503`, пока не настроены все четыре переменные текстовой и мультимодальной моделей. Для проекта с источником Confluence операция дополнительно возвращает `503`, пока не настроены API и токен Confluence. Задание не ставится в очередь при такой проверке зависимостей.
+
+## Текущие ограничения
+
+- Поддерживаются `.docx`, `.pdf`, `.txt`, `.md`, `.png`, `.jpg`, `.jpeg` и `.webp`. Для автономной проверки целевым документом могут быть только DOCX, PDF, TXT или Markdown.
+- Общий объём проекта ограничен 150 расчётными страницами. Начиная со 101 страницы показывается предупреждение о возможной обработке дольше пяти минут.
+- Ответ локальной модели ограничен 10 МБ, тайм-аут запроса — 120 секунд.
+- Ответ Confluence ограничен 5 МБ, суммарный объём его загруженных вложений-изображений — 5 МБ, тайм-аут каждого запроса — 30 секунд.
+- Отдельного лимита размера локального загружаемого файла сейчас нет: файл потоково сохраняется на диск и ограничен доступным хранилищем; лимит 150 страниц применяется при обработке.
+- Для одного проекта одновременно допускается только одно задание в очереди или в работе. Отмена кооперативная между внешними этапами; после ошибки или отмены интерфейс предлагает повторный запуск.
+
+## Тесты качества и приёмка Stage 2
+
+Тесты используют только синтетические данные, локальные детерминированные fake-модели и `MockTransport`; они не обращаются к сети, реальным моделям или корпоративному Confluence. Замороженный банковский пример вымышлен и не содержит реальных корпоративных данных.
+
+POSIX:
+
+```bash
+cd app
+.venv/bin/python -m pytest tests/quality tests/test_stage2_journey.py -v
+.venv/bin/python -m pytest -v
+.venv/bin/python -m ruff check .
+```
+
+Windows PowerShell:
+
+```powershell
+cd app
+.\.venv\Scripts\python.exe -m pytest tests\quality tests\test_stage2_journey.py -v
+.\.venv\Scripts\python.exe -m pytest -v
+.\.venv\Scripts\python.exe -m ruff check .
+```
+
+На Windows без права создания символических ссылок два теста безопасности хранилища могут завершиться до выполнения кода приложения с `WinError 1314`. Для такой среды разрешённый полный прогон исключает только:
+
+- `tests/sources/test_storage.py::test_save_rejects_projects_directory_symlinked_outside_data_dir`;
+- `tests/sources/test_storage.py::test_delete_project_rejects_symlink_to_another_project`.
+
+## Сброс локальных данных
+
+Остановите web и worker. Затем удалите только фактические пути базы и данных, заданные `DOCGEN_DATABASE_URL` и `DOCGEN_DATA_DIR`. Сначала разрешите и проверьте точные абсолютные пути; не используйте широкий рекурсивный путь, glob или корень workspace.
+
+## Восстановление после ошибки очистки файлов
+
+Удаление проекта или источника фиксирует транзакцию базы до удаления локальных файлов. Если последний шаг не удался, DocGen пишет `project_cleanup_failed` или `source_cleanup_failed` с идентификаторами и относительным путём.
+
+После исправления доступа остановите процессы и удалите только записанный путь внутри `DOCGEN_DATA_DIR`. Для источника это точный относительный путь из журнала; для проекта — каталог `projects/<project-id>`. Убедитесь, что разрешённый путь остаётся внутри `DOCGEN_DATA_DIR`, затем перезапустите DocGen.

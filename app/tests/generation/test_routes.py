@@ -395,6 +395,27 @@ def test_cancelled_job_renders_retry_action(client: TestClient, running_job: Job
     assert f'/projects/{running_job.project_id}/jobs/assemble' in response.text
 
 
+def test_missing_artifact_retry_swaps_error_responses_into_status(
+    client: TestClient, project_with_source: Project
+) -> None:
+    """Catch HTMX leaving a missing-artifact retry failure invisible to the user."""
+    with _session(client) as session:
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(project_with_source.id, JobKind.ASSEMBLE, "use-case")
+        assert repository.claim_next() is not None
+        repository.mark_succeeded(job.id)
+
+    response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+
+    assert response.status_code == 200
+    assert "Результат пока недоступен" in response.text
+    assert (
+        'hx-on::before-swap="if (event.detail.xhr.status >= 400) '
+        'event.detail.shouldSwap = true"'
+        in response.text
+    )
+
+
 def test_document_view_renders_all_node_kinds_in_order_and_explicit_gap(
     client: TestClient, project_with_source: Project
 ) -> None:

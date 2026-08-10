@@ -1,0 +1,24 @@
+template_id: use-case
+applicable_rule_ids:
+  - use-case-structure
+  - use-case-completeness
+  - use-case-terminology
+  - use-case-contradiction
+  - use-case-style
+required_nodes:
+  - kind: heading
+    title: Участники
+  - kind: heading
+    title: Предусловия
+  - kind: heading
+    title: Основной поток
+  - kind: heading
+    title: Результат
+expected_gaps:
+  - id: gap-notification-channel
+    reason: Канал отдельного уведомления клиента не определён
+forbidden_claims:
+  - Перевод исполняется Банком России
+  - Комиссия за перевод составляет 1%
+  - Клиент получает SMS-уведомление
+max_processing_seconds: 5.0
