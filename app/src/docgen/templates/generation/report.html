@@ -1,0 +1,58 @@
+{% if standalone %}
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Отчёт проверки — DocGen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-[#f5f5f7] font-[Inter,system-ui] text-[#1d1d1f]">
+{% endif %}
+<main id="{% if standalone %}report-start{% else %}generation-status{% endif %}" class="mx-auto max-w-4xl px-6 py-12 sm:px-10">
+  <a href="/projects/{{ project_id }}" class="text-sm font-medium text-[#0066cc]">К проекту</a>
+  <section class="mt-6 rounded-[28px] bg-white p-7 sm:p-10">
+    <p class="text-sm font-medium text-[#707070]">Результат проверки</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-tight">Отчёт</h1>
+
+    <section class="mt-8">
+      <h2 class="text-xl font-semibold">Подтверждённые проблемы</h2>
+      <div class="mt-4 space-y-3">
+        {% for finding in confirmed %}
+          <article class="rounded-2xl bg-[#fff2f2] p-4">
+            <p>{{ finding.message }}</p>
+            {% if finding.node_id %}
+              <a class="mt-2 inline-block text-sm font-medium text-[#0066cc]" href="/projects/{{ project_id }}/document#node-{{ finding.node_id }}">К узлу документа</a>
+            {% else %}
+              <a class="mt-2 inline-block text-sm font-medium text-[#0066cc]" href="/projects/{{ project_id }}/document#document-start">К документу</a>
+            {% endif %}
+          </article>
+        {% else %}<p class="text-sm text-[#707070]">Подтверждённых проблем нет.</p>{% endfor %}
+      </div>
+    </section>
+
+    <section class="mt-8">
+      <h2 class="text-xl font-semibold">Замечания с низкой уверенностью</h2>
+      <div class="mt-4 space-y-3">
+        {% for finding in low_confidence %}
+          <article class="rounded-2xl bg-[#fff8e6] p-4">
+            <p>{{ finding.message }}</p>
+            {% if finding.node_id %}
+              <a class="mt-2 inline-block text-sm font-medium text-[#0066cc]" href="/projects/{{ project_id }}/document#node-{{ finding.node_id }}">К узлу документа</a>
+            {% else %}
+              <a class="mt-2 inline-block text-sm font-medium text-[#0066cc]" href="/projects/{{ project_id }}/document#document-start">К документу</a>
+            {% endif %}
+          </article>
+        {% else %}<p class="text-sm text-[#707070]">Замечаний с низкой уверенностью нет.</p>{% endfor %}
+      </div>
+    </section>
+
+    <section class="mt-8">
+      <h2 class="text-xl font-semibold">Непроверенные правила</h2>
+      {% if report.unchecked_rules %}
+        <ul class="mt-4 list-disc space-y-2 pl-6">{% for rule_id in report.unchecked_rules %}<li>{{ rule_id }}</li>{% endfor %}</ul>
+      {% else %}<p class="mt-4 text-sm text-[#707070]">Все правила проверены.</p>{% endif %}
+    </section>
+  </section>
+</main>
+{% if standalone %}</body></html>{% endif %}

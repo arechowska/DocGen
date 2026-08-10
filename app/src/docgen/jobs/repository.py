@@ -28,6 +28,10 @@ class JobNotFound(LookupError):
     """Raised when a job disappeared, for example with its deleted project."""
 
 
+class ActiveProjectJobExists(RuntimeError):
+    """Raised when a project already has a queued or running job."""
+
+
 class JobRepository:
     def __init__(self, session: Session, *, worker_id: str | None = None) -> None:
         self._session = session
@@ -38,7 +42,41 @@ class JobRepository:
         return self._worker_id
 
     def enqueue(self, project_id: str, kind: JobKind, template_id: str) -> Job:
-        job = Job(
+        job = self._new_job(project_id, kind, template_id)
+        self._session.add(job)
+        self._commit()
+        return job
+
+    def enqueue_if_project_idle(
+        self, project_id: str, kind: JobKind, template_id: str
+    ) -> Job:
+        # Route validation performs reads first. End that deferred transaction,
+        # then reserve the SQLite writer lock before checking and inserting so
+        # two concurrent requests cannot both observe an idle project.
+        self._session.rollback()
+        self._session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            active_job_id = self._session.scalar(
+                select(Job.id)
+                .where(
+                    Job.project_id == project_id,
+                    Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+                )
+                .limit(1)
+            )
+            if active_job_id is not None:
+                raise ActiveProjectJobExists
+            job = self._new_job(project_id, kind, template_id)
+            self._session.add(job)
+            self._session.commit()
+            return job
+        except Exception:
+            self._session.rollback()
+            raise
+
+    @staticmethod
+    def _new_job(project_id: str, kind: JobKind, template_id: str) -> Job:
+        return Job(
             project_id=project_id,
             kind=kind,
             template_id=template_id,
@@ -47,12 +85,20 @@ class JobRepository:
             status_message=_QUEUED_MESSAGE,
             cancel_requested=False,
         )
-        self._session.add(job)
-        self._commit()
-        return job
 
     def get(self, job_id: str) -> Job | None:
         return self._session.get(Job, job_id, populate_existing=True)
+
+    def get_active_for_project(self, project_id: str) -> Job | None:
+        return self._session.scalar(
+            select(Job)
+            .where(
+                Job.project_id == project_id,
+                Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+            )
+            .order_by(Job.created_at, Job.id)
+            .limit(1)
+        )
 
     def claim_next(self) -> Job | None:
         # A RESERVED lock is taken before reading the head of the queue. This
@@ -261,6 +307,7 @@ class JobRepository:
 
 
 __all__ = [
+    "ActiveProjectJobExists",
     "InvalidJobTransition",
     "JobCancellationRequested",
     "JobNotFound",

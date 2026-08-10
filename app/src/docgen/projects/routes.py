@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
+from docgen.documents.repository import DocumentRepository
 from docgen.sources.service import SourceService
 from docgen.sources.storage import LocalStorage
+from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.web import templates
 
 from .repository import ProjectRepository
@@ -92,6 +94,7 @@ def project_detail(
         LocalStorage(request.app.state.settings.data_dir),
         request.app.state.settings.confluence_hosts,
     )
+    documents = DocumentRepository(session)
     return templates.TemplateResponse(
         request=request,
         name="projects/detail.html",
@@ -99,6 +102,11 @@ def project_detail(
             "project": project,
             "project_id": project_id,
             "sources": source_service.list(project_id),
+            "templates": TemplateCatalog().list(),
+            "generation_error": None,
+            "setup_fragment": False,
+            "has_document": documents.get_document(project_id) is not None,
+            "has_report": documents.get_report(project_id) is not None,
         },
     )
 

@@ -1,0 +1,71 @@
+{% macro render_node(node) %}
+  <article id="node-{{ node.id }}" class="scroll-mt-6 rounded-2xl border border-[#e5e5e7] p-5">
+    {% if node.kind.value == "heading" %}
+      <h3 class="text-xl font-semibold">{{ node.text or "" }}</h3>
+    {% elif node.kind.value == "paragraph" %}
+      <p class="whitespace-pre-wrap leading-7">{{ node.text or "" }}</p>
+    {% elif node.kind.value == "list" %}
+      {% if node.text %}<p class="font-medium">{{ node.text }}</p>{% endif %}
+      {% set items = node.data.get("items", []) %}
+      {% if items is sequence and items is not string %}
+        <ul class="mt-2 list-disc space-y-1 pl-6">
+          {% for item in items %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+    {% elif node.kind.value == "table" %}
+      {% if node.text %}<p class="mb-3 font-medium">{{ node.text }}</p>{% endif %}
+      {% set headers = node.data.get("headers", []) %}
+      {% set rows = node.data.get("rows", []) %}
+      {% if rows is sequence and rows is not string %}
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse text-left text-sm">
+            {% if headers is sequence and headers is not string %}
+              <thead><tr>{% for header in headers %}<th class="border border-[#d2d2d7] px-3 py-2">{{ header }}</th>{% endfor %}</tr></thead>
+            {% endif %}
+            <tbody>
+              {% for row in rows %}
+                {% if row is sequence and row is not string %}<tr>{% for cell in row %}<td class="border border-[#d2d2d7] px-3 py-2">{{ cell }}</td>{% endfor %}</tr>{% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    {% elif node.kind.value == "image" %}
+      <div class="rounded-xl bg-[#f5f5f7] p-4">
+        <p class="text-sm font-medium text-[#707070]">Изображение или схема</p>
+        {% if node.text %}<p class="mt-2">{{ node.text }}</p>{% endif %}
+      </div>
+    {% elif node.kind.value == "gap" %}
+      <div class="rounded-xl border border-dashed border-[#d2d2d7] bg-[#fff8e6] p-4 font-medium">Нет данных в источниках</div>
+    {% endif %}
+
+    {% if node.children %}
+      <div class="mt-4 space-y-4 border-l-2 border-[#e5e5e7] pl-4">
+        {% for child in node.children %}{{ render_node(child) }}{% endfor %}
+      </div>
+    {% endif %}
+  </article>
+{% endmacro %}
+
+{% if standalone %}
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ document.title }} — DocGen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-[#f5f5f7] font-[Inter,system-ui] text-[#1d1d1f]">
+{% endif %}
+<main id="{% if standalone %}document-start{% else %}generation-status{% endif %}" class="mx-auto max-w-4xl scroll-mt-6 px-6 py-12 sm:px-10">
+  <a href="/projects/{{ project_id }}" class="text-sm font-medium text-[#0066cc]">К проекту</a>
+  <section class="mt-6 rounded-[28px] bg-white p-7 sm:p-10">
+    <p class="text-sm font-medium text-[#707070]">Собранный документ</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-tight">{{ document.title }}</h1>
+    <div class="mt-8 space-y-4">
+      {% for node in document.nodes %}{{ render_node(node) }}{% endfor %}
+    </div>
+  </section>
+</main>
+{% if standalone %}</body></html>{% endif %}

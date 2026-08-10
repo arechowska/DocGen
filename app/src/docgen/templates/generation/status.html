@@ -1,0 +1,51 @@
+<section
+  id="generation-status"
+  class="mt-6 rounded-2xl bg-[#f5f5f7] p-5"
+  {% if is_active %}
+    hx-get="/projects/{{ job.project_id }}/jobs/{{ job.id }}"
+    hx-trigger="every 2s"
+    hx-swap="outerHTML"
+  {% endif %}
+  aria-live="polite"
+>
+  {% if notice %}
+    <p class="font-medium text-[#1d1d1f]">{{ notice }}</p>
+  {% elif safe_error %}
+    <p class="font-medium text-[#b42318]">{{ safe_error }}</p>
+  {% elif job.status.value == "cancelled" %}
+    <p class="font-medium">Задание отменено</p>
+  {% else %}
+    <p class="font-medium">{{ job.status_message }}</p>
+  {% endif %}
+
+  {% if is_active %}
+    <div class="mt-4 h-2 overflow-hidden rounded-full bg-white" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ job.progress }}">
+      <div class="h-full rounded-full bg-[#0066cc]" style="width: {{ job.progress }}%"></div>
+    </div>
+    <p class="mt-2 text-sm text-[#707070]">{{ job.progress }}%</p>
+    <button
+      hx-post="/projects/{{ job.project_id }}/jobs/{{ job.id }}/cancel"
+      hx-target="#generation-status"
+      hx-swap="outerHTML"
+      class="mt-4 rounded-full border border-[#d2d2d7] px-4 py-2 text-sm font-medium"
+      type="button"
+    >Отменить</button>
+  {% elif job.status.value in ["failed", "cancelled"] %}
+    <form
+      class="mt-4"
+      hx-post="/projects/{{ job.project_id }}/jobs/{{ job.kind.value }}"
+      hx-target="#generation-status"
+      hx-swap="outerHTML"
+      hx-on::before-swap="if (event.detail.xhr.status >= 400) event.detail.shouldSwap = true"
+    >
+      <input type="hidden" name="template_id" value="{{ job.template_id }}">
+      <button class="rounded-full bg-[#0066cc] px-5 py-3 text-sm font-medium text-white" type="submit">Повторить</button>
+    </form>
+  {% elif job.status.value == "succeeded" %}
+    <p class="mt-3 text-sm text-[#707070]">Результат пока недоступен. Повторите операцию.</p>
+    <form class="mt-4" hx-post="/projects/{{ job.project_id }}/jobs/{{ job.kind.value }}" hx-target="#generation-status" hx-swap="outerHTML">
+      <input type="hidden" name="template_id" value="{{ job.template_id }}">
+      <button class="rounded-full bg-[#0066cc] px-5 py-3 text-sm font-medium text-white" type="submit">Повторить</button>
+    </form>
+  {% endif %}
+</section>
