@@ -35,6 +35,33 @@ class DocumentRepository:
             artifact.document_revision,
         )
 
+    def replace_document(
+        self,
+        project_id: str,
+        expected_revision: int,
+        document: WorkingDocument,
+    ) -> int | None:
+        result = self._session.execute(
+            update(ProjectArtifact)
+            .where(
+                ProjectArtifact.project_id == project_id,
+                ProjectArtifact.document_json.is_not(None),
+                ProjectArtifact.document_revision == expected_revision,
+            )
+            .values(
+                document_json=document.model_dump_json(),
+                document_revision=ProjectArtifact.document_revision + 1,
+                report_json=None,
+                report_revision=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self._session.expire_all()
+            return None
+        self._session.flush()
+        return expected_revision + 1
+
     def save_report(
         self,
         project_id: str,
