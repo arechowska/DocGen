@@ -7,6 +7,40 @@
 >
   <div class="mb-2 flex items-center justify-between gap-3">
     <span class="text-xs font-medium uppercase text-slate-500">{{ node.kind.value }}</span>
+    <div class="flex items-center gap-1">
+      <button
+        class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+        type="button"
+        hx-post="/projects/{{ project_id }}/editor/nodes"
+        hx-vals='{"kind": "paragraph", "after_node_id": "{{ node.id }}", "revision": "{{ revision }}"}'
+        hx-target="#editor-shell"
+        hx-swap="outerHTML"
+      >+</button>
+      <button
+        class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+        type="button"
+        hx-post="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/move"
+        hx-vals='{"direction": "up", "revision": "{{ revision }}"}'
+        hx-target="#editor-shell"
+        hx-swap="outerHTML"
+      >↑</button>
+      <button
+        class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+        type="button"
+        hx-post="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/move"
+        hx-vals='{"direction": "down", "revision": "{{ revision }}"}'
+        hx-target="#editor-shell"
+        hx-swap="outerHTML"
+      >↓</button>
+      <button
+        class="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+        type="button"
+        hx-delete="/projects/{{ project_id }}/editor/nodes/{{ node.id }}"
+        hx-vals='{"revision": "{{ revision }}"}'
+        hx-target="#editor-shell"
+        hx-swap="outerHTML"
+      >Удалить</button>
+    </div>
   </div>
 
   {% if node.kind.value in ["heading", "paragraph"] %}

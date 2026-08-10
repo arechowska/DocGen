@@ -12,6 +12,18 @@
       </div>
       <a class="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" href="/projects/{{ project_id }}">К проекту</a>
     </div>
+    <div class="mb-4 flex flex-wrap gap-2">
+      {% for kind, label in [("heading", "Раздел"), ("paragraph", "Абзац"), ("list", "Список"), ("table", "Таблица")] %}
+        <button
+          class="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          type="button"
+          hx-post="/projects/{{ project_id }}/editor/nodes"
+          hx-vals='{"kind": "{{ kind }}", "revision": "{{ revision }}"}'
+          hx-target="#editor-shell"
+          hx-swap="outerHTML"
+        >{{ label }}</button>
+      {% endfor %}
+    </div>
     <div class="space-y-3">
       {% for node in document.nodes %}
         {% include "editor/node.html" %}

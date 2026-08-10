@@ -99,6 +99,58 @@ def test_text_autosave_conflict_returns_reload_prompt(
     assert "Документ уже изменён" in response.text
 
 
+def test_insert_paragraph_after_selected_node(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/nodes",
+        data={"kind": "paragraph", "after_node_id": "n1", "revision": "1"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "Новый абзац" in response.text
+
+
+def test_move_node_down_persists_order(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/nodes/n1/move",
+        data={"direction": "down", "revision": "1"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        assert document.nodes[1].id == "n1"
+
+
+def test_delete_node_removes_it_from_document(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.request(
+        "DELETE",
+        f"/projects/{project_with_document.id}/editor/nodes/p1",
+        data={"revision": "1"},
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        assert [node.id for node in document.nodes] == [
+            "n1",
+            "list-1",
+            "table-1",
+            "image-1",
+            "gap-1",
+        ]
+
+
 @contextmanager
 def _session(client: TestClient) -> Iterator[Session]:
     session = client.app.state.session_factory()
