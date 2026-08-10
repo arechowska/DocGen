@@ -443,3 +443,91 @@ def test_native_attachment_rejects_external_download_link_without_requesting_it(
         ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
 
     assert requested_hosts == ["wiki.example.test", "wiki.example.test"]
+
+
+def test_confluence_rejects_over_150_page_units_before_attachment_requests() -> None:
+    native_images = "".join(
+        f'<ac:image><ri:attachment ri:filename="image-{index}.png" /></ac:image>'
+        for index in range(150)
+    )
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(native_images)
+        raise AssertionError("page limit must be checked before attachment metadata/download")
+
+    with pytest.raises(ExtractionError, match="Максимальный объём — 150 страниц"):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert requested_paths == ["/rest/api/content/42"]
+
+
+def test_confluence_enforces_aggregate_attachment_budget_before_retaining_second_image() -> None:
+    storage_html = (
+        '<ac:image><ri:attachment ri:filename="one.png" /></ac:image>'
+        '<ac:image><ri:attachment ri:filename="two.png" /></ac:image>'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(storage_html)
+        if request.url.path.endswith("/child/attachment"):
+            filename = request.url.params["filename"]
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": filename,
+                            "metadata": {"mediaType": "image/png"},
+                            "_links": {"download": f"/download/attachments/42/{filename}"},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(200, content=b"abc")
+
+    with pytest.raises(
+        ExtractionError,
+        match="Общий объём вложений Confluence слишком большой",
+    ):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+            max_response_bytes=10_000,
+            max_attachment_bytes=5,
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
+def test_native_attachment_maps_malformed_download_url_to_safe_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(
+                '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+            )
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "architecture.png",
+                        "metadata": {"mediaType": "image/png"},
+                        "_links": {"download": "https://[bad"},
+                    }
+                ]
+            },
+        )
+
+    with pytest.raises(ExtractionError, match="Недопустимая ссылка вложения Confluence"):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")

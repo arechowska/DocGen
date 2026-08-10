@@ -17,6 +17,7 @@ from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5_000_000
 _TIMEOUT_SECONDS = 30.0
+_MAX_PAGE_UNITS = 150
 _CONFLUENCE_URL_ERROR = "Разрешены только ссылки Confluence"
 _NOT_CONFIGURED_ERROR = "Интеграция Confluence не настроена"
 _ACCESS_ERROR = "Нет доступа к странице Confluence"
@@ -26,6 +27,8 @@ _RESPONSE_ERROR = "Не удалось обработать ответ Confluenc
 _ATTACHMENT_NOT_FOUND_ERROR = "Вложение Confluence не найдено"
 _ATTACHMENT_RESPONSE_ERROR = "Не удалось обработать вложение Confluence"
 _ATTACHMENT_URL_ERROR = "Недопустимая ссылка вложения Confluence"
+_ATTACHMENT_BUDGET_ERROR = "Общий объём вложений Confluence слишком большой"
+_PAGE_LIMIT_ERROR = "Максимальный объём — 150 страниц"
 
 
 class ConfluenceSource(Protocol):
@@ -46,12 +49,16 @@ class ConfluenceClient:
         allowed_hosts: Iterable[str] | None = None,
         transport: httpx.BaseTransport | None = None,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        max_attachment_bytes: int | None = None,
         timeout_seconds: float = _TIMEOUT_SECONDS,
     ) -> None:
         self._api_base = api_base.rstrip("/") if api_base else None
         self._token = token
         self._transport = transport
         self._max_response_bytes = max_response_bytes
+        self._max_attachment_bytes = (
+            max_attachment_bytes if max_attachment_bytes is not None else max_response_bytes
+        )
         self._timeout_seconds = timeout_seconds
         self._allowed_hosts = frozenset(host.lower() for host in allowed_hosts or self._api_hosts())
 
@@ -62,6 +69,7 @@ class ConfluenceClient:
         *,
         transport: httpx.BaseTransport | None = None,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        max_attachment_bytes: int | None = None,
     ) -> ConfluenceClient:
         return cls(
             api_base=str(settings.confluence_api_base) if settings.confluence_api_base else None,
@@ -69,6 +77,7 @@ class ConfluenceClient:
             allowed_hosts=settings.confluence_hosts,
             transport=transport,
             max_response_bytes=max_response_bytes,
+            max_attachment_bytes=max_attachment_bytes,
         )
 
     def fetch(
@@ -82,18 +91,24 @@ class ConfluenceClient:
         response_body = self._get_page(page_id, token, before_external_call)
         storage_html = self._storage_html(response_body)
         blocks = _normalize_storage_html(page_id, storage_html)
-        blocks = [
-            self._resolve_native_attachment(
+        page_units = VirtualPageCalculator().from_blocks(blocks)
+        if page_units > _MAX_PAGE_UNITS:
+            raise ExtractionError(_PAGE_LIMIT_ERROR)
+        resolved_blocks: list[NormalizedBlock] = []
+        attachment_bytes = 0
+        for block in blocks:
+            resolved_block, retained_bytes = self._resolve_native_attachment(
                 page_id,
                 block,
                 token,
                 before_external_call,
+                self._max_attachment_bytes - attachment_bytes,
             )
-            for block in blocks
-        ]
+            attachment_bytes += retained_bytes
+            resolved_blocks.append(resolved_block)
         return ExtractionResult(
-            blocks=blocks,
-            page_units=VirtualPageCalculator().from_blocks(blocks),
+            blocks=resolved_blocks,
+            page_units=page_units,
             warnings=[],
         )
 
@@ -159,6 +174,8 @@ class ConfluenceClient:
         params: dict[str, str | int] | None = None,
         before_external_call: Callable[[], None] | None = None,
         not_found_message: str = _RETRIEVAL_ERROR,
+        max_bytes: int | None = None,
+        oversized_message: str = _OVERSIZED_ERROR,
     ) -> bytes:
         try:
             with httpx.Client(
@@ -180,8 +197,11 @@ class ConfluenceClient:
                         raise ExtractionError(not_found_message)
                     if response.is_error or response.is_redirect:
                         raise ExtractionError(_RETRIEVAL_ERROR)
-                    self._check_content_length(response)
-                    return self._read_limited_body(response)
+                    response_limit = (
+                        max_bytes if max_bytes is not None else self._max_response_bytes
+                    )
+                    self._check_content_length(response, response_limit, oversized_message)
+                    return self._read_limited_body(response, response_limit, oversized_message)
         except ExtractionError:
             raise
         except httpx.HTTPError as error:
@@ -203,10 +223,13 @@ class ConfluenceClient:
         block: NormalizedBlock,
         token: str,
         before_external_call: Callable[[], None] | None,
-    ) -> NormalizedBlock:
+        remaining_attachment_bytes: int,
+    ) -> tuple[NormalizedBlock, int]:
         filename = block.data.get("attachment")
         if block.kind is not BlockKind.IMAGE or not isinstance(filename, str):
-            return block
+            return block, 0
+        if remaining_attachment_bytes <= 0:
+            raise ExtractionError(_ATTACHMENT_BUDGET_ERROR)
         assert self._api_base is not None
         metadata_body = self._get_bytes(
             f"{self._api_base}/content/{page_id}/child/attachment",
@@ -238,29 +261,47 @@ class ConfluenceClient:
             raise ExtractionError(_ATTACHMENT_RESPONSE_ERROR)
 
         download_url = self._same_host_download_url(download_link)
+        download_limit = min(self._max_response_bytes, remaining_attachment_bytes)
+        oversized_message = (
+            _ATTACHMENT_BUDGET_ERROR
+            if remaining_attachment_bytes < self._max_response_bytes
+            else _OVERSIZED_ERROR
+        )
         content = self._get_bytes(
             download_url,
             token,
             before_external_call=before_external_call,
             not_found_message=_ATTACHMENT_NOT_FOUND_ERROR,
+            max_bytes=download_limit,
+            oversized_message=oversized_message,
         )
         if not content:
             raise ExtractionError(_ATTACHMENT_RESPONSE_ERROR)
-        return block.model_copy(
-            update={
-                "data": {
-                    **block.data,
-                    "content_base64": base64.b64encode(content).decode("ascii"),
-                    "media_type": media_type,
+        if len(content) > remaining_attachment_bytes:
+            raise ExtractionError(_ATTACHMENT_BUDGET_ERROR)
+        return (
+            block.model_copy(
+                update={
+                    "data": {
+                        **block.data,
+                        "content_base64": base64.b64encode(content).decode("ascii"),
+                        "media_type": media_type,
+                    }
                 }
-            }
+            ),
+            len(content),
         )
 
     def _same_host_download_url(self, download_link: str) -> str:
         assert self._api_base is not None
-        download_url = urljoin(f"{self._api_base}/", download_link)
-        api = urlsplit(self._api_base)
-        parsed = urlsplit(download_url)
+        try:
+            download_url = urljoin(f"{self._api_base}/", download_link)
+            api = urlsplit(self._api_base)
+            parsed = urlsplit(download_url)
+            _ = api.port
+            _ = parsed.port
+        except (TypeError, ValueError):
+            raise ExtractionError(_ATTACHMENT_URL_ERROR) from None
         if (
             parsed.scheme != api.scheme
             or parsed.netloc != api.netloc
@@ -271,24 +312,34 @@ class ConfluenceClient:
             raise ExtractionError(_ATTACHMENT_URL_ERROR)
         return download_url
 
-    def _check_content_length(self, response: httpx.Response) -> None:
+    @staticmethod
+    def _check_content_length(
+        response: httpx.Response,
+        max_bytes: int,
+        oversized_message: str,
+    ) -> None:
         content_length = response.headers.get("Content-Length")
         if content_length is None:
             return
         try:
-            is_oversized = int(content_length) > self._max_response_bytes
+            is_oversized = int(content_length) > max_bytes
         except ValueError:
             return
         if is_oversized:
-            raise ExtractionError(_OVERSIZED_ERROR)
+            raise ExtractionError(oversized_message)
 
-    def _read_limited_body(self, response: httpx.Response) -> bytes:
+    @staticmethod
+    def _read_limited_body(
+        response: httpx.Response,
+        max_bytes: int,
+        oversized_message: str,
+    ) -> bytes:
         chunks: list[bytes] = []
         total_bytes = 0
         for chunk in response.iter_bytes():
             total_bytes += len(chunk)
-            if total_bytes > self._max_response_bytes:
-                raise ExtractionError(_OVERSIZED_ERROR)
+            if total_bytes > max_bytes:
+                raise ExtractionError(oversized_message)
             chunks.append(chunk)
         return b"".join(chunks)
 
