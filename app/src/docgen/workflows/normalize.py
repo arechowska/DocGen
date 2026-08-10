@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -51,13 +52,19 @@ class NormalizationWorkflow:
         self._extractors = extractors
         self._confluence = confluence
 
-    def run(self, project_id: str) -> NormalizedProject:
+    def run(
+        self,
+        project_id: str,
+        before_extract: Callable[[], None] | None = None,
+    ) -> NormalizedProject:
         blocks: list[NormalizedBlock] = []
         warnings: list[str] = []
         total_pages = 0
         block_ids: set[str] = set()
 
         for source in self._sources.list_for_project(project_id):
+            if before_extract is not None:
+                before_extract()
             extraction = self._extract(source)
             total_pages += extraction.page_units
             if total_pages > _MAX_PAGE_UNITS:

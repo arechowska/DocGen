@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Protocol, TypeVar
 
-from docgen.ai.client import ModelConfigurationError, ModelError
+from pydantic import BaseModel
+
+from docgen.ai.client import (
+    ModelConfigurationError,
+    ModelError,
+    TextModel,
+    VisionDescription,
+    VisionModel,
+    build_text_model,
+    build_vision_model,
+)
+from docgen.ai.grounding import GroundingValidator
+from docgen.config import Settings
+from docgen.documents.repository import DocumentRepository
 from docgen.extraction.registry import ExtractionError
-from docgen.workflows.normalize import PageLimitExceeded
+from docgen.projects.repository import ProjectRepository
+from docgen.templates_catalog.loader import TemplateCatalog
+from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
 from .models import Job, JobKind
 from .repository import JobCancellationRequested, JobNotFound, JobRepository
@@ -28,6 +44,37 @@ class JobWorkflow(Protocol):
 
 WorkflowCallable = Callable[[Job, ProgressSink], object]
 Workflow = WorkflowCallable | JobWorkflow
+T = TypeVar("T", bound=BaseModel)
+
+
+@dataclass(frozen=True)
+class WorkflowDependencies:
+    projects: ProjectRepository
+    normalization: NormalizationWorkflow
+    templates: TemplateCatalog
+    documents: DocumentRepository
+
+
+class _ProductionTextModel:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._model: TextModel | None = None
+
+    def generate_json(self, system: str, user: str, schema: type[T]) -> T:
+        if self._model is None:
+            self._model = build_text_model(self._settings)
+        return self._model.generate_json(system, user, schema)
+
+
+class _ProductionVisionModel:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._model: VisionModel | None = None
+
+    def describe(self, image: bytes, media_type: str) -> VisionDescription:
+        if self._model is None:
+            self._model = build_vision_model(self._settings)
+        return self._model.describe(image, media_type)
 
 
 class _CancellationObserved(Exception):
@@ -121,6 +168,31 @@ class JobRunner:
             pass
 
 
+def build_workflows(
+    settings: Settings,
+    dependencies: WorkflowDependencies,
+) -> dict[JobKind, JobWorkflow]:
+    from docgen.workflows.assemble import AssembleWorkflow
+    from docgen.workflows.check import CheckWorkflow
+
+    text_model = _ProductionTextModel(settings)
+    vision_model = _ProductionVisionModel(settings)
+    grounding = GroundingValidator()
+    shared = {
+        "projects": dependencies.projects,
+        "normalization": dependencies.normalization,
+        "templates": dependencies.templates,
+        "text_model": text_model,
+        "vision_model": vision_model,
+        "grounding": grounding,
+        "documents": dependencies.documents,
+    }
+    return {
+        JobKind.ASSEMBLE: AssembleWorkflow(**shared),
+        JobKind.CHECK: CheckWorkflow(**shared),
+    }
+
+
 __all__ = [
     "JobRunner",
     "JobWorkflow",
@@ -128,4 +200,6 @@ __all__ = [
     "UserSafeJobError",
     "Workflow",
     "WorkflowCallable",
+    "WorkflowDependencies",
+    "build_workflows",
 ]

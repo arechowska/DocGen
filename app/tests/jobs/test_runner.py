@@ -9,7 +9,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from docgen.config import Settings
 from docgen.db import Base
+from docgen.jobs import worker as worker_module
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner, UserSafeJobError
@@ -320,3 +322,45 @@ def test_worker_requires_explicit_stable_slot_id() -> None:
         resolve_worker_id({})
 
     assert resolve_worker_id({"DOCGEN_WORKER_ID": " worker-slot-1 "}) == "worker-slot-1"
+
+
+def test_production_worker_processes_registered_workflow_instead_of_leaving_job_queued(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'production-worker.db'}",
+        data_dir=tmp_path / "data",
+        local_text_base_url=None,
+        local_text_model=None,
+        local_vision_base_url=None,
+        local_vision_model=None,
+    )
+    factory = sessionmaker(
+        create_engine(settings.database_url, connect_args={"check_same_thread": False}),
+        expire_on_commit=False,
+    )
+    Base.metadata.create_all(factory.kw["bind"])
+    with factory() as session:
+        session.add(Project(id="p1", name="Проект"))
+        session.commit()
+        job = JobRepository(session, worker_id="producer").enqueue(
+            "p1", JobKind.ASSEMBLE, "use-case"
+        )
+
+    def run_one_job(runner: JobRunner, stop_event: Any) -> None:
+        del stop_event
+        assert runner.run_once() is True
+
+    monkeypatch.setattr(worker_module, "Settings", lambda: settings)
+    monkeypatch.setattr(worker_module, "run_worker", run_one_job)
+    monkeypatch.setenv("DOCGEN_WORKER_ID", "worker-slot-test")
+
+    worker_module.main()
+
+    with factory() as session:
+        persisted_job = session.get(Job, job.id)
+        assert persisted_job is not None
+        assert persisted_job.status is JobStatus.FAILED
+        assert persisted_job.error_message == "Локальные модели не настроены"
+    factory.kw["bind"].dispose()

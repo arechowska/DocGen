@@ -143,6 +143,32 @@ def test_normalization_preserves_source_order_and_makes_block_ids_unique(
     assert len({block.id for block in result.blocks}) == len(result.blocks)
 
 
+def test_normalization_calls_cancellation_gate_immediately_before_every_extractor(
+    sources: FakeSources,
+) -> None:
+    events: list[str] = []
+    sources.results = [
+        ExtractionResult(blocks=[], page_units=1, warnings=[]),
+        ExtractionResult(blocks=[], page_units=1, warnings=[]),
+    ]
+
+    class GatedExtractors(FakeExtractors):
+        def extract(self, source: Source, path: Path) -> ExtractionResult:
+            events.append(f"extract:{source.id}")
+            return super().extract(source, path)
+
+    workflow = NormalizationWorkflow(
+        sources,
+        FakeStorage(),
+        GatedExtractors(sources),
+        FakeConfluence(),
+    )
+
+    workflow.run("p1", before_extract=lambda: events.append("gate"))
+
+    assert events == ["gate", "extract:source-1", "gate", "extract:source-2"]
+
+
 def test_normalization_includes_source_warnings_and_adds_long_processing_warning(
     workflow: NormalizationWorkflow,
     sources: FakeSources,

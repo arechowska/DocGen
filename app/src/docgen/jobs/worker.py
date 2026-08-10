@@ -9,11 +9,18 @@ from typing import Protocol
 
 from docgen.config import Settings
 from docgen.db import Base, build_session_factory
+from docgen.documents.repository import DocumentRepository
+from docgen.extraction.confluence import ConfluenceClient
+from docgen.extraction.registry import ExtractorRegistry
 from docgen.projects.models import Project  # noqa: F401
+from docgen.projects.repository import ProjectRepository
+from docgen.sources.repository import SourceRepository
+from docgen.sources.storage import LocalStorage
+from docgen.templates_catalog.loader import TemplateCatalog
+from docgen.workflows.normalize import NormalizationWorkflow
 
-from .models import JobKind
 from .repository import JobRepository
-from .runner import JobRunner, Workflow
+from .runner import JobRunner, WorkflowDependencies, build_workflows
 
 _POLL_INTERVAL_SECONDS = 0.5
 
@@ -64,7 +71,22 @@ def main() -> None:
     install_signal_handlers(stop_event)
     try:
         with session_factory() as session:
-            workflows: dict[JobKind, Workflow] = {}
+            storage = LocalStorage(settings.data_dir)
+            normalization = NormalizationWorkflow(
+                SourceRepository(session),
+                storage,
+                ExtractorRegistry.default(),
+                ConfluenceClient.from_settings(settings),
+            )
+            workflows = build_workflows(
+                settings,
+                WorkflowDependencies(
+                    projects=ProjectRepository(session),
+                    normalization=normalization,
+                    templates=TemplateCatalog(),
+                    documents=DocumentRepository(session),
+                ),
+            )
             runner = JobRunner(
                 JobRepository(session, worker_id=worker_id),
                 workflows,
