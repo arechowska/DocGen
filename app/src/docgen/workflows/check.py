@@ -16,12 +16,13 @@ from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticTemplate
 
-from .assemble import WorkflowError, enrich_images, public_blocks
+from .assemble import WorkflowError, enrich_images, normalize_sources, public_blocks
 from .normalize import NormalizationWorkflow
 
 _CHECK_KIND_ERROR = "Некорректный тип задания для проверки"
 _PROJECT_NOT_FOUND = "Проект не найден"
 _DOCUMENT_NOT_FOUND = "Документ для проверки не найден"
+_DOCUMENT_TEMPLATE_ERROR = "Документ создан для другого шаблона"
 _REPORT_SCHEMA_ERROR = "Модель вернула некорректный отчёт"
 _REPORT_TEMPLATE_ERROR = "Модель вернула отчёт для другого шаблона"
 _DOCUMENT_GROUNDING_ERROR = "Документ не прошёл проверку по источникам"
@@ -59,11 +60,10 @@ class CheckWorkflow:
         document = self._documents.get_document(job.project_id)
         if document is None:
             raise WorkflowError(_DOCUMENT_NOT_FOUND)
+        if document.template_id != template.id:
+            raise WorkflowError(_DOCUMENT_TEMPLATE_ERROR)
 
-        normalized = self._normalization.run(
-            job.project_id,
-            before_extract=lambda: progress(35, "Нормализация источников"),
-        )
+        normalized = normalize_sources(self._normalization, job.project_id, progress)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
         if self._grounding.validate(document, {block.id for block in blocks}):
             raise WorkflowError(_DOCUMENT_GROUNDING_ERROR)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import mimetypes
 from pathlib import Path
@@ -18,7 +20,7 @@ from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticTemplate
 
-from .normalize import NormalizationWorkflow
+from .normalize import NormalizationWorkflow, NormalizedProject
 
 _ASSEMBLE_KIND_ERROR = "Некорректный тип задания для сборки"
 _PROJECT_NOT_FOUND = "Проект не найден"
@@ -60,10 +62,7 @@ class AssembleWorkflow:
             raise WorkflowError(_PROJECT_NOT_FOUND)
         template = self._templates.get(job.template_id)
 
-        normalized = self._normalization.run(
-            job.project_id,
-            before_extract=lambda: progress(35, "Нормализация источников"),
-        )
+        normalized = normalize_sources(self._normalization, job.project_id, progress)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
 
         progress(90, "Сборка документа моделью")
@@ -94,34 +93,78 @@ def enrich_images(
     progress: ProgressSink,
 ) -> list[NormalizedBlock]:
     enriched: list[NormalizedBlock] = []
-    described_images = 0
+    progress(70, "Обогащение изображений")
     for block in blocks:
-        storage_path = block.data.get("storage_path") if block.kind is BlockKind.IMAGE else None
-        if not isinstance(storage_path, str):
+        if block.kind is not BlockKind.IMAGE:
             enriched.append(block)
             continue
 
-        image_path = Path(storage_path)
-        image_bytes = image_path.read_bytes()
-        media_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
-        progress(70, "Обогащение изображений")
+        storage_path = block.data.get("storage_path")
+        attachment = block.data.get("attachment")
+        if isinstance(storage_path, str):
+            image_path = Path(storage_path)
+            image_bytes = image_path.read_bytes()
+            media_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+        elif isinstance(attachment, str):
+            encoded_content = block.data.get("content_base64")
+            media_type = block.data.get("media_type")
+            if not isinstance(encoded_content, str) or not isinstance(media_type, str):
+                raise WorkflowError("Не удалось прочитать вложение Confluence")
+            try:
+                image_bytes = base64.b64decode(encoded_content, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise WorkflowError("Не удалось прочитать вложение Confluence") from exc
+            if not image_bytes or not media_type.startswith("image/"):
+                raise WorkflowError("Не удалось прочитать вложение Confluence")
+        else:
+            enriched.append(block)
+            continue
+
+        cancellation_checkpoint(progress)
         raw_description = vision_model.describe(image_bytes, media_type)
         try:
             description = VisionDescription.model_validate(raw_description)
         except ValidationError as exc:
             raise WorkflowError("Модель вернула некорректное описание изображения") from exc
-        enriched.append(block.model_copy(update={"text": description.description}))
-        described_images += 1
-
-    if described_images == 0:
-        progress(70, "Изображения для обогащения отсутствуют")
+        sanitized_data = {
+            key: value
+            for key, value in block.data.items()
+            if key not in {"content_base64", "storage_path"}
+        }
+        enriched.append(
+            block.model_copy(
+                update={"text": description.description, "data": sanitized_data}
+            )
+        )
     return enriched
+
+
+def normalize_sources(
+    normalization: NormalizationWorkflow,
+    project_id: str,
+    progress: ProgressSink,
+) -> NormalizedProject:
+    progress(35, "Нормализация источников")
+    return normalization.run(
+        project_id,
+        before_extract=lambda: cancellation_checkpoint(progress),
+    )
+
+
+def cancellation_checkpoint(progress: ProgressSink) -> None:
+    checkpoint = getattr(progress, "checkpoint", None)
+    if callable(checkpoint):
+        checkpoint()
 
 
 def public_blocks(blocks: list[NormalizedBlock]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for block in blocks:
-        data = {key: value for key, value in block.data.items() if key != "storage_path"}
+        data = {
+            key: value
+            for key, value in block.data.items()
+            if key not in {"content_base64", "storage_path"}
+        }
         result.append(
             {
                 "id": block.id,

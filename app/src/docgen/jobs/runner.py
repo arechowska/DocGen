@@ -37,6 +37,8 @@ class UserSafeJobError(RuntimeError):
 class ProgressSink(Protocol):
     def __call__(self, progress: int, status_message: str | None = None) -> None: ...
 
+    def checkpoint(self) -> None: ...
+
 
 class JobWorkflow(Protocol):
     def run(self, job: Job, progress: ProgressSink) -> object: ...
@@ -118,14 +120,7 @@ class JobRunner:
         return self._repository.recover_interrupted(_INTERRUPTED_ERROR_MESSAGE)
 
     def _progress_sink(self, job_id: str) -> ProgressSink:
-        def report(progress: int, status_message: str | None = None) -> None:
-            # Workflows report a stage immediately before doing its potentially
-            # external work. Checking here makes each report a cancellation gate.
-            self._raise_if_cancelled(job_id)
-            message = status_message or f"Выполнено {progress}%"
-            self._repository.update_progress(job_id, progress, message)
-
-        return report
+        return _RunnerProgressSink(self, job_id)
 
     def _raise_if_cancelled(self, job_id: str) -> None:
         if self._repository.is_cancel_requested(job_id):
@@ -166,6 +161,20 @@ class JobRunner:
             self._cancel_if_present(job_id)
         except JobNotFound:
             pass
+
+
+class _RunnerProgressSink:
+    def __init__(self, runner: JobRunner, job_id: str) -> None:
+        self._runner = runner
+        self._job_id = job_id
+
+    def __call__(self, progress: int, status_message: str | None = None) -> None:
+        self.checkpoint()
+        message = status_message or f"Выполнено {progress}%"
+        self._runner._repository.update_progress(self._job_id, progress, message)
+
+    def checkpoint(self) -> None:
+        self._runner._raise_if_cancelled(self._job_id)
 
 
 def build_workflows(

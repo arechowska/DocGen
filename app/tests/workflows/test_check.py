@@ -39,14 +39,17 @@ class FakeCatalog:
 
 @dataclass
 class FakeNormalization:
-    block: NormalizedBlock
+    block: NormalizedBlock | None
     events: list[str]
+    call_gate: bool = True
 
     def run(self, project_id: str, before_extract: Any = None) -> NormalizedProject:
         assert project_id == "p1"
-        before_extract()
-        self.events.append("extract")
-        return NormalizedProject(blocks=[self.block], total_pages=1, warnings=[])
+        if self.call_gate:
+            before_extract()
+            self.events.append("extract")
+        blocks = [self.block] if self.block is not None else []
+        return NormalizedProject(blocks=blocks, total_pages=1, warnings=[])
 
 
 @dataclass
@@ -99,6 +102,9 @@ class ProgressSpy:
         del status_message
         self.values.append(value)
         self.events.append(f"progress:{value}")
+
+    def checkpoint(self) -> None:
+        self.events.append("checkpoint")
 
 
 @pytest.fixture
@@ -200,6 +206,7 @@ def test_check_separates_confirmed_and_low_confidence_findings_and_checks_every_
     assert events == [
         "progress:10",
         "progress:35",
+        "checkpoint",
         "extract",
         "progress:70",
         "progress:90",
@@ -263,6 +270,47 @@ def test_check_rejects_invalid_or_ungrounded_report_without_replacing_previous_o
         workflow.run(_job(), progress)
 
     assert documents.get_report("p1") == previous
+
+
+def test_check_emits_normalization_stage_once_when_project_has_no_sources(
+    semantic_template: SemanticTemplate,
+) -> None:
+    events: list[str] = []
+    progress = ProgressSpy(events)
+    document = WorkingDocument(
+        title="Нет исходных данных",
+        template_id="use-case",
+        nodes=[DocumentNode(kind=NodeKind.GAP, flags=["missing-source-data"])],
+    )
+    documents = FakeDocuments(document, events)
+    workflow = CheckWorkflow(
+        projects=FakeProjects(),
+        normalization=FakeNormalization(None, events, call_gate=False),
+        templates=FakeCatalog(semantic_template),
+        text_model=FakeModel(CheckReport(template_id="use-case"), events),
+        vision_model=NoImageVision(),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    workflow.run(_job(), progress)
+
+    assert progress.values == [10, 35, 70, 90, 100]
+
+
+def test_check_rejects_saved_document_for_another_template_before_external_calls(
+    checking: tuple[CheckWorkflow, FakeModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, _model, documents, progress, events = checking
+    documents.document = documents.document.model_copy(update={"template_id": "faq"})
+    previous = CheckReport(template_id="use-case", unchecked_rules=["previous"])
+    documents.report = previous
+
+    with pytest.raises(WorkflowError, match="Документ создан для другого шаблона"):
+        workflow.run(_job(), progress)
+
+    assert documents.get_report("p1") == previous
+    assert events == ["progress:10"]
 
 
 def _rule(rule_id: str, dimension: Any, severity: Any, instruction: str) -> SemanticRule:

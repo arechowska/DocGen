@@ -137,6 +137,31 @@ def test_cancellation_is_checked_before_next_external_stage(
     assert cancelled.cancel_requested is True
 
 
+def test_cancellation_checkpoint_does_not_publish_duplicate_progress(
+    session_factory: sessionmaker[Session],
+) -> None:
+    job = enqueue(session_factory)
+    external_calls: list[str] = []
+
+    def workflow(claimed: Job, progress: Any) -> None:
+        progress(35, "Нормализация")
+        with session_factory() as cancelling_session:
+            JobRepository(cancelling_session).request_cancel(claimed.id)
+        progress.checkpoint()
+        external_calls.append("model")
+
+    with session_factory() as session:
+        JobRunner(
+            JobRepository(session, worker_id="worker"),
+            {JobKind.ASSEMBLE: workflow},
+        ).run_once()
+
+    assert external_calls == []
+    cancelled = persisted(session_factory, job.id)
+    assert cancelled.status is JobStatus.CANCELLED
+    assert cancelled.progress == 35
+
+
 def test_runner_preserves_explicitly_user_safe_error(
     session_factory: sessionmaker[Session],
 ) -> None:

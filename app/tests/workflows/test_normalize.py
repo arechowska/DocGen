@@ -56,7 +56,8 @@ class FakeExtractors:
 
 
 class FakeConfluence:
-    def fetch(self, url: str) -> ExtractionResult:
+    def fetch(self, url: str, *, before_external_call=None) -> ExtractionResult:
+        del before_external_call
         raise AssertionError("a file source must not use the Confluence client")
 
 
@@ -167,6 +168,37 @@ def test_normalization_calls_cancellation_gate_immediately_before_every_extracto
     workflow.run("p1", before_extract=lambda: events.append("gate"))
 
     assert events == ["gate", "extract:source-1", "gate", "extract:source-2"]
+
+
+def test_normalization_delegates_each_confluence_request_gate_to_client() -> None:
+    events: list[str] = []
+    source = Source(
+        id="source-1",
+        project_id="p1",
+        kind=SourceKind.CONFLUENCE,
+        display_name="https://wiki.example.test/pages/42",
+        url="https://wiki.example.test/pages/42",
+        status="linked",
+    )
+
+    class GatedConfluence:
+        def fetch(self, url: str, *, before_external_call=None) -> ExtractionResult:
+            assert url == source.url
+            assert before_external_call is not None
+            before_external_call()
+            events.append("request")
+            return ExtractionResult(blocks=[], page_units=1, warnings=[])
+
+    workflow = NormalizationWorkflow(
+        StaticSources(source),
+        StaticStorage(Path("unused")),
+        ExtractorRegistry.default(),
+        GatedConfluence(),
+    )
+
+    workflow.run("p1", before_extract=lambda: events.append("gate"))
+
+    assert events == ["gate", "request"]
 
 
 def test_normalization_includes_source_warnings_and_adds_long_processing_warning(

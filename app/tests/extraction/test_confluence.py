@@ -18,6 +18,31 @@ def _page_response(storage_html: str) -> httpx.Response:
     )
 
 
+def _native_attachment_transport(storage_html: str) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(storage_html)
+        if request.url.path == "/rest/api/content/42/child/attachment":
+            filename = request.url.params["filename"]
+            media_type = "image/svg+xml" if filename.endswith(".svg") else "image/png"
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": filename,
+                            "metadata": {"mediaType": media_type},
+                            "_links": {"download": f"/download/attachments/42/{filename}"},
+                        }
+                    ]
+                },
+            )
+        filename = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, content=filename.encode())
+
+    return httpx.MockTransport(handler)
+
+
 @pytest.fixture
 def mock_transport() -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -86,11 +111,9 @@ def test_fetch_confluence_page_maps_storage_html_to_normalized_blocks(
 
 
 def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
-    transport = httpx.MockTransport(
-        lambda request: _page_response(
-            '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
-            '<ac:image><ri:attachment ri:filename="flow.svg" /></ac:image>'
-        )
+    transport = _native_attachment_transport(
+        '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+        '<ac:image><ri:attachment ri:filename="flow.svg" /></ac:image>'
     )
     client = ConfluenceClient(
         api_base="https://wiki.example.test/rest/api",
@@ -109,6 +132,8 @@ def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
         "src": "attachment:architecture.png",
         "alt": "",
         "attachment": "architecture.png",
+        "content_base64": "YXJjaGl0ZWN0dXJlLnBuZw==",
+        "media_type": "image/png",
     }
     assert result.blocks[0].text == "architecture.png"
     assert result.page_units == 3
@@ -116,12 +141,10 @@ def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
 
 def test_confluence_images_each_count_as_one_virtual_page() -> None:
     exact_text_page = "a" * 1800
-    transport = httpx.MockTransport(
-        lambda request: _page_response(
-            f"<p>{exact_text_page}</p>"
-            '<ac:image><ri:attachment ri:filename="one.png" /></ac:image>'
-            '<ac:image><ri:attachment ri:filename="two.png" /></ac:image>'
-        )
+    transport = _native_attachment_transport(
+        f"<p>{exact_text_page}</p>"
+        '<ac:image><ri:attachment ri:filename="one.png" /></ac:image>'
+        '<ac:image><ri:attachment ri:filename="two.png" /></ac:image>'
     )
     client = ConfluenceClient(
         api_base="https://wiki.example.test/rest/api",
@@ -269,3 +292,154 @@ def test_settings_allow_confluence_to_be_optional_at_startup() -> None:
 
     assert settings.confluence_api_base is None
     assert settings.confluence_token is None
+
+
+def test_native_attachment_is_resolved_and_downloaded_with_gate_before_each_request() -> None:
+    events: list[str] = []
+    observed_timeouts: list[dict[str, float]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer secret"
+        observed_timeouts.append(request.extensions["timeout"])
+        if request.url.path == "/rest/api/content/42":
+            events.append("page")
+            return _page_response(
+                '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+            )
+        if request.url.path == "/rest/api/content/42/child/attachment":
+            events.append("metadata")
+            assert request.url.params == httpx.QueryParams(
+                "filename=architecture.png&limit=2"
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "architecture.png",
+                            "metadata": {"mediaType": "image/png"},
+                            "_links": {
+                                "download": "/download/attachments/42/architecture.png?version=1"
+                            },
+                        }
+                    ]
+                },
+            )
+        assert request.url.path == "/download/attachments/42/architecture.png"
+        events.append("download")
+        return httpx.Response(200, content=b"native-image")
+
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.fetch(
+        "https://wiki.example.test/pages/viewpage.action?pageId=42",
+        before_external_call=lambda: events.append("gate"),
+    )
+
+    assert events == ["gate", "page", "gate", "metadata", "gate", "download"]
+    assert observed_timeouts == [
+        {"connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0},
+        {"connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0},
+        {"connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0},
+    ]
+    assert result.blocks[0].data == {
+        "src": "attachment:architecture.png",
+        "alt": "",
+        "attachment": "architecture.png",
+        "content_base64": "bmF0aXZlLWltYWdl",
+        "media_type": "image/png",
+    }
+
+
+@pytest.mark.parametrize(
+    ("metadata_payload", "message"),
+    [
+        ({"results": []}, "Вложение Confluence не найдено"),
+        (
+            {"results": [{"title": "architecture.png", "metadata": {}}]},
+            "Не удалось обработать вложение Confluence",
+        ),
+    ],
+)
+def test_native_attachment_missing_or_malformed_metadata_is_user_safe(
+    metadata_payload: dict,
+    message: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(
+                '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+            )
+        return httpx.Response(200, json=metadata_payload)
+
+    with pytest.raises(ExtractionError, match=message):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
+def test_oversized_native_attachment_download_is_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(
+                '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+            )
+        if request.url.path.endswith("/child/attachment"):
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "architecture.png",
+                            "metadata": {"mediaType": "image/png"},
+                            "_links": {"download": "/download/attachments/42/architecture.png"},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(200, headers={"Content-Length": "5000001"}, content=b"x")
+
+    with pytest.raises(ExtractionError, match="Ответ Confluence слишком большой"):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
+def test_native_attachment_rejects_external_download_link_without_requesting_it() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(
+                '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+            )
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "architecture.png",
+                        "metadata": {"mediaType": "image/png"},
+                        "_links": {"download": "https://outside.example.test/image.png"},
+                    }
+                ]
+            },
+        )
+
+    with pytest.raises(ExtractionError, match="Недопустимая ссылка вложения Confluence"):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert requested_hosts == ["wiki.example.test", "wiki.example.test"]

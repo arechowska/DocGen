@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from docgen.ai.client import ModelConfigurationError, VisionDescription
 from docgen.ai.grounding import GroundingValidator
 from docgen.config import Settings
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.extraction.confluence import ConfluenceClient
+from docgen.extraction.registry import ExtractorRegistry
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.runner import WorkflowDependencies, build_workflows
+from docgen.models import Source, SourceKind
 from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.workflows.assemble import AssembleWorkflow, WorkflowError
-from docgen.workflows.normalize import NormalizedProject
+from docgen.workflows.normalize import NormalizationWorkflow, NormalizedProject
 
 
 @dataclass
@@ -31,12 +36,14 @@ class FakeProjects:
 class FakeNormalization:
     blocks: list[NormalizedBlock]
     events: list[str]
+    call_gate: bool = True
 
     def run(self, project_id: str, before_extract: Any = None) -> NormalizedProject:
         assert project_id == "p1"
         assert before_extract is not None
-        before_extract()
-        self.events.append("extract")
+        if self.call_gate:
+            before_extract()
+            self.events.append("extract")
         return NormalizedProject(blocks=self.blocks, total_pages=2, warnings=[])
 
 
@@ -87,6 +94,9 @@ class ProgressSpy:
         del status_message
         self.values.append(value)
         self.events.append(f"progress:{value}")
+
+    def checkpoint(self) -> None:
+        self.events.append("checkpoint")
 
 
 @pytest.fixture
@@ -165,8 +175,10 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
         "progress:10",
         "project",
         "progress:35",
+        "checkpoint",
         "extract",
         "progress:70",
+        "checkpoint",
         "vision",
         "progress:90",
         "text",
@@ -228,6 +240,191 @@ def test_production_builder_never_falls_back_to_fake_models(
 
     with pytest.raises(ModelConfigurationError, match="Локальные модели не настроены"):
         workflows[JobKind.ASSEMBLE].run(_job(JobKind.ASSEMBLE), ProgressSpy(events))
+
+    assert documents.get_document("p1") is None
+
+
+def test_assemble_emits_normalization_stage_once_when_project_has_no_sources() -> None:
+    events: list[str] = []
+    document = WorkingDocument(
+        title="Нет исходных данных",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.GAP,
+                flags=["missing-source-data"],
+            )
+        ],
+    )
+    progress = ProgressSpy(events)
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=FakeNormalization([], events, call_gate=False),
+        templates=TemplateCatalog(),
+        text_model=FakeTextModel(document, events),
+        vision_model=FakeVisionModel(events),
+        grounding=GroundingValidator(),
+        documents=FakeDocuments(events),
+    )
+
+    workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert progress.values == [10, 35, 70, 90, 100]
+
+
+def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_base64() -> None:
+    events: list[str] = []
+    source = Source(
+        id="source-confluence",
+        project_id="p1",
+        kind=SourceKind.CONFLUENCE,
+        display_name="Architecture",
+        url="https://wiki.example.test/pages/viewpage.action?pageId=42",
+        status="linked",
+    )
+
+    class Sources:
+        def list_for_project(self, project_id: str) -> list[Source]:
+            assert project_id == "p1"
+            return [source]
+
+    class Storage:
+        def resolve(self, relative_path: str) -> Path:
+            raise AssertionError(f"Confluence must not resolve local path {relative_path}")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer secret"
+        if request.url.path == "/rest/api/content/42":
+            events.append("http:page")
+            return httpx.Response(
+                200,
+                json={
+                    "body": {
+                        "storage": {
+                            "value": '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
+                        }
+                    }
+                },
+            )
+        if request.url.path == "/rest/api/content/42/child/attachment":
+            events.append("http:metadata")
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "architecture.png",
+                            "metadata": {"mediaType": "image/png"},
+                            "_links": {"download": "/download/attachments/42/architecture.png"},
+                        }
+                    ]
+                },
+            )
+        events.append("http:download")
+        return httpx.Response(200, content=b"native-image")
+
+    class AttachmentVision:
+        def describe(self, image: bytes, media_type: str) -> VisionDescription:
+            assert image == b"native-image"
+            assert media_type == "image/png"
+            events.append("vision")
+            return VisionDescription(description="Архитектурная схема системы")
+
+    class GroundedModel:
+        def generate_json(self, system: str, user: str, schema: type[Any]) -> WorkingDocument:
+            del system
+            assert schema is WorkingDocument
+            payload = json.loads(user)
+            source_block = payload["исходные_блоки"][0]
+            assert source_block["text"] == "Архитектурная схема системы"
+            assert "content_base64" not in source_block["data"]
+            events.append("text")
+            return WorkingDocument(
+                title="Архитектура",
+                template_id="use-case",
+                nodes=[
+                    DocumentNode(
+                        kind=NodeKind.IMAGE,
+                        text="Архитектурная схема системы",
+                        provenance=[
+                            Provenance(source_id=source_block["id"], locator="image:1")
+                        ],
+                    )
+                ],
+            )
+
+    documents = FakeDocuments(events)
+    progress = ProgressSpy(events)
+    normalization = NormalizationWorkflow(
+        Sources(),
+        Storage(),
+        ExtractorRegistry.default(),
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=normalization,
+        templates=TemplateCatalog(),
+        text_model=GroundedModel(),
+        vision_model=AttachmentVision(),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert progress.values == [10, 35, 70, 90, 100]
+    assert events == [
+        "progress:10",
+        "project",
+        "progress:35",
+        "checkpoint",
+        "http:page",
+        "checkpoint",
+        "http:metadata",
+        "checkpoint",
+        "http:download",
+        "progress:70",
+        "checkpoint",
+        "vision",
+        "progress:90",
+        "text",
+        "progress:100",
+        "save",
+    ]
+
+
+def test_assemble_rejects_malformed_confluence_attachment_payload_without_saving() -> None:
+    events: list[str] = []
+    attachment = _block(
+        "attachment-block",
+        BlockKind.IMAGE,
+        "architecture.png",
+        data={
+            "attachment": "architecture.png",
+            "content_base64": "not base64!",
+            "media_type": "image/png",
+        },
+    )
+    documents = FakeDocuments(events)
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=FakeNormalization([attachment], events),
+        templates=TemplateCatalog(),
+        text_model=FakeTextModel(
+            WorkingDocument(title="Не используется", template_id="use-case"), events
+        ),
+        vision_model=FakeVisionModel(events),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    with pytest.raises(WorkflowError, match="Не удалось прочитать вложение Confluence"):
+        workflow.run(_job(JobKind.ASSEMBLE), ProgressSpy(events))
 
     assert documents.get_document("p1") is None
 

@@ -63,9 +63,7 @@ class NormalizationWorkflow:
         block_ids: set[str] = set()
 
         for source in self._sources.list_for_project(project_id):
-            if before_extract is not None:
-                before_extract()
-            extraction = self._extract(source)
+            extraction = self._extract(source, before_extract)
             total_pages += extraction.page_units
             if total_pages > _MAX_PAGE_UNITS:
                 raise PageLimitExceeded(_PAGE_LIMIT_MESSAGE)
@@ -83,13 +81,22 @@ class NormalizationWorkflow:
 
         return NormalizedProject(blocks=blocks, total_pages=total_pages, warnings=warnings)
 
-    def _extract(self, source: Source) -> ExtractionResult:
+    def _extract(
+        self,
+        source: Source,
+        before_extract: Callable[[], None] | None,
+    ) -> ExtractionResult:
         if source.kind is SourceKind.CONFLUENCE:
             if source.url is None:
                 raise ValueError("Для источника Confluence не указан URL")
-            return self._confluence.fetch(source.url)
+            return self._confluence.fetch(
+                source.url,
+                before_external_call=before_extract,
+            )
 
         if source.storage_path is None:
             raise ValueError("Для файлового источника не указан путь хранения")
         path: Path = self._storage.resolve(source.storage_path)
+        if before_extract is not None:
+            before_extract()
         return self._extractors.for_source(source).extract(source, path)
