@@ -224,6 +224,33 @@ def test_cancellation_cannot_modify_job_that_concurrently_succeeded(
         assert completed.cancel_requested is False
 
 
+def test_cancellation_follows_job_that_is_concurrently_claimed(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as producer_session:
+        queued = JobRepository(producer_session).enqueue("p1", JobKind.CHECK, "use-case")
+
+    with session_factory() as cancelling_session:
+        stale = cancelling_session.get(Job, queued.id)
+        assert stale is not None
+
+        class StaleCancellationRepository(JobRepository):
+            def get(self, job_id: str) -> Job | None:
+                return stale
+
+        with session_factory() as claiming_session:
+            claimed = JobRepository(claiming_session, worker_id="worker").claim_next()
+            assert claimed is not None
+        StaleCancellationRepository(cancelling_session).request_cancel(queued.id)
+
+    with session_factory() as observer_session:
+        running = observer_session.get(Job, queued.id)
+        assert running is not None
+        assert running.status is JobStatus.RUNNING
+        assert running.cancel_requested is True
+        assert running.worker_id == "worker"
+
+
 def test_deleting_project_deletes_its_jobs(
     session_factory: sessionmaker[Session],
 ) -> None:
