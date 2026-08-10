@@ -265,6 +265,7 @@ def test_client_from_settings_sends_secret_and_uses_30_second_timeout() -> None:
         confluence_api_base="https://wiki.example.test/rest/api",
         confluence_token="configured-secret",
         confluence_hosts=("wiki.example.test",),
+        trusted_integration_hosts=("wiki.example.test",),
     )
 
     result = ConfluenceClient.from_settings(
@@ -274,6 +275,47 @@ def test_client_from_settings_sends_secret_and_uses_30_second_timeout() -> None:
 
     assert result.blocks[0].text == "Configured"
     assert observed_timeouts == [{"connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0}]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://public.example/rest/api",
+        "https://user:password@wiki.internal/rest/api",
+        "https://wiki.internal/rest/api#fragment",
+        "ftp://wiki.internal/rest/api",
+    ],
+)
+def test_client_from_settings_rejects_untrusted_or_unsafe_api_endpoint(
+    endpoint: str,
+) -> None:
+    settings = Settings(
+        confluence_api_base=endpoint,
+        confluence_token="configured-secret",
+        confluence_hosts=("pages.internal",),
+        trusted_integration_hosts=("wiki.internal",),
+    )
+
+    with pytest.raises(
+        ExtractionError,
+        match="Адрес API Confluence не разрешён настройками",
+    ):
+        ConfluenceClient.from_settings(settings)
+
+
+def test_confluence_page_and_api_hosts_have_separate_allowlists() -> None:
+    settings = Settings(
+        confluence_api_base="https://api.internal/rest/api",
+        confluence_token="configured-secret",
+        confluence_hosts=("pages.internal",),
+        trusted_integration_hosts=("api.internal",),
+    )
+    transport = httpx.MockTransport(lambda request: _page_response("<p>Allowed</p>"))
+    client = ConfluenceClient.from_settings(settings, transport=transport)
+
+    result = client.fetch("https://pages.internal/pages/viewpage.action?pageId=42")
+
+    assert result.blocks[0].text == "Allowed"
 
 
 def test_client_rejects_credential_bearing_page_url() -> None:

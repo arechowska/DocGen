@@ -44,6 +44,10 @@ def stage2_app_factory(tmp_path: Path) -> Callable[[], Iterator[TestClient]]:
         local_text_model="deterministic-text-model",
         local_vision_base_url="http://offline-vision-model.test/v1",
         local_vision_model="deterministic-vision-model",
+        trusted_integration_hosts=(
+            "offline-text-model.test",
+            "offline-vision-model.test",
+        ),
     )
 
     @contextmanager
@@ -74,7 +78,9 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
             files={
                 "file": (
                     "synthetic-case.md",
-                    _SYNTHETIC_SOURCE.encode("utf-8"),
+                    (
+                        _SYNTHETIC_SOURCE + "\n\n" + ("x" * 181_800)
+                    ).encode("utf-8"),
                     "text/markdown",
                 )
             },
@@ -91,6 +97,9 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
         standalone_job_id = _job_id(standalone_start.text)
         _run_one_worker_iteration(first_client, model)
         assert _job_status(first_client, standalone_job_id) is JobStatus.SUCCEEDED
+        assert "Обработка может занять более пяти минут" in first_client.get(
+            f"{project_url}/jobs/{standalone_job_id}"
+        ).text
         assert first_client.get(f"{project_url}/report").status_code == 200
         with _session(first_client) as session:
             standalone_document = DocumentRepository(session).get_document(project_id)
@@ -109,6 +118,7 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
         document_response = first_client.get(f"{project_url}/document")
         assert document_response.status_code == 200
         assert "Перевод между своими счетами" in document_response.text
+        assert first_client.get(f"{project_url}/report").status_code == 404
 
         check_start = first_client.post(
             f"{project_url}/jobs/check", data={"template_id": "use-case"}
@@ -138,11 +148,23 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
         retry_job_id = _job_id(retry_start.text)
         _run_one_worker_iteration(first_client, model)
         assert _job_status(first_client, retry_job_id) is JobStatus.SUCCEEDED
+        assert first_client.get(f"{project_url}/report").status_code == 404
+
+        final_check = first_client.post(
+            f"{project_url}/jobs/check", data={"template_id": "use-case"}
+        )
+        assert final_check.status_code == 202
+        final_check_job_id = _job_id(final_check.text)
+        _run_one_worker_iteration(first_client, model)
+        assert _job_status(first_client, final_check_job_id) is JobStatus.SUCCEEDED
 
     with stage2_app_factory() as restarted_client:
         project_page = restarted_client.get(project_url)
         saved_document = restarted_client.get(f"{project_url}/document")
         saved_report = restarted_client.get(f"{project_url}/report")
+        restarted_job = restarted_client.get(
+            f"{project_url}/jobs/{final_check_job_id}"
+        )
 
     assert project_page.status_code == 200
     assert "Синтетический перевод между счетами" in project_page.text
@@ -151,6 +173,7 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
     assert "Перевод между своими счетами" in saved_document.text
     assert saved_report.status_code == 200
     assert "Результат проверки" in saved_report.text
+    assert "Обработка может занять более пяти минут" in restarted_job.text
 
 
 def _run_one_worker_iteration(client: TestClient, model: _DeterministicStage2Model) -> None:
@@ -209,33 +232,39 @@ class _DeterministicStage2Model:
         assert system
         payload = json.loads(user)
         if schema is CheckReport:
-            rule_ids = {rule["id"] for rule in payload["правила"]}
-            assert rule_ids == {
+            rule_ids = tuple(rule["id"] for rule in payload["правила"])
+            assert set(rule_ids) == {
                 "use-case-structure",
                 "use-case-completeness",
                 "use-case-terminology",
                 "use-case-contradiction",
                 "use-case-style",
             }
-            return CheckReport(template_id="use-case")
+            return CheckReport(
+                template_id="use-case",
+                passed_rule_ids=rule_ids,
+            )
         assert schema is WorkingDocument
-        nodes = []
-        node_kinds = {
-            "heading": NodeKind.HEADING,
-            "text": NodeKind.PARAGRAPH,
-            "list": NodeKind.LIST,
-            "table": NodeKind.TABLE,
-            "image": NodeKind.IMAGE,
+        nodes: list[DocumentNode] = []
+        blocks_by_text = {
+            block["text"].strip().casefold(): block
+            for block in payload["исходные_блоки"]
+            if block["text"].strip()
         }
-        for index, block in enumerate(payload["исходные_блоки"], start=1):
+        for index, section in enumerate(payload["шаблон"]["sections"], start=1):
+            block = blocks_by_text[section["title"].casefold()]
             nodes.append(
                 DocumentNode(
                     id=f"assembled-node-{index}",
-                    kind=node_kinds[block["kind"]],
+                    kind=NodeKind.HEADING,
+                    section_id=section["id"],
                     text=block["text"],
-                    data=block["data"],
                     provenance=[
-                        Provenance(source_id=block["id"], locator=f"quality:{index}")
+                        Provenance(
+                            source_id=block["id"],
+                            locator=block["locators"][0],
+                            quote=block["text"],
+                        )
                     ],
                 )
             )

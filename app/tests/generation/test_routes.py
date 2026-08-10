@@ -36,6 +36,7 @@ def configured_models(client: TestClient) -> None:
     settings.local_text_model = "text-model"
     settings.local_vision_base_url = "http://vision-model.test/v1"
     settings.local_vision_model = "vision-model"
+    settings.trusted_integration_hosts = ("text-model.test", "vision-model.test")
 
 
 @pytest.fixture
@@ -159,6 +160,30 @@ def test_missing_confluence_configuration_returns_503_before_enqueue(
 
     assert response.status_code == 503
     assert "Интеграция Confluence не настроена" in response.text
+    assert _jobs_for_project(client, project.id) == []
+
+
+def test_untrusted_confluence_api_returns_safe_503_before_enqueue(
+    client: TestClient, configured_models: None
+) -> None:
+    project = _create_project(client, "Проект Confluence")
+    response = client.post(
+        f"/projects/{project.id}/sources/confluence",
+        data={"url": "https://wiki.example.test/pages/42"},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    settings = client.app.state.settings
+    settings.confluence_api_base = "https://public.example/rest/api"
+    settings.confluence_token = "configured-secret"
+
+    response = client.post(
+        f"/projects/{project.id}/jobs/assemble",
+        data={"template_id": "use-case"},
+    )
+
+    assert response.status_code == 503
+    assert "Адрес API Confluence не разрешён настройками" in response.text
     assert _jobs_for_project(client, project.id) == []
 
 
@@ -383,10 +408,41 @@ def test_failed_standalone_check_retry_preserves_target_source(
     assert f'name="target_source_id" value="{target_source_id}"' in response.text
 
 
+def test_terminal_standalone_check_with_deleted_target_cannot_retry_as_current(
+    client: TestClient, project_with_source: Project
+) -> None:
+    target_source_id = _source_id(client, project_with_source.id, "case.md")
+    with _session(client) as session:
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(
+            project_with_source.id,
+            JobKind.CHECK,
+            "use-case",
+            target_source_id=target_source_id,
+        )
+        assert repository.claim_next() is not None
+        repository.mark_failed(job.id, "safe failure")
+
+    deleted = client.delete(
+        f"/projects/{project_with_source.id}/sources/{target_source_id}",
+        headers={"HX-Request": "true"},
+    )
+    assert deleted.status_code == 200
+
+    response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+
+    assert "Исходный документ удалён" in response.text
+    assert 'data-action="retry-job"' not in response.text
+
+
 def test_cancelled_job_renders_retry_action(client: TestClient, running_job: Job) -> None:
     client.post(f"/projects/{running_job.project_id}/jobs/{running_job.id}/cancel")
     with _session(client) as session:
-        JobRepository(session, worker_id="route-test-worker").mark_cancelled(running_job.id)
+        JobRepository(
+            session,
+            worker_id="route-test-worker",
+            instance_token=running_job.worker_instance_token,
+        ).mark_cancelled(running_job.id)
 
     response = client.get(f"/projects/{running_job.project_id}/jobs/{running_job.id}")
 
@@ -409,11 +465,9 @@ def test_missing_artifact_retry_swaps_error_responses_into_status(
 
     assert response.status_code == 200
     assert "Результат пока недоступен" in response.text
-    assert (
-        'hx-on::before-swap="if (event.detail.xhr.status >= 400) '
-        'event.detail.shouldSwap = true"'
-        in response.text
-    )
+    assert "hx-on" not in response.text
+    project_page = client.get(f"/projects/{project_with_source.id}")
+    assert '"code":"[234].."' in project_page.text
 
 
 def test_document_view_renders_all_node_kinds_in_order_and_explicit_gap(
@@ -534,6 +588,9 @@ def test_report_view_groups_findings_and_links_to_document_nodes(
     assert "Непроверенные правила" in response.text
     assert "Подтверждённая проблема" in response.text
     assert "Замечание требует проверки" in response.text
+    assert "structure-1" in response.text
+    assert "style-5" in response.text
+    assert "completeness-2" in response.text
     assert "terminology-3" in response.text
     assert (
         f'href="/projects/{project_with_source.id}/document#node-node-1"'
@@ -564,6 +621,133 @@ def test_succeeded_job_swaps_to_saved_document(
     assert "Оплата заказа" in response.text
     assert 'id="generation-status"' in response.text
     assert 'hx-trigger="every 2s"' not in response.text
+
+
+def test_superseded_job_does_not_render_unrelated_current_document(
+    client: TestClient, project_with_source: Project
+) -> None:
+    first_document = _document().model_copy(update={"title": "Результат задания A"})
+    replacement = _document().model_copy(update={"title": "Результат задания B"})
+    with _session(client) as session:
+        documents = DocumentRepository(session)
+        documents.save_document(project_with_source.id, first_document)
+        session.commit()
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(project_with_source.id, JobKind.ASSEMBLE, "use-case")
+        assert repository.claim_next() is not None
+        succeeded = repository.mark_succeeded(job.id)
+        documents.save_document(project_with_source.id, replacement)
+        session.commit()
+
+    response = client.get(f"/projects/{project_with_source.id}/jobs/{succeeded.id}")
+
+    assert response.status_code == 200
+    assert "Результат задания заменён более новым" in response.text
+    assert "Результат задания B" not in response.text
+
+
+def test_earlier_check_job_does_not_render_later_report_for_same_document(
+    client: TestClient, project_with_source: Project
+) -> None:
+    with _session(client) as session:
+        documents = DocumentRepository(session)
+        documents.save_document(project_with_source.id, _document())
+        session.commit()
+        jobs = JobRepository(session, worker_id="route-test-worker")
+
+        first_job = jobs.enqueue(project_with_source.id, JobKind.CHECK, "use-case")
+        assert jobs.claim_next() is not None
+        documents.save_report(
+            project_with_source.id,
+            CheckReport(template_id="use-case", passed_rule_ids=["report-A"]),
+        )
+        first_succeeded = jobs.mark_succeeded(first_job.id)
+
+        second_job = jobs.enqueue(project_with_source.id, JobKind.CHECK, "use-case")
+        assert jobs.claim_next() is not None
+        documents.save_report(
+            project_with_source.id,
+            CheckReport(template_id="use-case", passed_rule_ids=["report-B"]),
+        )
+        second_succeeded = jobs.mark_succeeded(second_job.id)
+
+    first_response = client.get(
+        f"/projects/{project_with_source.id}/jobs/{first_succeeded.id}"
+    )
+    second_response = client.get(
+        f"/projects/{project_with_source.id}/jobs/{second_succeeded.id}"
+    )
+
+    assert "Результат задания заменён более новым" in first_response.text
+    assert "report-B" not in first_response.text
+    assert "report-B" in second_response.text
+
+
+def test_running_and_succeeded_job_pages_render_persisted_warnings(
+    client: TestClient, project_with_source: Project
+) -> None:
+    with _session(client) as session:
+        documents = DocumentRepository(session)
+        documents.save_document(project_with_source.id, _document())
+        session.commit()
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(project_with_source.id, JobKind.ASSEMBLE, "use-case")
+        assert repository.claim_next() is not None
+        repository.add_warnings(
+            job.id,
+            [
+                "Обработка может занять более пяти минут",
+                "Страница 2 не содержит извлекаемого текста",
+            ],
+        )
+
+    running = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+    assert "Обработка может занять более пяти минут" in running.text
+    assert "Страница 2 не содержит извлекаемого текста" in running.text
+
+    with _session(client) as session:
+        repository = JobRepository(
+            session,
+            worker_id="route-test-worker",
+            instance_token=repository.instance_token,
+        )
+        repository.mark_succeeded(job.id)
+
+    succeeded = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+    assert "Обработка может занять более пяти минут" in succeeded.text
+    assert "Страница 2 не содержит извлекаемого текста" in succeeded.text
+
+
+def test_empty_report_never_claims_that_all_rules_were_checked(
+    client: TestClient, project_with_source: Project
+) -> None:
+    _save_document(client, project_with_source.id, _document())
+    _save_report(client, project_with_source.id, CheckReport(template_id="use-case"))
+
+    response = client.get(f"/projects/{project_with_source.id}/report")
+
+    assert "Все правила проверены" not in response.text
+    assert "Нет сведений о покрытии правил" in response.text
+
+
+def test_report_renders_explicit_passed_rules(
+    client: TestClient, project_with_source: Project
+) -> None:
+    _save_document(client, project_with_source.id, _document())
+    _save_report(
+        client,
+        project_with_source.id,
+        CheckReport(
+            template_id="use-case",
+            passed_rule_ids=["use-case-structure", "use-case-style"],
+        ),
+    )
+
+    response = client.get(f"/projects/{project_with_source.id}/report")
+
+    assert "Успешно пройденные правила" in response.text
+    assert "use-case-structure" in response.text
+    assert "use-case-style" in response.text
 
 
 def test_check_route_job_runs_once_and_swaps_to_saved_report(

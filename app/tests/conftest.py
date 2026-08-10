@@ -44,13 +44,10 @@ def engine() -> Engine:
 
 @pytest.fixture
 def session(engine: Engine) -> Session:
-    connection = engine.connect()
-    transaction = connection.begin()
-    database_session = Session(bind=connection)
+    database_session = Session(bind=engine)
     yield database_session
+    database_session.rollback()
     database_session.close()
-    transaction.rollback()
-    connection.close()
 
 
 @pytest.fixture

@@ -9,11 +9,13 @@ from pydantic import BaseModel, ValidationError
 
 from docgen.ai.prompts import VISION_SYSTEM_PROMPT
 from docgen.config import Settings
+from docgen.outbound import UntrustedEndpoint, validate_trusted_endpoint
 
 T = TypeVar("T", bound=BaseModel)
 
 _TIMEOUT_SECONDS = 120.0
 _DEFAULT_MAX_RESPONSE_BYTES = 10_000_000
+_DEFAULT_MAX_REQUEST_BYTES = 20_971_520
 
 
 class ModelError(RuntimeError):
@@ -44,13 +46,17 @@ class _OpenAICompatibleModel:
         model: str,
         transport: httpx.BaseTransport | None = None,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        max_request_bytes: int = _DEFAULT_MAX_REQUEST_BYTES,
     ) -> None:
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
+        if max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be positive")
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._transport = transport
         self._max_response_bytes = max_response_bytes
+        self._max_request_bytes = max_request_bytes
 
     def _complete(self, messages: list[dict[str, object]], schema: type[T]) -> T:
         payload = {
@@ -76,10 +82,22 @@ class _OpenAICompatibleModel:
             raise ModelError("Модель вернула некорректный структурированный ответ") from exc
 
     def _post(self, payload: dict[str, object]) -> bytes:
+        payload_bytes = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(payload_bytes) > self._max_request_bytes:
+            raise ModelError("Запрос к модели слишком большой")
         try:
             with (
                 httpx.Client(transport=self._transport, timeout=_TIMEOUT_SECONDS) as client,
-                client.stream("POST", f"{self._base_url}/chat/completions", json=payload) as response,
+                client.stream(
+                    "POST",
+                    f"{self._base_url}/chat/completions",
+                    content=payload_bytes,
+                    headers={"Content-Type": "application/json"},
+                ) as response,
             ):
                 response.raise_for_status()
                 return self._read_limited(response)
@@ -134,14 +152,36 @@ class OpenAICompatibleVisionModel(_OpenAICompatibleModel):
 def build_text_model(settings: Settings) -> TextModel:
     if settings.local_text_base_url is None or not settings.local_text_model:
         raise ModelConfigurationError("Локальные модели не настроены")
+    try:
+        base_url = validate_trusted_endpoint(
+            settings.local_text_base_url,
+            settings.trusted_integration_hosts,
+        )
+    except UntrustedEndpoint:
+        raise ModelConfigurationError(
+            "Адрес локальной модели не разрешён настройками"
+        ) from None
     return OpenAICompatibleTextModel(
-        base_url=str(settings.local_text_base_url), model=settings.local_text_model
+        base_url=base_url,
+        model=settings.local_text_model,
+        max_request_bytes=settings.max_model_request_bytes,
     )
 
 
 def build_vision_model(settings: Settings) -> VisionModel:
     if settings.local_vision_base_url is None or not settings.local_vision_model:
         raise ModelConfigurationError("Локальные модели не настроены")
+    try:
+        base_url = validate_trusted_endpoint(
+            settings.local_vision_base_url,
+            settings.trusted_integration_hosts,
+        )
+    except UntrustedEndpoint:
+        raise ModelConfigurationError(
+            "Адрес локальной модели не разрешён настройками"
+        ) from None
     return OpenAICompatibleVisionModel(
-        base_url=str(settings.local_vision_base_url), model=settings.local_vision_model
+        base_url=base_url,
+        model=settings.local_vision_model,
+        max_request_bytes=settings.max_model_request_bytes,
     )

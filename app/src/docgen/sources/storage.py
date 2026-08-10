@@ -17,14 +17,27 @@ class StoredFile:
     size_bytes: int
 
 
+class StorageLimitExceeded(ValueError):
+    """A streamed file exceeded its configured byte budget."""
+
+
 class LocalStorage:
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir.resolve()
         self._projects_dir = self._data_dir / "projects"
 
     def save(
-        self, project_id: str, source_id: str, filename: str, stream: BinaryIO
+        self,
+        project_id: str,
+        source_id: str,
+        filename: str,
+        stream: BinaryIO,
+        *,
+        max_bytes: int | None = None,
+        limit_message: str = "Файл слишком большой",
     ) -> StoredFile:
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("Лимит файла не может быть отрицательным")
         project_dir = self._resolved_project_dir(project_id)
         validated_source_id = self._validated_identifier(source_id)
         sources_dir = project_dir / "sources"
@@ -41,8 +54,11 @@ class LocalStorage:
         try:
             with part_path.open("xb") as part_file:
                 while chunk := stream.read(_COPY_CHUNK_SIZE):
+                    next_size = size_bytes + len(chunk)
+                    if max_bytes is not None and next_size > max_bytes:
+                        raise StorageLimitExceeded(limit_message)
                     part_file.write(chunk)
-                    size_bytes += len(chunk)
+                    size_bytes = next_size
             part_path.replace(destination)
         except Exception:
             part_path.unlink(missing_ok=True)
@@ -108,3 +124,6 @@ class LocalStorage:
     def _require_within(path: Path, root: Path) -> None:
         if not path.is_relative_to(root):
             raise ValueError("Недопустимый путь")
+
+
+__all__ = ["LocalStorage", "StorageLimitExceeded", "StoredFile"]

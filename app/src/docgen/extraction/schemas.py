@@ -19,6 +19,7 @@ class Provenance(BaseModel):
 
     source_id: str
     locator: str
+    quote: str | None = None
 
 
 class NormalizedBlock(BaseModel):

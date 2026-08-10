@@ -20,6 +20,8 @@
       {% include "generation/setup.html" %}
     </section>
 
-    <button hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить проект?" class="mt-6 rounded-full px-5 py-3 text-sm font-medium text-[#0066cc]" type="button">Удалить проект</button>
+    <form action="/projects/{{ project.id }}/delete" method="post" hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить проект?" class="mt-6">
+      <button class="rounded-full px-5 py-3 text-sm font-medium text-[#0066cc]" type="submit">Удалить проект</button>
+    </form>
   </main>
 {% endblock %}

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Iterable
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import literal_column, select, update
 from sqlalchemy.orm import Session
 
-from docgen.models import utc_now
+from docgen.db import begin_sqlite_writer_transaction
+from docgen.documents.models import ProjectArtifact
+from docgen.models import Project, Source, utc_now
 
-from .models import Job, JobKind, JobStatus
+from .models import CheckTargetKind, Job, JobKind, JobStatus
 
 _QUEUED_MESSAGE = "Задание поставлено в очередь"
 _RUNNING_MESSAGE = "Задание выполняется"
@@ -32,14 +37,39 @@ class ActiveProjectJobExists(RuntimeError):
     """Raised when a project already has a queued or running job."""
 
 
+class JobTargetUnavailable(LookupError):
+    """Raised when enqueue revalidation loses its project or explicit target."""
+
+
 class JobRepository:
-    def __init__(self, session: Session, *, worker_id: str | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        worker_id: str | None = None,
+        instance_token: str | None = None,
+        lease_seconds: int = 30,
+        now: Callable[[], datetime] = utc_now,
+    ) -> None:
+        if lease_seconds <= 0:
+            raise ValueError("Срок аренды worker должен быть положительным")
         self._session = session
         self._worker_id = worker_id or str(uuid4())
+        self._instance_token = instance_token or str(uuid4())
+        self._lease_seconds = lease_seconds
+        self._now = now
 
     @property
     def worker_id(self) -> str:
         return self._worker_id
+
+    @property
+    def instance_token(self) -> str:
+        return self._instance_token
+
+    @property
+    def lease_seconds(self) -> int:
+        return self._lease_seconds
 
     def enqueue(
         self,
@@ -65,8 +95,7 @@ class JobRepository:
         # Route validation performs reads first. End that deferred transaction,
         # then reserve the SQLite writer lock before checking and inserting so
         # two concurrent requests cannot both observe an idle project.
-        self._session.rollback()
-        self._session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        begin_sqlite_writer_transaction(self._session)
         try:
             active_job_id = self._session.scalar(
                 select(Job.id)
@@ -78,6 +107,19 @@ class JobRepository:
             )
             if active_job_id is not None:
                 raise ActiveProjectJobExists
+            if self._session.scalar(
+                select(Project.id).where(Project.id == project_id).limit(1)
+            ) is None:
+                raise JobTargetUnavailable("Проект не найден")
+            if target_source_id is not None and self._session.scalar(
+                select(Source.id)
+                .where(
+                    Source.id == target_source_id,
+                    Source.project_id == project_id,
+                )
+                .limit(1)
+            ) is None:
+                raise JobTargetUnavailable("Документ для проверки не найден")
             job = self._new_job(project_id, kind, template_id, target_source_id)
             self._session.add(job)
             self._session.commit()
@@ -100,6 +142,15 @@ class JobRepository:
             kind=kind,
             template_id=template_id,
             target_source_id=target_source_id,
+            check_target_kind=(
+                None
+                if kind is JobKind.ASSEMBLE
+                else (
+                    CheckTargetKind.SOURCE
+                    if target_source_id is not None
+                    else CheckTargetKind.CURRENT
+                )
+            ),
             status=JobStatus.QUEUED,
             progress=0,
             status_message=_QUEUED_MESSAGE,
@@ -139,10 +190,12 @@ class JobRepository:
                 claim_session.commit()
                 return None
 
-            now = utc_now()
+            now = self._now()
             job.status = JobStatus.RUNNING
             job.status_message = _RUNNING_MESSAGE
             job.worker_id = self._worker_id
+            job.worker_instance_token = self._instance_token
+            job.lease_expires_at = self._lease_expiry(now)
             job.started_at = now
             job.updated_at = now
             claim_session.commit()
@@ -150,7 +203,7 @@ class JobRepository:
             return job
 
     def request_cancel(self, job_id: str) -> None:
-        now = utc_now()
+        now = self._now()
         queued_result = self._session.execute(
             update(Job)
             .where(Job.id == job_id, Job.status == JobStatus.QUEUED)
@@ -186,6 +239,52 @@ class JobRepository:
         self._session.refresh(job)
         return job.cancel_requested
 
+    def checkpoint(self, job_id: str) -> bool:
+        now = self._now()
+        job = self._atomic_owned_update(
+            job_id,
+            allow_cancel_requested=True,
+            lease_expires_at=self._lease_expiry(now),
+            updated_at=now,
+        )
+        return job.cancel_requested
+
+    def heartbeat(self, job_id: str) -> bool:
+        """Renew a claim in an isolated session without publishing workflow changes."""
+        with Session(bind=self._session.get_bind(), expire_on_commit=False) as session:
+            repository = JobRepository(
+                session,
+                worker_id=self._worker_id,
+                instance_token=self._instance_token,
+                lease_seconds=self._lease_seconds,
+                now=self._now,
+            )
+            return repository.checkpoint(job_id)
+
+    def add_warnings(self, job_id: str, warnings: Iterable[str]) -> Job:
+        job = self._required(job_id)
+        if (
+            job.status is not JobStatus.RUNNING
+            or job.worker_id != self._worker_id
+            or job.worker_instance_token != self._instance_token
+        ):
+            raise self._transition_error(job)
+        deduplicated = list(job.warning_messages)
+        seen = set(deduplicated)
+        for warning in warnings:
+            normalized = " ".join(warning.split())
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                deduplicated.append(normalized)
+        now = self._now()
+        return self._atomic_owned_update(
+            job_id,
+            allow_cancel_requested=True,
+            warnings_json=json.dumps(deduplicated, ensure_ascii=False),
+            lease_expires_at=self._lease_expiry(now),
+            updated_at=now,
+        )
+
     def update_progress(self, job_id: str, progress: int, status_message: str) -> Job:
         if isinstance(progress, bool) or not isinstance(progress, int):
             raise TypeError("Прогресс должен быть целым числом")
@@ -200,51 +299,78 @@ class JobRepository:
             job_id,
             progress=progress,
             status_message=status_message,
-            updated_at=utc_now(),
+            lease_expires_at=self._lease_expiry(self._now()),
+            updated_at=self._now(),
         )
 
     def mark_succeeded(self, job_id: str) -> Job:
-        now = utc_now()
+        now = self._now()
+        job = self._required(job_id)
+        artifact = self._session.get(ProjectArtifact, job.project_id)
+        document_revision = (
+            artifact.document_revision
+            if artifact is not None and artifact.document_json is not None
+            else None
+        )
+        report_revision = (
+            artifact.report_revision
+            if job.kind is JobKind.CHECK
+            and artifact is not None
+            and artifact.report_json is not None
+            else None
+        )
+        report_generation = (
+            artifact.report_generation
+            if report_revision is not None and artifact is not None
+            else None
+        )
         return self._atomic_owned_update(
             job_id,
             status=JobStatus.SUCCEEDED,
             progress=100,
             status_message=_SUCCEEDED_MESSAGE,
             error_message=None,
+            lease_expires_at=None,
+            result_document_revision=document_revision,
+            result_report_revision=report_revision,
+            result_report_generation=report_generation,
             finished_at=now,
             updated_at=now,
         )
 
     def mark_failed(self, job_id: str, error_message: str) -> Job:
-        now = utc_now()
+        now = self._now()
         return self._atomic_owned_update(
             job_id,
             status=JobStatus.FAILED,
             status_message=_FAILED_MESSAGE,
             error_message=error_message,
+            lease_expires_at=None,
             finished_at=now,
             updated_at=now,
         )
 
     def mark_cancelled(self, job_id: str) -> Job:
-        now = utc_now()
+        now = self._now()
         return self._atomic_owned_update(
             job_id,
             allow_cancel_requested=True,
             status=JobStatus.CANCELLED,
             status_message=_CANCELLED_MESSAGE,
             cancel_requested=True,
+            lease_expires_at=None,
             finished_at=now,
             updated_at=now,
         )
 
     def recover_interrupted(self, error_message: str) -> int:
-        now = utc_now()
+        now = self._now()
         failed_result = self._session.execute(
             update(Job)
             .where(
                 Job.status == JobStatus.RUNNING,
                 Job.worker_id == self._worker_id,
+                (Job.lease_expires_at.is_(None) | (Job.lease_expires_at <= now)),
                 Job.cancel_requested.is_(False),
             )
             .values(
@@ -252,6 +378,7 @@ class JobRepository:
                 status_message=_FAILED_MESSAGE,
                 error_message=error_message,
                 finished_at=now,
+                lease_expires_at=None,
                 updated_at=now,
             )
             .execution_options(synchronize_session=False)
@@ -261,6 +388,7 @@ class JobRepository:
             .where(
                 Job.status == JobStatus.RUNNING,
                 Job.worker_id == self._worker_id,
+                (Job.lease_expires_at.is_(None) | (Job.lease_expires_at <= now)),
                 Job.cancel_requested.is_(True),
             )
             .values(
@@ -268,6 +396,7 @@ class JobRepository:
                 status_message=_CANCELLED_MESSAGE,
                 error_message=None,
                 finished_at=now,
+                lease_expires_at=None,
                 updated_at=now,
             )
             .execution_options(synchronize_session=False)
@@ -295,6 +424,7 @@ class JobRepository:
             Job.id == job_id,
             Job.status == JobStatus.RUNNING,
             Job.worker_id == self._worker_id,
+            Job.worker_instance_token == self._instance_token,
         ]
         if not allow_cancel_requested:
             conditions.append(Job.cancel_requested.is_(False))
@@ -321,6 +451,9 @@ class JobRepository:
             )
         return InvalidJobTransition("Задание выполняется другим worker")
 
+    def _lease_expiry(self, now: datetime) -> datetime:
+        return now + timedelta(seconds=self._lease_seconds)
+
     def _commit(self) -> None:
         try:
             self._session.commit()
@@ -335,4 +468,5 @@ __all__ = [
     "JobCancellationRequested",
     "JobNotFound",
     "JobRepository",
+    "JobTargetUnavailable",
 ]

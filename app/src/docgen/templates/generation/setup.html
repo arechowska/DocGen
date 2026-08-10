@@ -21,10 +21,11 @@
 
   <div class="mt-6 grid gap-4 sm:grid-cols-2">
     <form
+      action="/projects/{{ project.id }}/jobs/assemble"
+      method="post"
       hx-post="/projects/{{ project.id }}/jobs/assemble"
       hx-target="#generation-status"
       hx-swap="outerHTML"
-      hx-on::before-swap="if (event.detail.xhr.status >= 400) event.detail.shouldSwap = true"
       class="rounded-2xl border border-[#e5e5e7] p-5"
     >
       <label class="block text-sm font-medium" for="assemble-template-{{ project.id }}">Шаблон документа</label>
@@ -37,10 +38,11 @@
     </form>
 
     <form
+      action="/projects/{{ project.id }}/jobs/check"
+      method="post"
       hx-post="/projects/{{ project.id }}/jobs/check"
       hx-target="#generation-status"
       hx-swap="outerHTML"
-      hx-on::before-swap="if (event.detail.xhr.status >= 400) event.detail.shouldSwap = true"
       class="rounded-2xl border border-[#e5e5e7] p-5"
     >
       <label class="block text-sm font-medium" for="check-target-{{ project.id }}">Документ для проверки</label>

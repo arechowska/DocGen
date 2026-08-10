@@ -6,9 +6,10 @@ from collections.abc import Mapping
 from threading import Event
 from types import FrameType
 from typing import Protocol
+from uuid import uuid4
 
 from docgen.config import Settings
-from docgen.db import Base, build_session_factory, ensure_schema_compatibility
+from docgen.db import build_session_factory, initialize_database
 from docgen.documents.repository import DocumentRepository
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractorRegistry
@@ -46,8 +47,8 @@ def run_worker(
     *,
     poll_interval: float = _POLL_INTERVAL_SECONDS,
 ) -> None:
-    runner.recover_interrupted()
     while not stop_event.is_set():
+        runner.recover_interrupted()
         if not runner.run_once() and stop_event.wait(poll_interval):
             break
 
@@ -64,10 +65,10 @@ def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     session_factory = build_session_factory(settings.database_url)
     engine = session_factory.kw["bind"]
-    Base.metadata.create_all(engine)
-    ensure_schema_compatibility(engine)
+    initialize_database(engine)
 
     worker_id = resolve_worker_id(os.environ)
+    worker_instance_token = str(uuid4())
     stop_event = Event()
     install_signal_handlers(stop_event)
     try:
@@ -76,7 +77,7 @@ def main() -> None:
             normalization = NormalizationWorkflow(
                 SourceRepository(session),
                 storage,
-                ExtractorRegistry.default(),
+                ExtractorRegistry.default(settings),
                 ConfluenceClient.from_settings(settings),
             )
             workflows = build_workflows(
@@ -89,8 +90,14 @@ def main() -> None:
                 ),
             )
             runner = JobRunner(
-                JobRepository(session, worker_id=worker_id),
+                JobRepository(
+                    session,
+                    worker_id=worker_id,
+                    instance_token=worker_instance_token,
+                    lease_seconds=settings.worker_lease_seconds,
+                ),
                 workflows,
+                max_job_seconds=settings.max_job_seconds,
             )
             run_worker(runner, stop_event)
     finally:

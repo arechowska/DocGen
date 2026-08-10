@@ -14,6 +14,7 @@ from docgen.config import Settings
 from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
+from docgen.outbound import UntrustedEndpoint, validate_trusted_endpoint
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5_000_000
 _TIMEOUT_SECONDS = 30.0
@@ -71,8 +72,19 @@ class ConfluenceClient:
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         max_attachment_bytes: int | None = None,
     ) -> ConfluenceClient:
+        api_base = None
+        if settings.confluence_api_base is not None:
+            try:
+                api_base = validate_trusted_endpoint(
+                    settings.confluence_api_base,
+                    settings.trusted_integration_hosts,
+                )
+            except UntrustedEndpoint:
+                raise ExtractionError(
+                    "Адрес API Confluence не разрешён настройками"
+                ) from None
         return cls(
-            api_base=str(settings.confluence_api_base) if settings.confluence_api_base else None,
+            api_base=api_base,
             token=settings.confluence_token,
             allowed_hosts=settings.confluence_hosts,
             transport=transport,

@@ -56,3 +56,14 @@ def test_image_extractor_returns_dimensions_and_local_path(tmp_path: Path) -> No
     assert result.blocks[0].data == {"width": 16, "height": 9, "storage_path": str(path)}
     assert result.blocks[0].provenance[0].locator == "image:1"
     assert result.blocks[0].id == repeated_result.blocks[0].id
+
+
+def test_image_pixel_budget_is_checked_before_full_decode(tmp_path: Path) -> None:
+    path = tmp_path / "diagram.png"
+    Image.new("RGB", (5, 4), "white").save(path)
+
+    assert ImageExtractor(max_image_pixels=20).extract(
+        make_source("image/png"), path
+    ).blocks[0].data["width"] == 5
+    with pytest.raises(ExtractionError, match="Изображение слишком большое"):
+        ImageExtractor(max_image_pixels=19).extract(make_source("image/png"), path)

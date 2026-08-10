@@ -3,6 +3,8 @@ from html.parser import HTMLParser
 import pytest
 from fastapi.testclient import TestClient
 
+from docgen.jobs.models import JobKind
+from docgen.jobs.repository import JobRepository
 from docgen.projects.models import Project
 from docgen.projects.repository import ProjectRepository
 
@@ -84,8 +86,9 @@ def test_blank_autosave_returns_inline_error(
     assert 'value="   "' in response.text
     form = _single_form(response.text)
     assert form["hx-swap"] == "outerHTML"
-    assert "422" in form["hx-on::before-swap"]
-    assert "shouldSwap = true" in form["hx-on::before-swap"]
+    assert "hx-on::before-swap" not in form
+    page = client.get(f"/projects/{existing_project.id}")
+    assert '"code":"[234].."' in page.text
 
 
 def test_delete_project_redirects_to_listing(
@@ -109,6 +112,25 @@ def test_htmx_delete_redirects_the_browser_to_listing(
 
     assert response.status_code == 200
     assert response.headers["hx-redirect"] == "/projects"
+
+
+def test_delete_project_returns_409_while_job_is_active(
+    client: TestClient, existing_project: Project
+) -> None:
+    with client.app.state.session_factory() as session:
+        JobRepository(session).enqueue(
+            existing_project.id,
+            JobKind.ASSEMBLE,
+            "use-case",
+        )
+
+    response = client.delete(
+        f"/projects/{existing_project.id}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert "Проект обрабатывается" in response.text
 
 
 class _FormParser(HTMLParser):

@@ -37,6 +37,7 @@ class FakeNormalization:
     blocks: list[NormalizedBlock]
     events: list[str]
     call_gate: bool = True
+    warnings: list[str] = field(default_factory=list)
 
     def run(self, project_id: str, before_extract: Any = None) -> NormalizedProject:
         assert project_id == "p1"
@@ -44,7 +45,9 @@ class FakeNormalization:
         if self.call_gate:
             before_extract()
             self.events.append("extract")
-        return NormalizedProject(blocks=self.blocks, total_pages=2, warnings=[])
+        return NormalizedProject(
+            blocks=self.blocks, total_pages=2, warnings=self.warnings
+        )
 
 
 @dataclass
@@ -89,6 +92,7 @@ class FakeDocuments:
 class ProgressSpy:
     events: list[str]
     values: list[int] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def __call__(self, value: int, status_message: str | None = None) -> None:
         del status_message
@@ -97,6 +101,9 @@ class ProgressSpy:
 
     def checkpoint(self) -> None:
         self.events.append("checkpoint")
+
+    def report_warnings(self, warnings: list[str]) -> None:
+        self.warnings.extend(warnings)
 
 
 @pytest.fixture
@@ -128,14 +135,40 @@ def grounded_document() -> WorkingDocument:
             DocumentNode(
                 id="n1",
                 kind=NodeKind.PARAGRAPH,
+                section_id="actors",
                 text="Пользователь оплачивает заказ",
-                provenance=[Provenance(source_id="text-block", locator="paragraph:1")],
+                provenance=[
+                    Provenance(
+                        source_id="text-block",
+                        locator="text:1",
+                        quote="Пользователь оплачивает заказ",
+                    )
+                ],
             ),
             DocumentNode(
                 id="n2",
                 kind=NodeKind.IMAGE,
+                section_id="main-flow",
                 text="Схема успешной оплаты",
-                provenance=[Provenance(source_id="image-block", locator="image:1")],
+                provenance=[
+                    Provenance(
+                        source_id="image-block",
+                        locator="image:1",
+                        quote="Схема подтверждает успешную оплату",
+                    )
+                ],
+            ),
+            DocumentNode(
+                id="gap-preconditions",
+                kind=NodeKind.GAP,
+                section_id="preconditions",
+                flags=["missing-source-data"],
+            ),
+            DocumentNode(
+                id="gap-result",
+                kind=NodeKind.GAP,
+                section_id="result",
+                flags=["missing-source-data"],
             ),
         ],
     )
@@ -189,6 +222,24 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
     assert "storage_path" not in model.user_prompt
 
 
+def test_assemble_publishes_normalization_warnings_before_model_call(
+    assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, _model, _documents, progress, events = assembled
+    workflow._normalization.warnings = [  # type: ignore[attr-defined]
+        "Страница 2 не содержит извлекаемого текста",
+        "Обработка может занять более пяти минут",
+    ]
+
+    workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert progress.warnings == [
+        "Страница 2 не содержит извлекаемого текста",
+        "Обработка может занять более пяти минут",
+    ]
+    assert events.index("extract") < events.index("text")
+
+
 def test_assemble_rejects_ungrounded_output_without_replacing_document(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
     grounded_document: WorkingDocument,
@@ -200,10 +251,20 @@ def test_assemble_rejects_ungrounded_output_without_replacing_document(
         template_id="use-case",
         nodes=[
             DocumentNode(
+                section_id="actors",
                 kind=NodeKind.PARAGRAPH,
                 text="Нет в источниках",
-                provenance=[Provenance(source_id="unknown", locator="paragraph:1")],
-            )
+                provenance=[
+                    Provenance(
+                        source_id="unknown",
+                        locator="paragraph:1",
+                        quote="Нет в источниках",
+                    )
+                ],
+            ),
+            DocumentNode(kind=NodeKind.GAP, section_id="preconditions", flags=["missing-source-data"]),
+            DocumentNode(kind=NodeKind.GAP, section_id="main-flow", flags=["missing-source-data"]),
+            DocumentNode(kind=NodeKind.GAP, section_id="result", flags=["missing-source-data"]),
         ],
     )
 
@@ -211,6 +272,48 @@ def test_assemble_rejects_ungrounded_output_without_replacing_document(
         workflow.run(_job(JobKind.ASSEMBLE), progress)
 
     assert documents.get_document("p1") == grounded_document
+
+
+def test_assemble_rejects_empty_document_before_save(
+    assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, model, documents, progress, _events = assembled
+    model.result = WorkingDocument(title="Пустой", template_id="use-case")
+
+    with pytest.raises(WorkflowError, match="обязательные разделы"):
+        workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert documents.get_document("p1") is None
+
+
+def test_assemble_rejects_missing_required_section_ids(
+    assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, model, documents, progress, _events = assembled
+    model.result = WorkingDocument(
+        title="Неполный",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                id="n1",
+                kind=NodeKind.PARAGRAPH,
+                text="Пользователь оплачивает заказ",
+                section_id="actors",
+                provenance=[
+                    Provenance(
+                        source_id="text-block",
+                        locator="paragraph:1",
+                        quote="Пользователь оплачивает заказ",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(WorkflowError, match="обязательные разделы"):
+        workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert documents.get_document("p1") is None
 
 
 def test_assemble_validates_model_schema_before_saving(
@@ -250,10 +353,8 @@ def test_assemble_emits_normalization_stage_once_when_project_has_no_sources() -
         title="Нет исходных данных",
         template_id="use-case",
         nodes=[
-            DocumentNode(
-                kind=NodeKind.GAP,
-                flags=["missing-source-data"],
-            )
+            DocumentNode(kind=NodeKind.GAP, section_id=section_id, flags=["missing-source-data"])
+            for section_id in ("actors", "preconditions", "main-flow", "result")
         ],
     )
     progress = ProgressSpy(events)
@@ -345,11 +446,31 @@ def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_bas
                 nodes=[
                     DocumentNode(
                         kind=NodeKind.IMAGE,
+                        section_id="actors",
                         text="Архитектурная схема системы",
                         provenance=[
-                            Provenance(source_id=source_block["id"], locator="image:1")
+                            Provenance(
+                                source_id=source_block["id"],
+                                locator=source_block["locators"][0],
+                                quote="Архитектурная схема системы",
+                            )
                         ],
-                    )
+                    ),
+                    DocumentNode(
+                        kind=NodeKind.GAP,
+                        section_id="preconditions",
+                        flags=["missing-source-data"],
+                    ),
+                    DocumentNode(
+                        kind=NodeKind.GAP,
+                        section_id="main-flow",
+                        flags=["missing-source-data"],
+                    ),
+                    DocumentNode(
+                        kind=NodeKind.GAP,
+                        section_id="result",
+                        flags=["missing-source-data"],
+                    ),
                 ],
             )
 

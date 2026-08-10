@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import signal
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 from typing import Any
+from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine
@@ -112,6 +115,93 @@ def test_same_runner_processes_multiple_jobs_sequentially(
     assert persisted(session_factory, second.id).status is JobStatus.SUCCEEDED
 
 
+def test_lost_terminal_transition_does_not_stop_worker_loop(
+    session_factory: sessionmaker[Session],
+) -> None:
+    first = enqueue(session_factory)
+    second = enqueue(session_factory)
+
+    class LostTransitionRepository(JobRepository):
+        def mark_succeeded(self, job_id: str) -> Job:
+            if job_id == first.id:
+                with session_factory() as competing_session:
+                    competing = competing_session.get(Job, job_id)
+                    assert competing is not None
+                    competing.status = JobStatus.FAILED
+                    competing.error_message = "Аренда утрачена"
+                    competing_session.commit()
+            return super().mark_succeeded(job_id)
+
+    with session_factory() as session:
+        runner = JobRunner(
+            LostTransitionRepository(session, worker_id="worker"),
+            {JobKind.ASSEMBLE: lambda claimed, progress: None},
+        )
+        assert runner.run_once() is True
+        assert runner.run_once() is True
+
+    assert persisted(session_factory, first.id).status is JobStatus.FAILED
+    assert persisted(session_factory, second.id).status is JobStatus.SUCCEEDED
+
+
+def test_workflow_warnings_are_persisted_before_terminal_state(
+    session_factory: sessionmaker[Session],
+) -> None:
+    job = enqueue(session_factory)
+
+    def workflow(claimed: Job, progress: Any) -> None:
+        progress.report_warnings(
+            [
+                "Страница 3 не содержит извлекаемого текста",
+                "Страница 3 не содержит извлекаемого текста",
+            ]
+        )
+
+    with session_factory() as session:
+        JobRunner(
+            JobRepository(session, worker_id="worker"),
+            {JobKind.ASSEMBLE: workflow},
+        ).run_once()
+
+    assert persisted(session_factory, job.id).warning_messages == (
+        "Страница 3 не содержит извлекаемого текста",
+    )
+
+
+def test_background_heartbeat_keeps_claim_live_during_long_model_call(
+    session_factory: sessionmaker[Session],
+) -> None:
+    job = enqueue(session_factory)
+    recovered: list[int] = []
+
+    def workflow(claimed: Job, progress: Any) -> None:
+        del progress
+        time.sleep(1.2)
+        with session_factory() as replacement_session:
+            replacement = JobRepository(
+                replacement_session,
+                worker_id="stable-slot",
+                instance_token="replacement-process",
+                lease_seconds=1,
+            )
+            recovered.append(replacement.recover_interrupted("Прервано"))
+
+    with session_factory() as session:
+        runner = JobRunner(
+            JobRepository(
+                session,
+                worker_id="stable-slot",
+                instance_token="original-process",
+                lease_seconds=1,
+            ),
+            {JobKind.ASSEMBLE: workflow},
+        )
+        assert runner.run_once() is True
+
+    assert recovered == [0]
+    assert persisted(session_factory, job.id).status is JobStatus.SUCCEEDED
+
+
 def test_cancellation_is_checked_before_next_external_stage(
     session_factory: sessionmaker[Session],
 ) -> None:
@@ -162,6 +252,49 @@ def test_cancellation_checkpoint_does_not_publish_duplicate_progress(
     cancelled = persisted(session_factory, job.id)
     assert cancelled.status is JobStatus.CANCELLED
     assert cancelled.progress == 35
+
+
+def test_job_time_budget_accepts_exact_deadline_and_rejects_next_stage(
+    session_factory: sessionmaker[Session],
+) -> None:
+    accepted_job = enqueue(session_factory)
+    rejected_job = enqueue(session_factory)
+
+    class Clock:
+        value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = Clock()
+    external_calls: list[str] = []
+
+    def workflow(claimed: Job, progress: Any) -> None:
+        if claimed.id == accepted_job.id:
+            clock.value = 5.0
+            progress.checkpoint()
+            external_calls.append("accepted")
+            clock.value = 0.0
+            return
+        clock.value = 5.001
+        progress.checkpoint()
+        external_calls.append("must-not-run")
+
+    with session_factory() as session:
+        runner = JobRunner(
+            JobRepository(session, worker_id="worker"),
+            {JobKind.ASSEMBLE: workflow},
+            max_job_seconds=5,
+            monotonic=clock,
+        )
+        assert runner.run_once() is True
+        assert runner.run_once() is True
+
+    assert external_calls == ["accepted"]
+    assert persisted(session_factory, accepted_job.id).status is JobStatus.SUCCEEDED
+    rejected = persisted(session_factory, rejected_job.id)
+    assert rejected.status is JobStatus.FAILED
+    assert rejected.error_message == "Превышено максимальное время обработки задания"
 
 
 def test_runner_preserves_explicitly_user_safe_error(
@@ -370,6 +503,51 @@ def test_worker_recovers_then_polls_at_half_second_interval() -> None:
     assert calls == ["recover", "run", "wait:0.5"]
 
 
+def test_replacement_worker_recovers_claim_after_lease_expires_while_polling(
+    session_factory: sessionmaker[Session],
+) -> None:
+    current = [datetime(2026, 8, 10, 12, tzinfo=UTC)]
+    with session_factory() as first_session:
+        first = JobRepository(
+            first_session,
+            worker_id="stable-slot",
+            instance_token="process-a",
+            lease_seconds=30,
+            now=lambda: current[0],
+        )
+        job = first.enqueue("p1", JobKind.ASSEMBLE, "faq")
+        assert first.claim_next() is not None
+
+    current[0] += timedelta(seconds=29)
+
+    class StopEvent:
+        waits = 0
+
+        def is_set(self) -> bool:
+            return False
+
+        def wait(self, timeout: float) -> bool:
+            assert timeout == 0
+            self.waits += 1
+            current[0] += timedelta(seconds=2)
+            return self.waits == 2
+
+    with session_factory() as replacement_session:
+        runner = JobRunner(
+            JobRepository(
+                replacement_session,
+                worker_id="stable-slot",
+                instance_token="process-b",
+                lease_seconds=30,
+                now=lambda: current[0],
+            ),
+            {},
+        )
+        run_worker(runner, StopEvent(), poll_interval=0)
+
+    assert persisted(session_factory, job.id).status is JobStatus.FAILED
+
+
 def test_sigterm_handler_requests_worker_stop(monkeypatch: pytest.MonkeyPatch) -> None:
     handlers: dict[signal.Signals, Any] = {}
     monkeypatch.setattr(signal, "signal", handlers.__setitem__)
@@ -395,6 +573,7 @@ def test_production_worker_processes_registered_workflow_instead_of_leaving_job_
     settings = Settings(
         database_url=f"sqlite:///{tmp_path / 'production-worker.db'}",
         data_dir=tmp_path / "data",
+        worker_lease_seconds=17,
         local_text_base_url=None,
         local_text_model=None,
         local_vision_base_url=None,
@@ -414,6 +593,11 @@ def test_production_worker_processes_registered_workflow_instead_of_leaving_job_
 
     def run_one_job(runner: JobRunner, stop_event: Any) -> None:
         del stop_event
+        assert runner._repository.worker_id == "worker-slot-test"
+        assert UUID(runner._repository.instance_token)
+        assert runner._repository.instance_token != runner._repository.worker_id
+        assert runner._repository.lease_seconds == 17
+        assert runner._max_job_seconds == settings.max_job_seconds
         assert runner.run_once() is True
 
     monkeypatch.setattr(worker_module, "Settings", lambda: settings)

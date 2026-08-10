@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="mx-auto min-h-screen max-w-4xl px-6 py-12 sm:px-10 lg:py-20">
+    <a href="/projects/{{ job.project_id }}" class="text-sm font-medium text-[#0066cc]">К проекту</a>
+    {% include "generation/status.html" %}
+  </main>
+{% endblock %}

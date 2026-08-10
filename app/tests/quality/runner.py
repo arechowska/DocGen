@@ -100,8 +100,8 @@ def evaluate_case(case_dir: Path, model: DeterministicFakeModel) -> QualityScore
     covered_count = len(covered_rules) + len(covered_nodes) + len(covered_gaps)
     coverage = covered_count / requirement_count if requirement_count else 1.0
 
-    block_ids = {block.id for block in blocks}
-    grounding_errors = GroundingValidator().validate(artifact.document, block_ids)
+    source_blocks = {block.id: block for block in blocks}
+    grounding_errors = GroundingValidator().validate(artifact.document, source_blocks)
     rendered_text = "\n".join(
         node.text or "" for node in _walk_nodes(artifact.document.nodes)
     ).lower()
@@ -138,7 +138,13 @@ def _node_from_block(block: NormalizedBlock) -> DocumentNode:
         kind=node_kinds[block.kind],
         text=block.text,
         data=block.data,
-        provenance=[Provenance(source_id=block.id, locator=locator)],
+        provenance=[
+            Provenance(
+                source_id=block.id,
+                locator=locator,
+                quote=block.text,
+            )
+        ],
     )
 
 

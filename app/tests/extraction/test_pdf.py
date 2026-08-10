@@ -51,6 +51,18 @@ def test_pdf_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
     assert [block.id for block in first_result.blocks] == [block.id for block in second_result.blocks]
 
 
+def test_pdf_page_count_is_rejected_before_page_text_extraction(tmp_path: Path) -> None:
+    path = tmp_path / "large.pdf"
+    document = pymupdf.open()
+    document.new_page()
+    document.new_page()
+    document.save(path)
+    document.close()
+
+    with pytest.raises(ExtractionError, match="Максимальный объём — 1 страниц"):
+        PdfExtractor(max_pages=1).extract(make_source(), path)
+
+
 def test_pdf_returns_safe_error_when_file_cannot_be_read(tmp_path: Path) -> None:
     with pytest.raises(ExtractionError, match="Не удалось прочитать PDF-файл"):
         PdfExtractor().extract(make_source(), tmp_path / "missing.pdf")

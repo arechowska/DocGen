@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.extraction.schemas import NormalizedBlock
 
 
 class GroundingValidator:
-    def validate(self, document: WorkingDocument, source_block_ids: set[str]) -> list[str]:
+    def validate(
+        self,
+        document: WorkingDocument,
+        source_blocks: Mapping[str, NormalizedBlock],
+    ) -> list[str]:
         errors: list[str] = []
         for node in _walk(document.nodes):
             if node.kind is NodeKind.GAP:
                 self._validate_gap(node, errors)
             else:
-                self._validate_content(node, source_block_ids, errors)
+                self._validate_content(node, source_blocks, errors)
         return errors
 
     @staticmethod
@@ -24,15 +29,37 @@ class GroundingValidator:
 
     @staticmethod
     def _validate_content(
-        node: DocumentNode, source_block_ids: set[str], errors: list[str]
+        node: DocumentNode,
+        source_blocks: Mapping[str, NormalizedBlock],
+        errors: list[str],
     ) -> None:
         if not node.provenance:
             errors.append(f"Узел {node.id} не содержит ссылку на исходный блок")
             return
         for provenance in node.provenance:
-            if provenance.source_id not in source_block_ids:
+            block = source_blocks.get(provenance.source_id)
+            if block is None:
                 errors.append(
                     f"Узел {node.id} ссылается на неизвестный блок {provenance.source_id}"
+                )
+                continue
+            known_locators = {item.locator for item in block.provenance}
+            if provenance.locator not in known_locators:
+                errors.append(
+                    f"Узел {node.id} ссылается на неизвестный локатор "
+                    f"{provenance.locator} блока {provenance.source_id}"
+                )
+                continue
+            quote = provenance.quote
+            if quote is None or not quote.strip():
+                errors.append(
+                    f"Узел {node.id} не содержит точную цитату из блока "
+                    f"{provenance.source_id}"
+                )
+                continue
+            if quote not in block.text:
+                errors.append(
+                    f"Цитата узла {node.id} отсутствует в блоке {provenance.source_id}"
                 )
 
 

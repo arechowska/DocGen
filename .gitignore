@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+app/build/
 
 # Local DocGen runtime data
 app/var/

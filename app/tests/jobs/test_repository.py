@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from typing import Any
@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from docgen.db import Base
-from docgen.jobs.models import Job, JobKind, JobStatus
+from docgen.jobs.models import CheckTargetKind, Job, JobKind, JobStatus
 from docgen.jobs.repository import InvalidJobTransition, JobRepository
 from docgen.projects.models import Project
 
@@ -89,6 +89,7 @@ def test_check_enqueue_persists_target_source(job_repository: JobRepository) -> 
     )
 
     assert job.target_source_id == "source-1"
+    assert job.check_target_kind is CheckTargetKind.SOURCE
 
 
 def test_assemble_enqueue_rejects_target_source(job_repository: JobRepository) -> None:
@@ -111,7 +112,114 @@ def test_claim_next_is_fifo_and_marks_running(job_repository: JobRepository) -> 
     assert claimed.id == first.id
     assert claimed.status is JobStatus.RUNNING
     assert claimed.worker_id == "worker-main"
+    assert claimed.worker_instance_token == job_repository.instance_token
+    assert claimed.lease_expires_at is not None
     assert claimed.started_at is not None
+
+
+def test_same_slot_replacement_does_not_recover_live_claim(
+    session_factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 8, 10, 12, tzinfo=UTC)
+    with session_factory() as first_session:
+        first = JobRepository(
+            first_session,
+            worker_id="stable-slot",
+            instance_token="process-a",
+            lease_seconds=30,
+            now=lambda: now,
+        )
+        first.enqueue("p1", JobKind.ASSEMBLE, "faq")
+        claimed = first.claim_next()
+        assert claimed is not None
+
+    with session_factory() as replacement_session:
+        replacement = JobRepository(
+            replacement_session,
+            worker_id="stable-slot",
+            instance_token="process-b",
+            lease_seconds=30,
+            now=lambda: now + timedelta(seconds=29),
+        )
+        assert replacement.recover_interrupted("Прервано") == 0
+
+    with session_factory() as observer:
+        persisted = observer.get(Job, claimed.id)
+        assert persisted is not None
+        assert persisted.status is JobStatus.RUNNING
+        assert persisted.worker_instance_token == "process-a"
+
+
+def test_expired_claim_is_recovered_and_heartbeat_extends_lease(
+    session_factory: sessionmaker[Session],
+) -> None:
+    current = [datetime(2026, 8, 10, 12, tzinfo=UTC)]
+    with session_factory() as worker_session:
+        worker = JobRepository(
+            worker_session,
+            worker_id="stable-slot",
+            instance_token="process-a",
+            lease_seconds=30,
+            now=lambda: current[0],
+        )
+        worker.enqueue("p1", JobKind.ASSEMBLE, "faq")
+        claimed = worker.claim_next()
+        assert claimed is not None
+        first_expiry = claimed.lease_expires_at
+        current[0] += timedelta(seconds=20)
+        assert worker.checkpoint(claimed.id) is False
+        renewed = worker.get(claimed.id)
+        assert renewed is not None
+        assert renewed.lease_expires_at == current[0] + timedelta(seconds=30)
+        assert renewed.lease_expires_at > first_expiry
+
+    with session_factory() as replacement_session:
+        replacement = JobRepository(
+            replacement_session,
+            worker_id="stable-slot",
+            instance_token="process-b",
+            lease_seconds=30,
+            now=lambda: current[0] + timedelta(seconds=29),
+        )
+        assert replacement.recover_interrupted("Прервано") == 0
+
+    with session_factory() as expired_session:
+        expired = JobRepository(
+            expired_session,
+            worker_id="stable-slot",
+            instance_token="process-c",
+            lease_seconds=30,
+            now=lambda: current[0] + timedelta(seconds=31),
+        )
+        assert expired.recover_interrupted("Прервано") == 1
+
+
+def test_job_warnings_are_deduplicated_and_persisted(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as worker_session:
+        repository = JobRepository(
+            worker_session, worker_id="worker", instance_token="process"
+        )
+        repository.enqueue("p1", JobKind.ASSEMBLE, "faq")
+        claimed = repository.claim_next()
+        assert claimed is not None
+        repository.add_warnings(
+            claimed.id,
+            [
+                "Страница 2 не содержит извлекаемого текста",
+                "Обработка может занять более пяти минут",
+                "Страница 2 не содержит извлекаемого текста",
+            ],
+        )
+
+    with session_factory() as observer:
+        persisted = observer.get(Job, claimed.id)
+        assert persisted is not None
+        assert persisted.warning_messages == (
+            "Страница 2 не содержит извлекаемого текста",
+            "Обработка может занять более пяти минут",
+        )
 
 
 def test_claim_fifo_uses_insertion_order_when_timestamps_are_equal(
@@ -265,7 +373,11 @@ def test_cancellation_cannot_modify_job_that_concurrently_succeeded(
                 return stale
 
         with session_factory() as completing_session:
-            JobRepository(completing_session, worker_id="worker").mark_succeeded(running.id)
+            JobRepository(
+                completing_session,
+                worker_id="worker",
+                instance_token=worker.instance_token,
+            ).mark_succeeded(running.id)
         StaleCancellationRepository(cancelling_session).request_cancel(running.id)
 
     with session_factory() as observer_session:
@@ -320,8 +432,11 @@ def test_deleting_project_deletes_its_jobs(
 def test_recovery_fails_only_jobs_owned_by_same_interrupted_worker(
     session_factory: sessionmaker[Session],
 ) -> None:
+    claimed_at = datetime(2026, 8, 10, 12, tzinfo=UTC)
     with session_factory() as first_session:
-        first_repository = JobRepository(first_session, worker_id="stable-worker")
+        first_repository = JobRepository(
+            first_session, worker_id="stable-worker", now=lambda: claimed_at
+        )
         first_repository.enqueue("p1", JobKind.ASSEMBLE, "faq")
         first_job = first_repository.claim_next()
         assert first_job is not None
@@ -332,7 +447,11 @@ def test_recovery_fails_only_jobs_owned_by_same_interrupted_worker(
         assert second_job is not None
 
     with session_factory() as restarted_session:
-        restarted = JobRepository(restarted_session, worker_id="stable-worker")
+        restarted = JobRepository(
+            restarted_session,
+            worker_id="stable-worker",
+            now=lambda: claimed_at + timedelta(seconds=31),
+        )
         recovered = restarted.recover_interrupted(
             "Обработка была прервана; запустите её повторно"
         )
@@ -353,14 +472,21 @@ def test_recovery_fails_only_jobs_owned_by_same_interrupted_worker(
 def test_recovery_does_not_fail_job_cancelled_after_selection(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    claimed_at = datetime(2026, 8, 10, 12, tzinfo=UTC)
     with session_factory() as worker_session:
-        worker = JobRepository(worker_session, worker_id="stable-worker")
+        worker = JobRepository(
+            worker_session, worker_id="stable-worker", now=lambda: claimed_at
+        )
         worker.enqueue("p1", JobKind.ASSEMBLE, "faq")
         running = worker.claim_next()
         assert running is not None
 
     with session_factory() as recovery_session:
-        recovery = JobRepository(recovery_session, worker_id="stable-worker")
+        recovery = JobRepository(
+            recovery_session,
+            worker_id="stable-worker",
+            now=lambda: claimed_at + timedelta(seconds=31),
+        )
 
         def cancel_concurrently() -> None:
             with session_factory() as cancelling_session:
@@ -385,14 +511,21 @@ def test_recovery_does_not_fail_job_cancelled_after_selection(
 def test_recovery_tolerates_project_and_job_deleted_after_selection(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    claimed_at = datetime(2026, 8, 10, 12, tzinfo=UTC)
     with session_factory() as worker_session:
-        worker = JobRepository(worker_session, worker_id="stable-worker")
+        worker = JobRepository(
+            worker_session, worker_id="stable-worker", now=lambda: claimed_at
+        )
         worker.enqueue("p1", JobKind.CHECK, "use-case")
         running = worker.claim_next()
         assert running is not None
 
     with session_factory() as recovery_session:
-        recovery = JobRepository(recovery_session, worker_id="stable-worker")
+        recovery = JobRepository(
+            recovery_session,
+            worker_id="stable-worker",
+            now=lambda: claimed_at + timedelta(seconds=31),
+        )
 
         def delete_project_concurrently() -> None:
             with session_factory() as deleting_session:

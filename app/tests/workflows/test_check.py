@@ -18,7 +18,7 @@ from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.templates_catalog.schemas import SemanticRule, SemanticSection, SemanticTemplate
 from docgen.workflows.assemble import WorkflowError
-from docgen.workflows.check import CheckWorkflow
+from docgen.workflows.check import CheckWorkflow, _target_document, _validated_report
 from docgen.workflows.normalize import NormalizedProject
 
 
@@ -42,6 +42,7 @@ class FakeNormalization:
     block: NormalizedBlock | None
     events: list[str]
     call_gate: bool = True
+    warnings: list[str] = field(default_factory=list)
 
     def run(self, project_id: str, before_extract: Any = None) -> NormalizedProject:
         assert project_id == "p1"
@@ -49,7 +50,11 @@ class FakeNormalization:
             before_extract()
             self.events.append("extract")
         blocks = [self.block] if self.block is not None else []
-        return NormalizedProject(blocks=blocks, total_pages=1, warnings=[])
+        return NormalizedProject(
+            blocks=blocks,
+            total_pages=1,
+            warnings=self.warnings,
+        )
 
 
 @dataclass
@@ -76,14 +81,35 @@ class FakeDocuments:
         assert project_id == "p1"
         return self.document
 
+    def get_document_with_revision(
+        self, project_id: str
+    ) -> tuple[WorkingDocument, int] | None:
+        document = self.get_document(project_id)
+        return None if document is None else (document, 1)
+
     def save_document(self, project_id: str, document: WorkingDocument) -> None:
         assert project_id == "p1"
         self.events.append("save-document")
         self.document = document
 
-    def save_report(self, project_id: str, report: CheckReport) -> None:
+    def save_report(
+        self,
+        project_id: str,
+        report: CheckReport,
+        *,
+        expected_document_revision: int | None = None,
+    ) -> None:
         assert project_id == "p1"
+        assert expected_document_revision == 1
         self.events.append("save")
+        self.report = report
+
+    def save_document_and_report(
+        self, project_id: str, document: WorkingDocument, report: CheckReport
+    ) -> None:
+        assert project_id == "p1"
+        self.events.extend(["save-document", "save"])
+        self.document = document
         self.report = report
 
     def get_report(self, project_id: str) -> CheckReport | None:
@@ -102,6 +128,7 @@ class NoImageVision:
 class ProgressSpy:
     events: list[str]
     values: list[int] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def __call__(self, value: int, status_message: str | None = None) -> None:
         del status_message
@@ -110,6 +137,11 @@ class ProgressSpy:
 
     def checkpoint(self) -> None:
         self.events.append("checkpoint")
+
+    def report_warnings(self, warnings: list[str]) -> None:
+        if warnings:
+            self.warnings.extend(warnings)
+            self.events.append("warnings")
 
 
 @pytest.fixture
@@ -144,7 +176,13 @@ def document() -> WorkingDocument:
                 id="node-1",
                 kind=NodeKind.PARAGRAPH,
                 text="Пользователь оплачивает заказ",
-                provenance=[Provenance(source_id="block-1", locator="paragraph:1")],
+                provenance=[
+                    Provenance(
+                        source_id="block-1",
+                        locator="paragraph:1",
+                        quote="Пользователь оплачивает заказ",
+                    )
+                ],
             )
         ],
     )
@@ -205,6 +243,7 @@ def test_check_separates_confirmed_and_low_confidence_findings_and_checks_every_
     assert report.findings[-1].confidence < 0.7
     assert report.findings[-1].severity is Severity.WARNING
     assert report.unchecked_rules == ["terminology-3"]
+    assert report.passed_rule_ids == ()
     assert documents.get_report("p1") == report
     assert all(rule.id in model.user_prompt for rule in semantic_template.rules)
     assert progress.values == [10, 35, 70, 90, 100]
@@ -220,6 +259,102 @@ def test_check_separates_confirmed_and_low_confidence_findings_and_checks_every_
         "checkpoint",
         "save",
     ]
+
+
+def test_check_publishes_normalization_warnings_before_model_call(
+    checking: tuple[CheckWorkflow, FakeModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, _model, _documents, progress, events = checking
+    workflow._normalization.warnings = [  # type: ignore[attr-defined]
+        "Страница 2 не содержит извлекаемого текста",
+        "Обработка может занять более пяти минут",
+    ]
+
+    workflow.run(_job(), progress)
+
+    assert progress.warnings == [
+        "Страница 2 не содержит извлекаемого текста",
+        "Обработка может занять более пяти минут",
+    ]
+    assert events.index("warnings") < events.index("model")
+
+
+def test_report_rule_outcomes_form_an_exact_partition(
+    semantic_template: SemanticTemplate,
+    document: WorkingDocument,
+) -> None:
+    report = CheckReport(
+        template_id="use-case",
+        findings=[_finding("structure", "structure-1", "node-1", Severity.INFO, 0.9)],
+        passed_rule_ids=["completeness-2", "terminology-3"],
+        unchecked_rules=["contradiction-4", "style-5"],
+    )
+
+    validated = _validated_report(report, semantic_template, document)
+
+    assert validated.passed_rule_ids == ("completeness-2", "terminology-3")
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        CheckReport(template_id="use-case"),
+        CheckReport(
+            template_id="use-case",
+            passed_rule_ids=["structure-1", "structure-1"],
+            unchecked_rules=[
+                "completeness-2",
+                "terminology-3",
+                "contradiction-4",
+                "style-5",
+            ],
+        ),
+        CheckReport(
+            template_id="use-case",
+            findings=[
+                CheckFinding(
+                    code="first",
+                    rule_id="structure-1",
+                    node_id="node-1",
+                    severity=Severity.ERROR,
+                    confidence=0.9,
+                    message="Первая проблема",
+                ),
+                CheckFinding(
+                    code="second",
+                    rule_id="structure-1",
+                    node_id="node-1",
+                    severity=Severity.ERROR,
+                    confidence=0.8,
+                    message="Вторая проблема",
+                ),
+            ],
+            unchecked_rules=[
+                "completeness-2",
+                "terminology-3",
+                "contradiction-4",
+                "style-5",
+            ],
+        ),
+        CheckReport(
+            template_id="use-case",
+            passed_rule_ids=["structure-1"],
+            unchecked_rules=["structure-1", "completeness-2", "terminology-3", "contradiction-4", "style-5"],
+        ),
+        CheckReport(
+            template_id="use-case",
+            passed_rule_ids=["unknown-rule"],
+            unchecked_rules=["structure-1", "completeness-2", "terminology-3", "contradiction-4", "style-5"],
+        ),
+    ],
+)
+def test_report_rejects_incomplete_unknown_overlapping_or_duplicate_coverage(
+    semantic_template: SemanticTemplate,
+    document: WorkingDocument,
+    report: CheckReport,
+) -> None:
+    with pytest.raises(WorkflowError, match="покрытие правил"):
+        _validated_report(report, semantic_template, document)
 
 
 def test_standalone_check_maps_target_blocks_and_saves_document_only_with_validated_report(
@@ -318,6 +453,20 @@ def test_standalone_check_rejects_target_not_found_in_project_before_model(
     assert "model" not in events
 
 
+def test_standalone_target_uses_source_provenance_not_block_id_prefix() -> None:
+    block = NormalizedBlock(
+        id="64a4ed5b-84a9-57a7-a38e-31bb2e93ca98",
+        kind=BlockKind.TEXT,
+        text="Описание из файла",
+        provenance=[Provenance(source_id="source-1", locator="line:1")],
+        confidence=1,
+    )
+
+    document = _target_document("source-1", "use-case", [block])
+
+    assert [node.text for node in document.nodes] == ["Описание из файла"]
+
+
 def test_standalone_check_does_not_replace_current_document_when_report_is_invalid(
     semantic_template: SemanticTemplate,
     document: WorkingDocument,
@@ -385,6 +534,13 @@ def _finding(
             CheckReport(
                 template_id="use-case",
                 findings=[_finding("unknown", "unknown-rule", "node-1", Severity.ERROR, 1)],
+                passed_rule_ids=[
+                    "structure-1",
+                    "completeness-2",
+                    "terminology-3",
+                    "contradiction-4",
+                    "style-5",
+                ],
             ),
             "неизвестное правило",
         ),
@@ -392,6 +548,12 @@ def _finding(
             CheckReport(
                 template_id="use-case",
                 findings=[_finding("node", "structure-1", "missing-node", Severity.ERROR, 1)],
+                passed_rule_ids=[
+                    "completeness-2",
+                    "terminology-3",
+                    "contradiction-4",
+                    "style-5",
+                ],
             ),
             "неизвестный узел",
         ),
@@ -428,7 +590,13 @@ def test_check_emits_normalization_stage_once_when_project_has_no_sources(
         projects=FakeProjects(),
         normalization=FakeNormalization(None, events, call_gate=False),
         templates=FakeCatalog(semantic_template),
-        text_model=FakeModel(CheckReport(template_id="use-case"), events),
+        text_model=FakeModel(
+            CheckReport(
+                template_id="use-case",
+                unchecked_rules=[rule.id for rule in semantic_template.rules],
+            ),
+            events,
+        ),
         vision_model=NoImageVision(),
         grounding=GroundingValidator(),
         documents=documents,

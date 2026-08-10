@@ -3,15 +3,21 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from docgen.ai.client import ModelConfigurationError, build_text_model, build_vision_model
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
+from docgen.extraction.confluence import ConfluenceClient
+from docgen.extraction.registry import ExtractionError
 from docgen.jobs.models import Job, JobKind, JobStatus
-from docgen.jobs.repository import ActiveProjectJobExists, JobRepository
+from docgen.jobs.repository import (
+    ActiveProjectJobExists,
+    JobRepository,
+    JobTargetUnavailable,
+)
 from docgen.models import Project, Source, SourceKind
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
@@ -81,6 +87,11 @@ def cancel_job(
     job = _owned_job_or_404(session, project_id, job_id)
     JobRepository(session).request_cancel(job.id)
     refreshed_job = _owned_job_or_404(session, project_id, job_id)
+    if _wants_full_page(request):
+        return RedirectResponse(
+            url=f"/projects/{project_id}/jobs/{job_id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     if not refreshed_job.cancel_requested:
         return _job_response(request, session, refreshed_job)
     return _status_response(request, refreshed_job, notice="Отмена запрошена")
@@ -193,6 +204,13 @@ def _start_job(
         return _setup_error(
             request, session, project, _PROJECT_ACTIVE_MESSAGE, 409, catalog=catalog
         )
+    except JobTargetUnavailable as error:
+        return _setup_error(request, session, project, str(error), 422, catalog=catalog)
+    if _wants_full_page(request):
+        return RedirectResponse(
+            url=f"/projects/{project_id}/jobs/{job.id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     return _status_response(
         request,
         job,
@@ -214,6 +232,10 @@ def _dependency_error(request: Request, sources: list[Source]) -> str | None:
 
     if any(source.kind is SourceKind.CONFLUENCE for source in sources):
         settings = request.app.state.settings
+        try:
+            ConfluenceClient.from_settings(settings)
+        except ExtractionError as error:
+            return str(error)
         token = settings.confluence_token
         token_value = token.get_secret_value() if isinstance(token, SecretStr) else token
         if settings.confluence_api_base is None or not token_value or not token_value.strip():
@@ -252,6 +274,26 @@ def _setup_error(
 ) -> Response:
     template_catalog = catalog or TemplateCatalog()
     documents = DocumentRepository(session)
+    if _wants_full_page(request):
+        sources = SourceRepository(session).list_for_project(project.id)
+        return templates.TemplateResponse(
+            request=request,
+            name="projects/detail.html",
+            context={
+                "project": project,
+                "project_id": project.id,
+                "sources": sources,
+                "check_targets": [
+                    source for source in sources if is_supported_check_target(source)
+                ],
+                "templates": template_catalog.list(),
+                "generation_error": message,
+                "setup_fragment": False,
+                "has_document": documents.get_document(project.id) is not None,
+                "has_report": documents.get_report(project.id) is not None,
+            },
+            status_code=status_code,
+        )
     return templates.TemplateResponse(
         request=request,
         name="generation/setup.html",
@@ -276,7 +318,11 @@ def _status_response(
 ) -> Response:
     return templates.TemplateResponse(
         request=request,
-        name="generation/status.html",
+        name=(
+            "generation/job.html"
+            if _wants_full_page(request)
+            else "generation/status.html"
+        ),
         context={
             "job": job,
             "is_active": job.status in _ACTIVE_STATUSES,
@@ -291,16 +337,53 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
     if job.status is JobStatus.SUCCEEDED:
         documents = DocumentRepository(session)
         if job.kind is JobKind.ASSEMBLE:
-            document = documents.get_document(job.project_id)
+            document = (
+                documents.get_document_at_revision(
+                    job.project_id, job.result_document_revision
+                )
+                if job.result_document_revision is not None
+                else None
+            )
             if document is not None:
                 return _document_response(
-                    request, job.project_id, document, standalone=False
+                    request,
+                    job.project_id,
+                    document,
+                    standalone=_wants_full_page(request),
+                    warnings=job.warning_messages,
                 )
         else:
-            report = documents.get_report(job.project_id)
+            report = (
+                documents.get_report_at_revision(
+                    job.project_id,
+                    job.result_report_revision,
+                    report_generation=job.result_report_generation,
+                )
+                if job.result_report_revision is not None
+                and job.result_report_generation is not None
+                else None
+            )
             if report is not None:
-                return _report_response(request, job.project_id, report, standalone=False)
+                return _report_response(
+                    request,
+                    job.project_id,
+                    report,
+                    standalone=_wants_full_page(request),
+                    warnings=job.warning_messages,
+                )
+        return _status_response(
+            request,
+            job,
+            notice="Результат задания заменён более новым",
+        )
     return _status_response(request, job)
+
+
+def _wants_full_page(request: Request) -> bool:
+    return (
+        request.headers.get("HX-Request") != "true"
+        and "text/html" in request.headers.get("Accept", "")
+    )
 
 
 def _document_response(
@@ -309,6 +392,7 @@ def _document_response(
     document: WorkingDocument,
     *,
     standalone: bool,
+    warnings: tuple[str, ...] = (),
 ) -> Response:
     return templates.TemplateResponse(
         request=request,
@@ -317,6 +401,7 @@ def _document_response(
             "project_id": project_id,
             "document": document,
             "standalone": standalone,
+            "warnings": warnings,
         },
     )
 
@@ -327,6 +412,7 @@ def _report_response(
     report: CheckReport,
     *,
     standalone: bool,
+    warnings: tuple[str, ...] = (),
 ) -> Response:
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
@@ -339,6 +425,7 @@ def _report_response(
             "confirmed": confirmed,
             "low_confidence": low_confidence,
             "standalone": standalone,
+            "warnings": warnings,
         },
     )
 

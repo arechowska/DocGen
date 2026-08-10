@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from threading import Event, Thread
+from time import monotonic as default_monotonic
+from typing import Protocol, Self, TypeVar
 
 from pydantic import BaseModel
 
@@ -24,7 +26,12 @@ from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
 from .models import Job, JobKind
-from .repository import JobCancellationRequested, JobNotFound, JobRepository
+from .repository import (
+    InvalidJobTransition,
+    JobCancellationRequested,
+    JobNotFound,
+    JobRepository,
+)
 
 _GENERIC_ERROR_MESSAGE = "Не удалось выполнить задание"
 _INTERRUPTED_ERROR_MESSAGE = "Обработка была прервана; запустите её повторно"
@@ -38,6 +45,8 @@ class ProgressSink(Protocol):
     def __call__(self, progress: int, status_message: str | None = None) -> None: ...
 
     def checkpoint(self) -> None: ...
+
+    def report_warnings(self, warnings: list[str]) -> None: ...
 
 
 class JobWorkflow(Protocol):
@@ -88,9 +97,16 @@ class JobRunner:
         self,
         repository: JobRepository,
         workflows: Mapping[JobKind, Workflow],
+        *,
+        max_job_seconds: float = 300,
+        monotonic: Callable[[], float] = default_monotonic,
     ) -> None:
+        if max_job_seconds <= 0:
+            raise ValueError("max_job_seconds must be positive")
         self._repository = repository
         self._workflows = dict(workflows)
+        self._max_job_seconds = max_job_seconds
+        self._monotonic = monotonic
 
     def run_once(self) -> bool:
         if not self._workflows:
@@ -98,19 +114,29 @@ class JobRunner:
         job = self._repository.claim_next()
         if job is None:
             return False
+        deadline = self._monotonic() + self._max_job_seconds
 
         try:
-            self._raise_if_cancelled(job.id)
+            self._raise_if_cancelled(job.id, deadline=deadline)
             workflow = self._workflows.get(job.kind)
             if workflow is None:
                 raise UserSafeJobError("Обработчик задания не настроен")
 
-            self._invoke(workflow, job, self._progress_sink(job.id))
-            self._raise_if_cancelled(job.id)
+            heartbeat = _LeaseHeartbeat(self._repository, job.id)
+            with heartbeat:
+                self._invoke(workflow, job, self._progress_sink(job.id, deadline))
+                heartbeat.raise_if_unavailable()
+            self._raise_if_cancelled(
+                job.id,
+                deadline=deadline,
+                renew_lease=False,
+            )
             self._repository.mark_succeeded(job.id)
         except (_CancellationObserved, JobCancellationRequested):
             self._cancel_if_present(job.id)
         except JobNotFound:
+            self._repository.discard_pending_changes()
+        except InvalidJobTransition:
             self._repository.discard_pending_changes()
         except Exception as exc:  # noqa: BLE001 - a failed job must not stop the worker
             self._fail_or_cancel(job.id, self._safe_error_message(exc))
@@ -119,11 +145,26 @@ class JobRunner:
     def recover_interrupted(self) -> int:
         return self._repository.recover_interrupted(_INTERRUPTED_ERROR_MESSAGE)
 
-    def _progress_sink(self, job_id: str) -> ProgressSink:
-        return _RunnerProgressSink(self, job_id)
+    def _progress_sink(self, job_id: str, deadline: float) -> ProgressSink:
+        return _RunnerProgressSink(self, job_id, deadline)
 
-    def _raise_if_cancelled(self, job_id: str) -> None:
-        if self._repository.is_cancel_requested(job_id):
+    def _raise_if_cancelled(
+        self,
+        job_id: str,
+        *,
+        deadline: float | None = None,
+        renew_lease: bool = True,
+    ) -> None:
+        if deadline is not None and self._monotonic() > deadline:
+            raise UserSafeJobError(
+                "Превышено максимальное время обработки задания"
+            )
+        cancel_requested = (
+            self._repository.checkpoint(job_id)
+            if renew_lease
+            else self._repository.is_cancel_requested(job_id)
+        )
+        if cancel_requested:
             raise _CancellationObserved
 
     @staticmethod
@@ -149,7 +190,7 @@ class JobRunner:
         self._repository.discard_pending_changes()
         try:
             self._repository.mark_cancelled(job_id)
-        except JobNotFound:
+        except (InvalidJobTransition, JobNotFound):
             pass
 
     def _fail_or_cancel(self, job_id: str, error_message: str) -> None:
@@ -161,14 +202,15 @@ class JobRunner:
                 self._repository.mark_failed(job_id, error_message)
         except JobCancellationRequested:
             self._cancel_if_present(job_id)
-        except JobNotFound:
+        except (InvalidJobTransition, JobNotFound):
             pass
 
 
 class _RunnerProgressSink:
-    def __init__(self, runner: JobRunner, job_id: str) -> None:
+    def __init__(self, runner: JobRunner, job_id: str, deadline: float) -> None:
         self._runner = runner
         self._job_id = job_id
+        self._deadline = deadline
 
     def __call__(self, progress: int, status_message: str | None = None) -> None:
         self.checkpoint()
@@ -176,7 +218,52 @@ class _RunnerProgressSink:
         self._runner._repository.update_progress(self._job_id, progress, message)
 
     def checkpoint(self) -> None:
-        self._runner._raise_if_cancelled(self._job_id)
+        self._runner._raise_if_cancelled(self._job_id, deadline=self._deadline)
+
+    def report_warnings(self, warnings: list[str]) -> None:
+        if warnings:
+            self.checkpoint()
+            self._runner._repository.add_warnings(self._job_id, warnings)
+
+
+class _LeaseHeartbeat:
+    def __init__(self, repository: JobRepository, job_id: str) -> None:
+        self._repository = repository
+        self._job_id = job_id
+        self._stop = Event()
+        self._lost = Event()
+        self._cancelled = Event()
+        self._thread = Thread(
+            target=self._run,
+            name=f"docgen-lease-{job_id}",
+            daemon=True,
+        )
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+        self._stop.set()
+        self._thread.join(timeout=max(1.0, self._repository.lease_seconds / 2))
+
+    def raise_if_unavailable(self) -> None:
+        if self._cancelled.is_set():
+            raise _CancellationObserved
+        if self._lost.is_set():
+            raise InvalidJobTransition("Аренда задания утрачена")
+
+    def _run(self) -> None:
+        interval = max(0.1, self._repository.lease_seconds / 3)
+        while not self._stop.wait(interval):
+            try:
+                if self._repository.heartbeat(self._job_id):
+                    self._cancelled.set()
+                    return
+            except (InvalidJobTransition, JobNotFound):
+                self._lost.set()
+                return
 
 
 def build_workflows(

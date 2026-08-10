@@ -8,6 +8,9 @@ from uuid import NAMESPACE_URL, uuid5
 from docgen.extraction.schemas import BlockKind, NormalizedBlock
 from docgen.models import Source, SourceKind
 
+_DEFAULT_MAX_FILE_BYTES = 52_428_800
+_FILE_BUDGET_ERROR = "Файл превышает допустимый размер"
+
 
 class ExtractionError(ValueError):
     """Raised when a source cannot be extracted safely."""
@@ -22,6 +25,20 @@ class ExtractionResult:
 
 class Extractor(Protocol):
     def extract(self, source: Source, path: Path) -> ExtractionResult: ...
+
+
+def preflight_file_size(
+    path: Path,
+    max_bytes: int,
+    *,
+    read_error_message: str,
+) -> None:
+    try:
+        size_bytes = path.stat().st_size
+    except OSError as error:
+        raise ExtractionError(read_error_message) from error
+    if size_bytes > max_bytes:
+        raise ExtractionError(_FILE_BUDGET_ERROR)
 
 
 def stable_block_id(source_id: str, kind: BlockKind, locator: str, text: str) -> str:
@@ -42,17 +59,29 @@ class ExtractorRegistry:
         self._image_extractor = image_extractor
 
     @classmethod
-    def default(cls) -> ExtractorRegistry:
+    def default(cls, settings: object | None = None) -> ExtractorRegistry:
         from docgen.extraction.docx import DocxExtractor
         from docgen.extraction.image import ImageExtractor
         from docgen.extraction.pdf import PdfExtractor
         from docgen.extraction.text import TextExtractor
 
+        max_file_bytes = getattr(settings, "max_upload_bytes", _DEFAULT_MAX_FILE_BYTES)
         return cls(
-            text_extractor=TextExtractor(),
-            docx_extractor=DocxExtractor(),
-            pdf_extractor=PdfExtractor(),
-            image_extractor=ImageExtractor(),
+            text_extractor=TextExtractor(max_file_bytes=max_file_bytes),
+            docx_extractor=DocxExtractor(
+                max_file_bytes=max_file_bytes,
+                max_archive_entries=getattr(settings, "max_archive_entries", 10_000),
+                max_archive_uncompressed_bytes=getattr(
+                    settings,
+                    "max_archive_uncompressed_bytes",
+                    209_715_200,
+                ),
+            ),
+            pdf_extractor=PdfExtractor(max_file_bytes=max_file_bytes),
+            image_extractor=ImageExtractor(
+                max_file_bytes=max_file_bytes,
+                max_image_pixels=getattr(settings, "max_image_pixels", 40_000_000),
+            ),
         )
 
     def for_source(self, source: Source) -> Extractor:
@@ -80,3 +109,13 @@ class ExtractorRegistry:
             return self._image_extractor
 
         raise ExtractionError("Неподдерживаемый формат источника")
+
+
+__all__ = [
+    "ExtractionError",
+    "ExtractionResult",
+    "Extractor",
+    "ExtractorRegistry",
+    "preflight_file_size",
+    "stable_block_id",
+]

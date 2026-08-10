@@ -78,7 +78,10 @@ class AssembleWorkflow:
         if document.template_id != template.id:
             raise WorkflowError(_DOCUMENT_TEMPLATE_ERROR)
 
-        grounding_errors = self._grounding.validate(document, {block.id for block in blocks})
+        _validate_document_structure(document, template)
+        grounding_errors = self._grounding.validate(
+            document, {block.id: block for block in blocks}
+        )
         if grounding_errors:
             raise WorkflowError(_GROUNDING_ERROR)
 
@@ -145,10 +148,14 @@ def normalize_sources(
     progress: ProgressSink,
 ) -> NormalizedProject:
     progress(35, "Нормализация источников")
-    return normalization.run(
+    normalized = normalization.run(
         project_id,
         before_extract=lambda: cancellation_checkpoint(progress),
     )
+    report_warnings = getattr(progress, "report_warnings", None)
+    if callable(report_warnings):
+        report_warnings(normalized.warnings)
+    return normalized
 
 
 def cancellation_checkpoint(progress: ProgressSink) -> None:
@@ -171,6 +178,7 @@ def public_blocks(blocks: list[NormalizedBlock]) -> list[dict[str, object]]:
                 "kind": block.kind.value,
                 "text": block.text,
                 "data": data,
+                "locators": [item.locator for item in block.provenance],
                 "confidence": block.confidence,
             }
         )
@@ -179,11 +187,38 @@ def public_blocks(blocks: list[NormalizedBlock]) -> list[dict[str, object]]:
 
 def _assemble_prompt(template: SemanticTemplate, blocks: list[NormalizedBlock]) -> str:
     payload = {
-        "задача": "Соберите один документ по шаблону и укажите id исходного блока в provenance.source_id каждого узла.",
+        "задача": (
+            "Соберите один непустой документ. Для каждого раздела шаблона создайте один "
+            "верхнеуровневый узел с точным section_id. Для каждого фактического узла "
+            "укажите id исходного блока в provenance.source_id, его исходный locator и "
+            "точную непустую quote из текста блока. Если данных для раздела нет, создайте "
+            "пустой gap с section_id и флагом missing-source-data."
+        ),
         "шаблон": template.model_dump(mode="json"),
         "исходные_блоки": public_blocks(blocks),
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _validate_document_structure(
+    document: WorkingDocument, template: SemanticTemplate
+) -> None:
+    section_ids = [node.section_id for node in document.nodes]
+    known_section_ids = {section.id for section in template.sections}
+    required_section_ids = {
+        section.id for section in template.sections if section.required
+    }
+    actual_section_ids = {section_id for section_id in section_ids if section_id}
+    if (
+        not document.nodes
+        or any(section_id is None or not section_id.strip() for section_id in section_ids)
+        or len(actual_section_ids) != len(section_ids)
+        or not actual_section_ids.issubset(known_section_ids)
+        or not required_section_ids.issubset(actual_section_ids)
+    ):
+        raise WorkflowError(
+            "Документ не содержит все обязательные разделы шаблона"
+        )
 
 
 __all__ = ["AssembleWorkflow", "WorkflowError"]

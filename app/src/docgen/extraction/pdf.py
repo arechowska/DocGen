@@ -4,17 +4,40 @@ from pathlib import Path
 
 import pymupdf
 
-from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
+from docgen.extraction.registry import (
+    ExtractionError,
+    ExtractionResult,
+    preflight_file_size,
+    stable_block_id,
+)
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
 
 
 class PdfExtractor:
+    def __init__(
+        self,
+        *,
+        max_file_bytes: int = 52_428_800,
+        max_pages: int = 150,
+    ) -> None:
+        self._max_file_bytes = max_file_bytes
+        self._max_pages = max_pages
+
     def extract(self, source: Source, path: Path) -> ExtractionResult:
+        preflight_file_size(
+            path,
+            self._max_file_bytes,
+            read_error_message="Не удалось прочитать PDF-файл",
+        )
         blocks: list[NormalizedBlock] = []
         warnings: list[str] = []
         try:
             with pymupdf.open(path) as document:
+                if document.page_count > self._max_pages:
+                    raise ExtractionError(
+                        f"Максимальный объём — {self._max_pages} страниц"
+                    )
                 for page_number, page in enumerate(document, start=1):
                     page_blocks = [block for block in page.get_text("blocks") if block[4].strip()]
                     if not page_blocks:
@@ -34,6 +57,8 @@ class PdfExtractor:
                             )
                         )
                 page_units = document.page_count
+        except ExtractionError:
+            raise
         except (OSError, pymupdf.FileDataError, pymupdf.FileNotFoundError) as error:
             raise ExtractionError("Не удалось прочитать PDF-файл") from error
         return ExtractionResult(blocks=blocks, page_units=page_units, warnings=warnings)

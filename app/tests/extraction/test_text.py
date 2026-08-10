@@ -39,6 +39,27 @@ def test_txt_decodes_a_utf8_bom(tmp_path: Path) -> None:
     assert result.blocks[0].text == "Текст"
 
 
+def test_text_file_byte_budget_accepts_exact_boundary_and_rejects_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "input.txt"
+    path.write_bytes(b"1234")
+    assert TextExtractor(max_file_bytes=4).extract(
+        make_source("text/plain"), path
+    ).blocks[0].text == "1234"
+
+    path.write_bytes(b"12345")
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("oversized text must not be read")
+        ),
+    )
+    with pytest.raises(ExtractionError, match="Файл превышает допустимый размер"):
+        TextExtractor(max_file_bytes=4).extract(make_source("text/plain"), path)
+
+
 def test_txt_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
     path = tmp_path / "input.txt"
     path.write_text("Повторяемый текст", encoding="utf-8")

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import CheckReport, DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 
 
@@ -32,3 +32,11 @@ def test_document_nodes_are_immutable() -> None:
 
     with pytest.raises(ValidationError):
         node.text = "Изменено"
+
+
+def test_passed_rule_ids_are_immutable() -> None:
+    report = CheckReport(template_id="use-case", passed_rule_ids=["rule-1"])
+
+    assert report.passed_rule_ids == ("rule-1",)
+    with pytest.raises(TypeError):
+        report.passed_rule_ids[0] = "rule-2"  # type: ignore[index]

@@ -5,6 +5,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from docgen.jobs.models import CheckTargetKind, Job, JobKind
+from docgen.jobs.repository import ActiveProjectJobExists, JobRepository
 from docgen.projects.models import Project
 from docgen.projects.service import ProjectService
 from docgen.sources.models import Source, SourceKind
@@ -43,6 +45,50 @@ def test_add_file_normalizes_extension(source_service: SourceService, session: S
 
     assert source.storage_path is not None
     assert source.storage_path.endswith(".pdf")
+
+
+def test_file_and_project_storage_limits_accept_boundaries_and_clean_rejection(
+    session: Session, tmp_path
+) -> None:
+    storage = LocalStorage(tmp_path / "data")
+    service = SourceService(
+        session,
+        storage,
+        confluence_hosts=("wiki.example.test",),
+        max_upload_bytes=4,
+        max_project_storage_bytes=7,
+    )
+    create_project(session)
+
+    first = service.add_file("project-1", "one.txt", "text/plain", BytesIO(b"1234"))
+    second = service.add_file("project-1", "two.txt", "text/plain", BytesIO(b"567"))
+    with pytest.raises(ValueError, match="Общий объём файлов проекта превышен"):
+        service.add_file("project-1", "three.txt", "text/plain", BytesIO(b"8"))
+
+    assert first.size_bytes == 4
+    assert second.size_bytes == 3
+    assert len(service.list("project-1")) == 2
+    source_files = list((tmp_path / "data" / "projects" / "project-1" / "sources").glob("*"))
+    assert len(source_files) == 2
+    assert all(path.suffix != ".part" for path in source_files)
+
+
+def test_per_file_limit_rejection_leaves_no_file_or_source(session: Session, tmp_path) -> None:
+    storage = LocalStorage(tmp_path / "data")
+    service = SourceService(
+        session,
+        storage,
+        confluence_hosts=("wiki.example.test",),
+        max_upload_bytes=4,
+        max_project_storage_bytes=100,
+    )
+    create_project(session)
+
+    with pytest.raises(ValueError, match="Файл слишком большой"):
+        service.add_file("project-1", "large.txt", "text/plain", BytesIO(b"12345"))
+
+    assert service.list("project-1") == []
+    assert not list((tmp_path / "data" / "projects" / "project-1" / "sources").glob("*"))
 
 
 def test_reject_unsupported_extension(source_service: SourceService, session: Session) -> None:
@@ -118,6 +164,62 @@ def test_delete_removes_file_only_after_source_record_commits(
 
     assert session.get(Source, source.id) is None
     assert not stored_path.exists()
+
+
+def test_source_delete_is_rejected_while_project_job_is_active(
+    source_service: SourceService, session: Session, tmp_path
+) -> None:
+    create_project(session)
+    source = source_service.add_file(
+        "project-1", "case.txt", "text/plain", BytesIO(b"text")
+    )
+    assert source.storage_path is not None
+    stored_path = tmp_path / "data" / source.storage_path
+    JobRepository(session).enqueue(
+        "project-1", JobKind.CHECK, "use-case", target_source_id=source.id
+    )
+
+    with pytest.raises(ActiveProjectJobExists, match="обрабатывается"):
+        source_service.delete("project-1", source.id)
+
+    assert session.get(Source, source.id) is not None
+    assert stored_path.exists()
+
+
+def test_source_delete_clears_terminal_job_reference_without_changing_target_intent(
+    source_service: SourceService, session: Session
+) -> None:
+    create_project(session)
+    source = source_service.add_file(
+        "project-1", "case.txt", "text/plain", BytesIO(b"text")
+    )
+    jobs = JobRepository(session, worker_id="terminal-worker")
+    job = jobs.enqueue(
+        "project-1", JobKind.CHECK, "use-case", target_source_id=source.id
+    )
+    assert jobs.claim_next() is not None
+    jobs.mark_failed(job.id, "safe failure")
+
+    source_service.delete("project-1", source.id)
+
+    session.expire_all()
+    terminal_job = session.get(Job, job.id)
+    assert terminal_job is not None
+    assert terminal_job.target_source_id is None
+    assert terminal_job.check_target_kind is CheckTargetKind.SOURCE
+
+
+def test_project_delete_is_rejected_while_job_is_active(
+    source_service: SourceService, session: Session, tmp_path
+) -> None:
+    create_project(session)
+    source_service.add_file("project-1", "case.txt", "text/plain", BytesIO(b"text"))
+    JobRepository(session).enqueue("project-1", JobKind.ASSEMBLE, "use-case")
+
+    with pytest.raises(ActiveProjectJobExists, match="обрабатывается"):
+        ProjectService(session, LocalStorage(tmp_path / "data")).delete("project-1")
+
+    assert session.get(Project, "project-1") is not None
 
 
 def test_add_file_removes_stored_file_when_database_persistence_fails(

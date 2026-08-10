@@ -67,6 +67,61 @@ def test_text_model_parses_structured_response(mock_transport: httpx.MockTranspo
     assert result.template_id == "use-case"
 
 
+def test_model_request_budget_accepts_exact_serialized_boundary_and_rejects_before_http() -> None:
+    request_sizes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_sizes.append(len(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "title": "Сценарий",
+                                    "template_id": "use-case",
+                                    "nodes": [],
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    generous = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL,
+        model="local-text",
+        transport=transport,
+        max_request_bytes=1_000_000,
+    )
+    generous.generate_json("system", "user", WorkingDocument)
+    exact_size = request_sizes[-1]
+
+    exact = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL,
+        model="local-text",
+        transport=transport,
+        max_request_bytes=exact_size,
+    )
+    exact.generate_json("system", "user", WorkingDocument)
+    calls_before_rejection = len(request_sizes)
+    oversized = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL,
+        model="local-text",
+        transport=transport,
+        max_request_bytes=exact_size - 1,
+    )
+
+    with pytest.raises(ModelError, match="Запрос к модели слишком большой"):
+        oversized.generate_json("system", "user", WorkingDocument)
+
+    assert len(request_sizes) == calls_before_rejection
+
+
 def test_text_model_rejects_oversized_response(
     mock_oversized_transport: httpx.MockTransport,
 ) -> None:
@@ -157,7 +212,44 @@ def test_model_factories_build_http_adapters_only() -> None:
         local_text_model="local-text",
         local_vision_base_url=LOCAL_URL,
         local_vision_model="local-vision",
+        trusted_integration_hosts=("model.example.test",),
     )
 
     assert type(build_text_model(settings)) is OpenAICompatibleTextModel
     assert type(build_vision_model(settings)) is OpenAICompatibleVisionModel
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://public.example/v1",
+        "http://user:password@localhost/v1",
+        "http://localhost/v1#fragment",
+        "ftp://localhost/v1",
+    ],
+)
+def test_model_factory_rejects_untrusted_or_unsafe_endpoint(endpoint: str) -> None:
+    settings = Settings(
+        local_text_base_url=endpoint,
+        local_text_model="local-text",
+        trusted_integration_hosts=("localhost",),
+    )
+
+    with pytest.raises(
+        ModelConfigurationError,
+        match="Адрес локальной модели не разрешён настройками",
+    ):
+        build_text_model(settings)
+
+
+def test_model_factory_allows_explicit_internal_host() -> None:
+    settings = Settings(
+        local_text_base_url="http://model.internal:11434/v1",
+        local_text_model="local-text",
+        trusted_integration_hosts=("model.internal",),
+    )
+
+    model = build_text_model(settings)
+
+    assert type(model) is OpenAICompatibleTextModel
+    assert model._max_request_bytes == settings.max_model_request_bytes

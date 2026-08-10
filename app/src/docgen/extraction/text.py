@@ -6,13 +6,26 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from docgen.extraction.page_units import VirtualPageCalculator
-from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
+from docgen.extraction.registry import (
+    ExtractionError,
+    ExtractionResult,
+    preflight_file_size,
+    stable_block_id,
+)
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
 
 
 class TextExtractor:
+    def __init__(self, *, max_file_bytes: int = 52_428_800) -> None:
+        self._max_file_bytes = max_file_bytes
+
     def extract(self, source: Source, path: Path) -> ExtractionResult:
+        preflight_file_size(
+            path,
+            self._max_file_bytes,
+            read_error_message="Не удалось прочитать текстовый файл в UTF-8",
+        )
         try:
             text = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError) as error:

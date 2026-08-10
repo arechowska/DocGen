@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from docgen.sources.storage import LocalStorage
+from docgen.sources.storage import LocalStorage, StorageLimitExceeded
 
 
 def test_save_uses_ids_not_untrusted_filename(tmp_path: Path) -> None:
@@ -59,6 +59,37 @@ def test_save_replaces_part_file_only_after_complete_copy(tmp_path: Path) -> Non
 
     assert destination.read_bytes() == b"previous"
     assert not destination.with_suffix(".txt.part").exists()
+
+
+def test_save_accepts_exact_byte_limit(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+
+    saved = storage.save(
+        "project-1",
+        "source-1",
+        "file.txt",
+        BytesIO(b"1234"),
+        max_bytes=4,
+    )
+
+    assert storage.resolve(saved.relative_path).read_bytes() == b"1234"
+
+
+def test_save_rejects_before_disk_growth_and_cleans_partial_file(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    sources_dir = tmp_path / "projects" / "project-1" / "sources"
+
+    with pytest.raises(StorageLimitExceeded, match="Файл слишком большой"):
+        storage.save(
+            "project-1",
+            "source-1",
+            "file.txt",
+            BytesIO(b"12345"),
+            max_bytes=4,
+        )
+
+    assert not (sources_dir / "source-1.txt").exists()
+    assert not (sources_dir / "source-1.txt.part").exists()
 
 
 def test_delete_is_idempotent_and_scoped_to_data_dir(tmp_path: Path) -> None:

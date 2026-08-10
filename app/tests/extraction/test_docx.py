@@ -3,6 +3,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from docgen.extraction.docx import DocxExtractor
 from docgen.extraction.registry import ExtractionError
@@ -21,6 +24,51 @@ def make_source() -> Source:
         storage_path="projects/p1/sources/s1.docx",
         status="stored",
     )
+
+
+@pytest.fixture
+def cyrillic_builtin_styles_docx(tmp_path: Path) -> Path:
+    path = tmp_path / "cyrillic-builtins.docx"
+    document = Document()
+    heading_style = document.styles["Heading 2"]
+    heading_style.element.xpath("./w:name")[0].set(
+        qn("w:val"), "\u0417\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a \u0432\u0442\u043e\u0440\u043e\u0433\u043e \u0443\u0440\u043e\u0432\u043d\u044f"
+    )
+    list_style = document.styles["List Bullet"]
+    list_style.element.xpath("./w:name")[0].set(
+        qn("w:val"), "\u041c\u0430\u0440\u043a\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u0441\u043f\u0438\u0441\u043e\u043a"
+    )
+    document.add_paragraph("\u0420\u0430\u0437\u0434\u0435\u043b", style=heading_style)
+    document.add_paragraph("\u041f\u0443\u043d\u043a\u0442", style=list_style)
+    document.save(path)
+    return path
+
+
+@pytest.fixture
+def inherited_semantic_styles_docx(tmp_path: Path) -> Path:
+    path = tmp_path / "inherited-styles.docx"
+    document = Document()
+
+    outline_style = document.styles.add_style(
+        "\u0420\u0430\u0437\u0434\u0435\u043b \u043f\u0440\u043e\u0435\u043a\u0442\u0430", WD_STYLE_TYPE.PARAGRAPH
+    )
+    outline_level = OxmlElement("w:outlineLvl")
+    outline_level.set(qn("w:val"), "3")
+    outline_style.element.get_or_add_pPr().append(outline_level)
+
+    numbered_style = document.styles["List Number"]
+    numbered_style.element.xpath("./w:name")[0].set(
+        qn("w:val"), "\u041d\u0443\u043c\u0435\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u0441\u043f\u0438\u0441\u043e\u043a"
+    )
+    inherited_list_style = document.styles.add_style(
+        "\u041f\u0435\u0440\u0435\u0447\u0435\u043d\u044c \u043f\u0440\u043e\u0435\u043a\u0442\u0430", WD_STYLE_TYPE.PARAGRAPH
+    )
+    inherited_list_style.base_style = numbered_style
+
+    document.add_paragraph("\u0413\u043b\u0443\u0431\u0438\u043d\u0430", style=outline_style)
+    document.add_paragraph("\u0428\u0430\u0433", style=inherited_list_style)
+    document.save(path)
+    return path
 
 
 def test_docx_preserves_document_order_and_structure(tmp_path: Path) -> None:
@@ -53,6 +101,32 @@ def test_docx_preserves_document_order_and_structure(tmp_path: Path) -> None:
     assert result.blocks[3].data == {"rows": [["Ключ", "Значение"]]}
 
 
+def test_docx_uses_builtin_style_ids_when_display_names_are_cyrillic(
+    cyrillic_builtin_styles_docx: Path,
+) -> None:
+    result = DocxExtractor().extract(make_source(), cyrillic_builtin_styles_docx)
+
+    assert [block.kind for block in result.blocks] == [BlockKind.HEADING, BlockKind.LIST]
+    assert result.blocks[0].data == {"level": 2}
+
+
+def test_docx_uses_outline_level_for_custom_heading(
+    inherited_semantic_styles_docx: Path,
+) -> None:
+    result = DocxExtractor().extract(make_source(), inherited_semantic_styles_docx)
+
+    assert result.blocks[0].kind == BlockKind.HEADING
+    assert result.blocks[0].data == {"level": 4}
+
+
+def test_docx_uses_numbering_inherited_from_base_style(
+    inherited_semantic_styles_docx: Path,
+) -> None:
+    result = DocxExtractor().extract(make_source(), inherited_semantic_styles_docx)
+
+    assert result.blocks[1].kind == BlockKind.LIST
+
+
 def test_docx_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
     path = tmp_path / "input.docx"
     document = Document()
@@ -82,6 +156,47 @@ def test_docx_counts_virtual_page_boundaries(tmp_path: Path) -> None:
 
     assert exact_page.page_units == 1
     assert next_page.page_units == 2
+
+
+def test_docx_archive_budgets_accept_exact_boundaries(tmp_path: Path) -> None:
+    path = tmp_path / "boundary.docx"
+    document = Document()
+    document.add_paragraph("Документ")
+    document.save(path)
+    with ZipFile(path) as archive:
+        entry_count = len(archive.infolist())
+        expanded_bytes = sum(entry.file_size for entry in archive.infolist())
+
+    result = DocxExtractor(
+        max_archive_entries=entry_count,
+        max_archive_uncompressed_bytes=expanded_bytes,
+    ).extract(make_source(), path)
+
+    assert result.blocks[0].text == "Документ"
+
+
+@pytest.mark.parametrize("budget", ["entries", "expanded"])
+def test_docx_archive_budget_rejected_before_ooxml_parse(
+    tmp_path: Path, budget: str
+) -> None:
+    path = tmp_path / "oversized.docx"
+    document = Document()
+    document.add_paragraph("Документ")
+    document.save(path)
+    with ZipFile(path) as archive:
+        entry_count = len(archive.infolist())
+        expanded_bytes = sum(entry.file_size for entry in archive.infolist())
+    kwargs = {
+        "max_archive_entries": entry_count,
+        "max_archive_uncompressed_bytes": expanded_bytes,
+    }
+    if budget == "entries":
+        kwargs["max_archive_entries"] -= 1
+    else:
+        kwargs["max_archive_uncompressed_bytes"] -= 1
+
+    with pytest.raises(ExtractionError, match="Архив DOCX превышает допустимый объём"):
+        DocxExtractor(**kwargs).extract(make_source(), path)
 
 
 def test_docx_returns_safe_error_when_file_cannot_be_read(tmp_path: Path) -> None:

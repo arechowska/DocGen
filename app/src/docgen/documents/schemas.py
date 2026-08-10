@@ -28,6 +28,7 @@ class DocumentNode(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     kind: NodeKind
+    section_id: str | None = None
     text: str | None = None
     data: dict = Field(default_factory=dict)
     children: list[DocumentNode] = Field(default_factory=list)
@@ -59,4 +60,5 @@ class CheckReport(BaseModel):
 
     template_id: str
     findings: list[CheckFinding] = Field(default_factory=list)
+    passed_rule_ids: tuple[str, ...] = ()
     unchecked_rules: list[str] = Field(default_factory=list)

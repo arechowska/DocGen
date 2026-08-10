@@ -17,7 +17,7 @@ from docgen.documents.schemas import (
     WorkingDocument,
 )
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
-from docgen.jobs.models import Job, JobKind
+from docgen.jobs.models import CheckTargetKind, Job, JobKind
 from docgen.jobs.runner import ProgressSink
 from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import TemplateCatalog
@@ -64,12 +64,18 @@ class CheckWorkflow:
         if self._projects.get(job.project_id) is None:
             raise WorkflowError(_PROJECT_NOT_FOUND)
         template = self._templates.get(job.template_id)
-        document = (
-            self._documents.get_document(job.project_id)
-            if job.target_source_id is None
-            else None
+        target_kind = job.check_target_kind or (
+            CheckTargetKind.SOURCE
+            if job.target_source_id is not None
+            else CheckTargetKind.CURRENT
         )
-        if job.target_source_id is None:
+        document_revision: int | None = None
+        document = None
+        if target_kind is CheckTargetKind.CURRENT:
+            current = self._documents.get_document_with_revision(job.project_id)
+            if current is not None:
+                document, document_revision = current
+        if target_kind is CheckTargetKind.CURRENT:
             if document is None:
                 raise WorkflowError(_DOCUMENT_NOT_FOUND)
             if document.template_id != template.id:
@@ -77,10 +83,12 @@ class CheckWorkflow:
 
         normalized = normalize_sources(self._normalization, job.project_id, progress)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
-        if job.target_source_id is not None:
+        if target_kind is CheckTargetKind.SOURCE:
+            if job.target_source_id is None:
+                raise WorkflowError(_DOCUMENT_NOT_FOUND)
             document = _target_document(job.target_source_id, template.id, blocks)
         assert document is not None
-        if self._grounding.validate(document, {block.id for block in blocks}):
+        if self._grounding.validate(document, {block.id: block for block in blocks}):
             raise WorkflowError(_DOCUMENT_GROUNDING_ERROR)
 
         progress(90, "Проверка документа моделью")
@@ -98,9 +106,15 @@ class CheckWorkflow:
 
         progress(100, "Сохранение отчёта")
         progress.checkpoint()
-        if job.target_source_id is not None:
-            self._documents.save_document(job.project_id, document)
-        self._documents.save_report(job.project_id, report)
+        if target_kind is CheckTargetKind.SOURCE:
+            self._documents.save_document_and_report(job.project_id, document, report)
+        else:
+            assert document_revision is not None
+            self._documents.save_report(
+                job.project_id,
+                report,
+                expected_document_revision=document_revision,
+            )
         return report
 
 
@@ -109,8 +123,11 @@ def _target_document(
     template_id: str,
     blocks: list[NormalizedBlock],
 ) -> WorkingDocument:
-    target_prefix = f"{target_source_id}:"
-    target_blocks = [block for block in blocks if block.id.startswith(target_prefix)]
+    target_blocks = [
+        block
+        for block in blocks
+        if any(item.source_id == target_source_id for item in block.provenance)
+    ]
     if not target_blocks:
         raise WorkflowError(_DOCUMENT_NOT_FOUND)
     title = next(
@@ -148,7 +165,8 @@ def _node_from_block(block: NormalizedBlock) -> DocumentNode:
         text=block.text,
         data=safe_data,
         provenance=[
-            Provenance(source_id=block.id, locator=locator) for locator in locators
+            Provenance(source_id=block.id, locator=locator, quote=block.text)
+            for locator in locators
         ],
     )
 
@@ -162,20 +180,42 @@ def _validated_report(
         raise WorkflowError(_REPORT_TEMPLATE_ERROR)
 
     rules = {rule.id: rule for rule in template.rules}
-    unchecked = set(model_report.unchecked_rules)
-    unknown_unchecked = unchecked - rules.keys()
-    if unknown_unchecked:
-        raise WorkflowError("Отчёт содержит неизвестное правило")
-
+    passed_ids = list(model_report.passed_rule_ids)
+    unchecked_ids = list(model_report.unchecked_rules)
+    finding_rule_ids = [finding.rule_id for finding in model_report.findings]
     node_ids = {node.id for node in _walk_nodes(document.nodes)}
-    findings: list[CheckFinding] = []
     for finding in model_report.findings:
         if finding.rule_id not in rules:
             raise WorkflowError("Отчёт содержит неизвестное правило")
         if finding.node_id is not None and finding.node_id not in node_ids:
             raise WorkflowError("Отчёт содержит неизвестный узел документа")
-        if finding.rule_id in unchecked:
-            raise WorkflowError("Правило не может одновременно иметь находку и быть непроверенным")
+    if (
+        any(not rule_id or not rule_id.strip() for rule_id in passed_ids)
+        or any(not rule_id or not rule_id.strip() for rule_id in unchecked_ids)
+        or any(not rule_id or not rule_id.strip() for rule_id in finding_rule_ids)
+        or len(passed_ids) != len(set(passed_ids))
+        or len(unchecked_ids) != len(set(unchecked_ids))
+        or len(finding_rule_ids) != len(set(finding_rule_ids))
+    ):
+        raise WorkflowError("Отчёт содержит некорректное покрытие правил")
+
+    passed = set(passed_ids)
+    unchecked = set(unchecked_ids)
+    failed = set(finding_rule_ids)
+    unknown_coverage = (passed | unchecked) - rules.keys()
+    if unknown_coverage:
+        raise WorkflowError("Отчёт содержит некорректное покрытие правил")
+    if passed & unchecked or passed & failed or unchecked & failed:
+        raise WorkflowError("Отчёт содержит некорректное покрытие правил")
+    if passed | failed | unchecked != rules.keys():
+        raise WorkflowError("Отчёт содержит некорректное покрытие правил")
+
+    unknown_unchecked = unchecked - rules.keys()
+    if unknown_unchecked:
+        raise WorkflowError("Отчёт содержит неизвестное правило")
+
+    findings: list[CheckFinding] = []
+    for finding in model_report.findings:
         severity = Severity(rules[finding.rule_id].severity)
         findings.append(finding.model_copy(update={"severity": severity}))
 
@@ -184,11 +224,13 @@ def _validated_report(
         finding for finding in findings if finding.confidence < _LOW_CONFIDENCE_THRESHOLD
     ]
     ordered_unchecked = [rule.id for rule in template.rules if rule.id in unchecked]
+    ordered_passed = tuple(rule.id for rule in template.rules if rule.id in passed)
     try:
         return CheckReport.model_validate(
             {
                 "template_id": template.id,
                 "findings": confirmed + low_confidence,
+                "passed_rule_ids": ordered_passed,
                 "unchecked_rules": ordered_unchecked,
             }
         )
@@ -210,7 +252,12 @@ def _check_prompt(
     document: WorkingDocument,
 ) -> str:
     payload = {
-        "задача": "Проверьте каждое правило; непроверенные id запишите в unchecked_rules.",
+        "задача": (
+            "Проверьте каждое правило ровно один раз: правила без проблем запишите в "
+            "passed_rule_ids, правила с проблемами представьте одной finding, а правила, "
+            "которые невозможно проверить, запишите в unchecked_rules. Эти три группы "
+            "должны быть непересекающимся полным покрытием всех rule id."
+        ),
         "правила": [rule.model_dump(mode="json") for rule in template.rules],
         "стилевые_правила": list(template.style_rules),
         "исходные_блоки": public_blocks(blocks),
