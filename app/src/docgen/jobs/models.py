@@ -29,6 +29,10 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint("progress BETWEEN 0 AND 100", name="job_progress_range"),
+        CheckConstraint(
+            "kind = 'check' OR target_source_id IS NULL",
+            name="assemble_job_has_no_target_source",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -44,6 +48,9 @@ class Job(Base):
         nullable=False,
     )
     template_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_source_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[JobStatus] = mapped_column(
         SqlEnum(
             JobStatus,

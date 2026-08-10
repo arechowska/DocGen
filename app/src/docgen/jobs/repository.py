@@ -41,14 +41,26 @@ class JobRepository:
     def worker_id(self) -> str:
         return self._worker_id
 
-    def enqueue(self, project_id: str, kind: JobKind, template_id: str) -> Job:
-        job = self._new_job(project_id, kind, template_id)
+    def enqueue(
+        self,
+        project_id: str,
+        kind: JobKind,
+        template_id: str,
+        *,
+        target_source_id: str | None = None,
+    ) -> Job:
+        job = self._new_job(project_id, kind, template_id, target_source_id)
         self._session.add(job)
         self._commit()
         return job
 
     def enqueue_if_project_idle(
-        self, project_id: str, kind: JobKind, template_id: str
+        self,
+        project_id: str,
+        kind: JobKind,
+        template_id: str,
+        *,
+        target_source_id: str | None = None,
     ) -> Job:
         # Route validation performs reads first. End that deferred transaction,
         # then reserve the SQLite writer lock before checking and inserting so
@@ -66,7 +78,7 @@ class JobRepository:
             )
             if active_job_id is not None:
                 raise ActiveProjectJobExists
-            job = self._new_job(project_id, kind, template_id)
+            job = self._new_job(project_id, kind, template_id, target_source_id)
             self._session.add(job)
             self._session.commit()
             return job
@@ -75,11 +87,19 @@ class JobRepository:
             raise
 
     @staticmethod
-    def _new_job(project_id: str, kind: JobKind, template_id: str) -> Job:
+    def _new_job(
+        project_id: str,
+        kind: JobKind,
+        template_id: str,
+        target_source_id: str | None,
+    ) -> Job:
+        if kind is JobKind.ASSEMBLE and target_source_id is not None:
+            raise ValueError("Для задания сборки нельзя указывать документ проверки")
         return Job(
             project_id=project_id,
             kind=kind,
             template_id=template_id,
+            target_source_id=target_source_id,
             status=JobStatus.QUEUED,
             progress=0,
             status_message=_QUEUED_MESSAGE,
@@ -254,6 +274,9 @@ class JobRepository:
         )
         self._commit()
         return failed_result.rowcount + cancelled_result.rowcount
+
+    def discard_pending_changes(self) -> None:
+        self._session.rollback()
 
     def _required(self, job_id: str) -> Job:
         job = self.get(job_id)

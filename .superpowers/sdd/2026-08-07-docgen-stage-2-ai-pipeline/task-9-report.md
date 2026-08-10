@@ -12,6 +12,13 @@ Implemented the FastAPI/HTMX generation UI and staged it for commit as
   node/document links, and stable HTMX swap targets.
 - Added SQLite `BEGIN IMMEDIATE` serialization around the route enqueue check/insert.
 - Added project-page setup forms and router wiring.
+- Fix round 1 adds the PRD standalone-check path for uploaded DOCX, PDF, TXT, and Markdown
+  sources. A check job may persist a project-owned `target_source_id`; assemble jobs cannot.
+- A standalone check normalizes the target plus all project evidence, maps target blocks to a
+  stable, grounded `WorkingDocument`, validates the report, and only then saves the document and
+  report. A later check without a target reuses the current saved document.
+- Added an additive, startup-serialized compatibility migration for existing SQLite databases
+  whose `jobs` table predates `target_source_id`.
 
 ## RED
 
@@ -31,6 +38,12 @@ Additional focused RED cycles caught and proved:
 - a report finding without `node_id` receiving no document link;
 - a `409` conflict replacing active polling/cancel controls with a static message;
 - completed result/report fragments losing the stable `#generation-status` target.
+- repository APIs not accepting or persisting a standalone target and the old SQLite schema
+  lacking the new column;
+- concurrent app/worker migration attempts racing into duplicate `ALTER TABLE` operations;
+- cancellation after final progress publishing replacement artifacts under a cancelled job;
+- check routes rejecting an uploaded target and the setup form having no target selector;
+- the workflow lacking a target-to-document conversion path.
 
 Each focused test failed for the expected missing behavior before its production fix.
 
@@ -42,10 +55,12 @@ Final focused command:
 .\.venv\Scripts\python.exe -m pytest tests/generation/test_routes.py -v
 ```
 
-Result: `21 passed`.
+Result: `26 passed`.
 
 The route suite includes an actual route -> persisted queue -> `JobRunner` -> `CheckWorkflow` ->
-saved report -> HTMX report flow with local deterministic dependencies.
+normalized Markdown -> saved working document and report -> HTMX report flow with local
+deterministic dependencies. The same acceptance test then repeats the check without a target and
+proves reuse of the saved current document.
 
 ## Full tests and Ruff
 
@@ -59,7 +74,7 @@ git diff --cached --check
 
 Results:
 
-- `212 passed, 2 deselected`;
+- `225 passed, 2 deselected`;
 - Ruff: `All checks passed!`;
 - staged diff check: clean.
 
@@ -86,9 +101,13 @@ The mandatory reviewer found three important HTMX edge cases (cancel race, activ
 polling, and terminal fragments losing their swap target) plus the optional-node-link gap. All were
 fixed with focused regressions. No critical findings remain.
 
-One upstream product concern remains: PRD describes checking an uploaded document as a standalone
-scenario, while Task 8's implemented `CheckWorkflow` explicitly requires a current saved
-`WorkingDocument`. Task 9 now rejects a check without that artifact with a safe `422`, preventing a
-known late worker failure, and proves the supported saved-document flow end to end. Converting a raw
-uploaded DOCX/PDF source into the check target requires a Task 8/workflow contract change and is not
-silently claimed as complete here.
+Fix round 1 closes the previously reported PRD gap for standalone uploaded-document checks. Route,
+repository, schema compatibility, worker workflow, retry, and end-to-end acceptance coverage now
+exercise the target-source contract. Cross-project targets and unsupported raster/Confluence
+sources are rejected before enqueue; a request without either a target or current document returns
+a safe `422`. The fix-round reviewer reproduced a concurrent startup migration race; SQLite
+`BEGIN IMMEDIATE` serialization and a two-engine regression now cover app/worker startup overlap.
+The reviewer also reproduced cancelled checks overwriting prior artifacts after final progress;
+the workflow now checkpoints before publication, and runner cancellation/failure transitions first
+roll back pending artifact changes. A real two-session regression preserves both the prior document
+and report under cancellation.

@@ -8,8 +8,15 @@ from docgen.ai.client import TextModel, VisionModel
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import DOCUMENT_SYSTEM_PROMPT
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import CheckFinding, CheckReport, Severity, WorkingDocument
-from docgen.extraction.schemas import NormalizedBlock
+from docgen.documents.schemas import (
+    CheckFinding,
+    CheckReport,
+    DocumentNode,
+    NodeKind,
+    Severity,
+    WorkingDocument,
+)
+from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.runner import ProgressSink
 from docgen.projects.repository import ProjectRepository
@@ -57,14 +64,22 @@ class CheckWorkflow:
         if self._projects.get(job.project_id) is None:
             raise WorkflowError(_PROJECT_NOT_FOUND)
         template = self._templates.get(job.template_id)
-        document = self._documents.get_document(job.project_id)
-        if document is None:
-            raise WorkflowError(_DOCUMENT_NOT_FOUND)
-        if document.template_id != template.id:
-            raise WorkflowError(_DOCUMENT_TEMPLATE_ERROR)
+        document = (
+            self._documents.get_document(job.project_id)
+            if job.target_source_id is None
+            else None
+        )
+        if job.target_source_id is None:
+            if document is None:
+                raise WorkflowError(_DOCUMENT_NOT_FOUND)
+            if document.template_id != template.id:
+                raise WorkflowError(_DOCUMENT_TEMPLATE_ERROR)
 
         normalized = normalize_sources(self._normalization, job.project_id, progress)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
+        if job.target_source_id is not None:
+            document = _target_document(job.target_source_id, template.id, blocks)
+        assert document is not None
         if self._grounding.validate(document, {block.id for block in blocks}):
             raise WorkflowError(_DOCUMENT_GROUNDING_ERROR)
 
@@ -82,8 +97,60 @@ class CheckWorkflow:
         report = _validated_report(model_report, template, document)
 
         progress(100, "Сохранение отчёта")
+        progress.checkpoint()
+        if job.target_source_id is not None:
+            self._documents.save_document(job.project_id, document)
         self._documents.save_report(job.project_id, report)
         return report
+
+
+def _target_document(
+    target_source_id: str,
+    template_id: str,
+    blocks: list[NormalizedBlock],
+) -> WorkingDocument:
+    target_prefix = f"{target_source_id}:"
+    target_blocks = [block for block in blocks if block.id.startswith(target_prefix)]
+    if not target_blocks:
+        raise WorkflowError(_DOCUMENT_NOT_FOUND)
+    title = next(
+        (
+            block.text
+            for block in target_blocks
+            if block.kind is BlockKind.HEADING and block.text.strip()
+        ),
+        "Документ для проверки",
+    )
+    return WorkingDocument(
+        title=title,
+        template_id=template_id,
+        nodes=[_node_from_block(block) for block in target_blocks],
+    )
+
+
+def _node_from_block(block: NormalizedBlock) -> DocumentNode:
+    node_kinds = {
+        BlockKind.TEXT: NodeKind.PARAGRAPH,
+        BlockKind.HEADING: NodeKind.HEADING,
+        BlockKind.LIST: NodeKind.LIST,
+        BlockKind.TABLE: NodeKind.TABLE,
+        BlockKind.IMAGE: NodeKind.IMAGE,
+    }
+    safe_data = {
+        key: value
+        for key, value in block.data.items()
+        if key not in {"content_base64", "storage_path"}
+    }
+    locators = [item.locator for item in block.provenance] or [block.id]
+    return DocumentNode(
+        id=f"document-node:{block.id}",
+        kind=node_kinds[block.kind],
+        text=block.text,
+        data=safe_data,
+        provenance=[
+            Provenance(source_id=block.id, locator=locator) for locator in locators
+        ],
+    )
 
 
 def _validated_report(

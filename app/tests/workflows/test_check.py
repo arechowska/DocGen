@@ -68,13 +68,18 @@ class FakeModel:
 
 @dataclass
 class FakeDocuments:
-    document: WorkingDocument
+    document: WorkingDocument | None
     events: list[str]
     report: CheckReport | None = None
 
     def get_document(self, project_id: str) -> WorkingDocument | None:
         assert project_id == "p1"
         return self.document
+
+    def save_document(self, project_id: str, document: WorkingDocument) -> None:
+        assert project_id == "p1"
+        self.events.append("save-document")
+        self.document = document
 
     def save_report(self, project_id: str, report: CheckReport) -> None:
         assert project_id == "p1"
@@ -212,8 +217,144 @@ def test_check_separates_confirmed_and_low_confidence_findings_and_checks_every_
         "progress:90",
         "model",
         "progress:100",
+        "checkpoint",
         "save",
     ]
+
+
+def test_standalone_check_maps_target_blocks_and_saves_document_only_with_validated_report(
+    semantic_template: SemanticTemplate,
+) -> None:
+    events: list[str] = []
+    blocks = [
+        _target_block("heading", BlockKind.HEADING, "Раздел", {"level": 2}),
+        _target_block("text", BlockKind.TEXT, "Описание"),
+        _target_block("list", BlockKind.LIST, "Первый", {"items": ["Первый"]}),
+        _target_block("table", BlockKind.TABLE, "Поле", {"rows": [["Поле"]]}),
+        _target_block("image", BlockKind.IMAGE, "Схема"),
+        NormalizedBlock(
+            id="evidence-source:text",
+            kind=BlockKind.TEXT,
+            text="Контекст проекта",
+            provenance=[Provenance(source_id="evidence-source", locator="line:1")],
+            confidence=1,
+        ),
+    ]
+
+    class TargetNormalization:
+        def run(self, project_id: str, before_extract: Any = None) -> NormalizedProject:
+            assert project_id == "p1"
+            assert before_extract is not None
+            before_extract()
+            events.append("extract")
+            return NormalizedProject(blocks=blocks, total_pages=1, warnings=[])
+
+    model = FakeModel(
+        CheckReport(
+            template_id="use-case",
+            unchecked_rules=[rule.id for rule in semantic_template.rules],
+        ),
+        events,
+    )
+    documents = FakeDocuments(None, events)
+    progress = ProgressSpy(events)
+    workflow = CheckWorkflow(
+        projects=FakeProjects(),
+        normalization=TargetNormalization(),
+        templates=FakeCatalog(semantic_template),
+        text_model=model,
+        vision_model=NoImageVision(),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    report = workflow.run(_job(target_source_id="source-1"), progress)
+
+    assert report.unchecked_rules == [rule.id for rule in semantic_template.rules]
+    assert documents.document is not None
+    assert documents.document.title == "Раздел"
+    assert documents.document.template_id == "use-case"
+    assert [node.kind for node in documents.document.nodes] == [
+        NodeKind.HEADING,
+        NodeKind.PARAGRAPH,
+        NodeKind.LIST,
+        NodeKind.TABLE,
+        NodeKind.IMAGE,
+    ]
+    assert [node.id for node in documents.document.nodes] == [
+        f"document-node:source-1:{block_id}"
+        for block_id in ("heading", "text", "list", "table", "image")
+    ]
+    assert all(
+        node.provenance[0].source_id == block.id
+        for node, block in zip(documents.document.nodes, blocks[:5], strict=True)
+    )
+    assert "Контекст проекта" in model.user_prompt
+    assert events.index("model") < events.index("save-document")
+    assert events[-3:] == ["checkpoint", "save-document", "save"]
+
+
+def test_standalone_check_rejects_target_not_found_in_project_before_model(
+    semantic_template: SemanticTemplate,
+) -> None:
+    events: list[str] = []
+    documents = FakeDocuments(None, events)
+    workflow = CheckWorkflow(
+        projects=FakeProjects(),
+        normalization=FakeNormalization(
+            _target_block("text", BlockKind.TEXT, "Описание"), events
+        ),
+        templates=FakeCatalog(semantic_template),
+        text_model=FakeModel(CheckReport(template_id="use-case"), events),
+        vision_model=NoImageVision(),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    with pytest.raises(WorkflowError, match="Документ для проверки не найден"):
+        workflow.run(_job(target_source_id="other-source"), ProgressSpy(events))
+
+    assert documents.document is None
+    assert "model" not in events
+
+
+def test_standalone_check_does_not_replace_current_document_when_report_is_invalid(
+    semantic_template: SemanticTemplate,
+    document: WorkingDocument,
+) -> None:
+    events: list[str] = []
+    documents = FakeDocuments(document, events)
+    workflow = CheckWorkflow(
+        projects=FakeProjects(),
+        normalization=FakeNormalization(
+            _target_block("text", BlockKind.TEXT, "Новое описание"), events
+        ),
+        templates=FakeCatalog(semantic_template),
+        text_model=FakeModel(
+            CheckReport(
+                template_id="use-case",
+                findings=[
+                    _finding(
+                        "unknown",
+                        "unknown-rule",
+                        "document-node:source-1:text",
+                        Severity.ERROR,
+                        1,
+                    )
+                ],
+            ),
+            events,
+        ),
+        vision_model=NoImageVision(),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    with pytest.raises(WorkflowError, match="неизвестное правило"):
+        workflow.run(_job(target_source_id="source-1"), ProgressSpy(events))
+
+    assert documents.document is document
+    assert "save-document" not in events
 
 
 def _finding(
@@ -322,7 +463,23 @@ def _rule(rule_id: str, dimension: Any, severity: Any, instruction: str) -> Sema
     )
 
 
-def _job() -> Job:
+def _target_block(
+    block_id: str,
+    kind: BlockKind,
+    text: str,
+    data: dict | None = None,
+) -> NormalizedBlock:
+    return NormalizedBlock(
+        id=f"source-1:{block_id}",
+        kind=kind,
+        text=text,
+        data=data or {},
+        provenance=[Provenance(source_id="source-1", locator=f"block:{block_id}")],
+        confidence=1,
+    )
+
+
+def _job(target_source_id: str | None = None) -> Job:
     return Job(
         id="job-check",
         project_id="p1",
@@ -332,4 +489,5 @@ def _job() -> Job:
         progress=0,
         status_message="Выполняется",
         cancel_requested=False,
+        target_source_id=target_source_id,
     )

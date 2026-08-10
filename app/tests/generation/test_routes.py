@@ -16,15 +16,17 @@ from docgen.documents.schemas import (
     Severity,
     WorkingDocument,
 )
-from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
+from docgen.extraction.registry import ExtractorRegistry
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner
 from docgen.models import Project
 from docgen.projects.repository import ProjectRepository
+from docgen.sources.repository import SourceRepository
+from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.workflows.check import CheckWorkflow
-from docgen.workflows.normalize import NormalizedProject
+from docgen.workflows.normalize import NormalizationWorkflow
 
 
 @pytest.fixture
@@ -110,6 +112,22 @@ def test_start_check_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.CHECK
 
 
+def test_start_standalone_check_enqueues_owned_target_source(
+    client: TestClient, configured_models: None, project_with_source: Project
+) -> None:
+    target_source_id = _source_id(client, project_with_source.id, "case.md")
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/check",
+        data={"template_id": "use-case", "target_source_id": target_source_id},
+    )
+
+    assert response.status_code == 202
+    job = _jobs_for_project(client, project_with_source.id)[0]
+    assert job.kind is JobKind.CHECK
+    assert job.target_source_id == target_source_id
+
+
 def test_missing_model_configuration_returns_503(
     client: TestClient, project_with_source: Project
 ) -> None:
@@ -168,7 +186,7 @@ def test_invalid_template_is_rejected(
     assert "Шаблон не найден" in response.text
 
 
-def test_check_without_document_is_rejected_before_enqueue(
+def test_check_without_current_document_or_target_is_rejected_before_enqueue(
     client: TestClient, configured_models: None, project_with_source: Project
 ) -> None:
     response = client.post(
@@ -177,8 +195,83 @@ def test_check_without_document_is_rejected_before_enqueue(
     )
 
     assert response.status_code == 422
+    assert "Выберите документ для проверки" in response.text
+    assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_check_rejects_target_source_from_another_project(
+    client: TestClient,
+    configured_models: None,
+    project_with_source: Project,
+    other_project: Project,
+) -> None:
+    response = client.post(
+        f"/projects/{other_project.id}/sources/files",
+        files={"file": ("other.md", b"# Other", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    other_source_id = _source_id(client, other_project.id, "other.md")
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/check",
+        data={"template_id": "use-case", "target_source_id": other_source_id},
+    )
+
+    assert response.status_code == 422
     assert "Документ для проверки не найден" in response.text
     assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_check_rejects_raster_source_as_target(
+    client: TestClient, configured_models: None, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("diagram.png", b"not-an-image", "image/png")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    image_id = _source_id(client, project_with_source.id, "diagram.png")
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/check",
+        data={"template_id": "use-case", "target_source_id": image_id},
+    )
+
+    assert response.status_code == 422
+    assert "Документ для проверки не найден" in response.text
+    assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_setup_lists_supported_file_targets_but_excludes_raster_and_confluence(
+    client: TestClient, project_with_source: Project
+) -> None:
+    image_response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("diagram.png", b"not-used", "image/png")},
+        headers={"HX-Request": "true"},
+    )
+    assert image_response.status_code == 200
+    confluence_response = client.post(
+        f"/projects/{project_with_source.id}/sources/confluence",
+        data={"url": "https://wiki.example.test/pages/42"},
+        headers={"HX-Request": "true"},
+    )
+    assert confluence_response.status_code == 200
+    markdown_id = _source_id(client, project_with_source.id, "case.md")
+    image_id = _source_id(client, project_with_source.id, "diagram.png")
+
+    response = client.get(f"/projects/{project_with_source.id}")
+
+    assert response.status_code == 200
+    target_select = response.text.split('name="target_source_id"', maxsplit=1)[1].split(
+        "</select>", maxsplit=1
+    )[0]
+    assert f'value="{markdown_id}"' in target_select
+    assert "case.md" in target_select
+    assert f'value="{image_id}"' not in target_select
+    assert "wiki.example.test" not in target_select
 
 
 def test_second_active_job_for_project_is_rejected_atomically(
@@ -267,6 +360,27 @@ def test_failed_job_renders_only_user_safe_message(
     assert "secret" not in response.text
     assert "raw source content" not in response.text
     assert "Повторить" in response.text
+
+
+def test_failed_standalone_check_retry_preserves_target_source(
+    client: TestClient, project_with_source: Project
+) -> None:
+    target_source_id = _source_id(client, project_with_source.id, "case.md")
+    with _session(client) as session:
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(
+            project_with_source.id,
+            JobKind.CHECK,
+            "use-case",
+            target_source_id=target_source_id,
+        )
+        assert repository.claim_next() is not None
+        repository.mark_failed(job.id, "safe failure")
+
+    response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+
+    assert response.status_code == 200
+    assert f'name="target_source_id" value="{target_source_id}"' in response.text
 
 
 def test_cancelled_job_renders_retry_action(client: TestClient, running_job: Job) -> None:
@@ -434,22 +548,10 @@ def test_succeeded_job_swaps_to_saved_document(
 def test_check_route_job_runs_once_and_swaps_to_saved_report(
     client: TestClient, configured_models: None, project_with_source: Project
 ) -> None:
-    document = WorkingDocument(
-        title="Оплата заказа",
-        template_id="use-case",
-        nodes=[
-            DocumentNode(
-                id="node-1",
-                kind=NodeKind.PARAGRAPH,
-                text="Пользователь оплачивает заказ",
-                provenance=[Provenance(source_id="block-1", locator="paragraph:1")],
-            )
-        ],
-    )
-    _save_document(client, project_with_source.id, document)
+    target_source_id = _source_id(client, project_with_source.id, "case.md")
     response = client.post(
         f"/projects/{project_with_source.id}/jobs/check",
-        data={"template_id": "use-case"},
+        data={"template_id": "use-case", "target_source_id": target_source_id},
     )
     assert response.status_code == 202
     job = _jobs_for_project(client, project_with_source.id)[0]
@@ -459,7 +561,12 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     with _session(client) as session:
         workflow = CheckWorkflow(
             projects=ProjectRepository(session),
-            normalization=_StaticNormalization(),
+            normalization=NormalizationWorkflow(
+                SourceRepository(session),
+                LocalStorage(client.app.state.settings.data_dir),
+                ExtractorRegistry.default(),
+                _NoConfluenceClient(),
+            ),
             templates=catalog,
             text_model=_StaticCheckModel(unchecked_rules),
             vision_model=_NoImageVisionModel(),
@@ -473,12 +580,53 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
         assert runner.run_once() is True
 
     assert _job(client, job.id).status.value == "succeeded"
+    assert _job(client, job.id).target_source_id == target_source_id
+    with _session(client) as session:
+        saved_document = DocumentRepository(session).get_document(project_with_source.id)
+    assert saved_document is not None
+    assert saved_document.template_id == "use-case"
+    assert saved_document.nodes[0].kind is NodeKind.HEADING
+    assert saved_document.nodes[0].text == "Case"
     response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
     assert response.status_code == 200
     assert "Результат проверки" in response.text
     assert "Непроверенные правила" in response.text
     assert 'id="generation-status"' in response.text
     assert unchecked_rules[0] in response.text
+
+    repeat_response = client.post(
+        f"/projects/{project_with_source.id}/jobs/check",
+        data={"template_id": "use-case"},
+    )
+    assert repeat_response.status_code == 202
+    repeat_job = next(
+        queued_job
+        for queued_job in _jobs_for_project(client, project_with_source.id)
+        if queued_job.id != job.id
+    )
+    assert repeat_job.target_source_id is None
+    with _session(client) as session:
+        repeat_runner = JobRunner(
+            JobRepository(session, worker_id="route-repeat-check-worker"),
+            {
+                JobKind.CHECK: CheckWorkflow(
+                    projects=ProjectRepository(session),
+                    normalization=NormalizationWorkflow(
+                        SourceRepository(session),
+                        LocalStorage(client.app.state.settings.data_dir),
+                        ExtractorRegistry.default(),
+                        _NoConfluenceClient(),
+                    ),
+                    templates=catalog,
+                    text_model=_StaticCheckModel(unchecked_rules),
+                    vision_model=_NoImageVisionModel(),
+                    grounding=GroundingValidator(),
+                    documents=DocumentRepository(session),
+                )
+            },
+        )
+        assert repeat_runner.run_once() is True
+    assert _job(client, repeat_job.id).status.value == "succeeded"
 
 
 def test_missing_project_is_rejected_on_start(client: TestClient) -> None:
@@ -526,6 +674,12 @@ def _save_report(client: TestClient, project_id: str, report: CheckReport) -> No
         session.commit()
 
 
+def _source_id(client: TestClient, project_id: str, display_name: str) -> str:
+    with _session(client) as session:
+        sources = SourceRepository(session).list_for_project(project_id)
+        return next(source.id for source in sources if source.display_name == display_name)
+
+
 def _jobs_for_project(client: TestClient, project_id: str) -> list[Job]:
     from sqlalchemy import select
 
@@ -545,28 +699,6 @@ def _session(client: TestClient) -> Iterator:
     return client.app.state.session_factory()
 
 
-class _StaticNormalization:
-    def run(self, project_id: str, before_extract: Any = None) -> NormalizedProject:
-        assert project_id
-        assert before_extract is not None
-        before_extract()
-        return NormalizedProject(
-            blocks=[
-                NormalizedBlock(
-                    id="block-1",
-                    kind=BlockKind.TEXT,
-                    text="Пользователь оплачивает заказ",
-                    provenance=[
-                        Provenance(source_id="source-1", locator="paragraph:1")
-                    ],
-                    confidence=1,
-                )
-            ],
-            total_pages=1,
-            warnings=[],
-        )
-
-
 class _StaticCheckModel:
     def __init__(self, unchecked_rules: list[str]) -> None:
         self._unchecked_rules = unchecked_rules
@@ -582,3 +714,9 @@ class _NoImageVisionModel:
     def describe(self, image: bytes, media_type: str) -> object:
         del image, media_type
         raise AssertionError("text-only check must not call the vision model")
+
+
+class _NoConfluenceClient:
+    def fetch(self, url: str, *, before_external_call: Any = None) -> object:
+        del url, before_external_call
+        raise AssertionError("file-only check must not call Confluence")

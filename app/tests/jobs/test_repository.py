@@ -80,6 +80,27 @@ def test_enqueue_persists_initial_state(job_repository: JobRepository) -> None:
     assert job.updated_at.tzinfo is not None
 
 
+def test_check_enqueue_persists_target_source(job_repository: JobRepository) -> None:
+    job = job_repository.enqueue(
+        "p1",
+        JobKind.CHECK,
+        "use-case",
+        target_source_id="source-1",
+    )
+
+    assert job.target_source_id == "source-1"
+
+
+def test_assemble_enqueue_rejects_target_source(job_repository: JobRepository) -> None:
+    with pytest.raises(ValueError, match="сборки"):
+        job_repository.enqueue(
+            "p1",
+            JobKind.ASSEMBLE,
+            "use-case",
+            target_source_id="source-1",
+        )
+
+
 def test_claim_next_is_fifo_and_marks_running(job_repository: JobRepository) -> None:
     first = job_repository.enqueue("p1", JobKind.ASSEMBLE, "use-case")
     job_repository.enqueue("p2", JobKind.CHECK, "use-case")

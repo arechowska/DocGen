@@ -111,7 +111,7 @@ class JobRunner:
         except (_CancellationObserved, JobCancellationRequested):
             self._cancel_if_present(job.id)
         except JobNotFound:
-            pass
+            self._repository.discard_pending_changes()
         except Exception as exc:  # noqa: BLE001 - a failed job must not stop the worker
             self._fail_or_cancel(job.id, self._safe_error_message(exc))
         return True
@@ -146,12 +146,14 @@ class JobRunner:
         return _GENERIC_ERROR_MESSAGE
 
     def _cancel_if_present(self, job_id: str) -> None:
+        self._repository.discard_pending_changes()
         try:
             self._repository.mark_cancelled(job_id)
         except JobNotFound:
             pass
 
     def _fail_or_cancel(self, job_id: str, error_message: str) -> None:
+        self._repository.discard_pending_changes()
         try:
             if self._repository.is_cancel_requested(job_id):
                 self._repository.mark_cancelled(job_id)

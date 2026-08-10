@@ -19,6 +19,8 @@ from docgen.sources.repository import SourceRepository
 from docgen.templates_catalog.loader import TemplateCatalog, TemplateConfigurationError
 from docgen.web import templates
 
+from .targets import is_supported_check_target
+
 router = APIRouter(prefix="/projects")
 
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -44,8 +46,16 @@ def start_check(
     project_id: str,
     template_id: Annotated[str, Form()],
     session: SessionDependency,
+    target_source_id: Annotated[str | None, Form()] = None,
 ) -> Response:
-    return _start_job(request, session, project_id, JobKind.CHECK, template_id)
+    return _start_job(
+        request,
+        session,
+        project_id,
+        JobKind.CHECK,
+        template_id,
+        target_source_id=target_source_id or None,
+    )
 
 
 @router.get("/{project_id}/jobs/{job_id}")
@@ -106,6 +116,8 @@ def _start_job(
     project_id: str,
     kind: JobKind,
     template_id: str,
+    *,
+    target_source_id: str | None = None,
 ) -> Response:
     project = _project_or_404(session, project_id)
     sources = SourceRepository(session).list_for_project(project_id)
@@ -122,16 +134,31 @@ def _start_job(
 
     if kind is JobKind.CHECK:
         document = DocumentRepository(session).get_document(project_id)
-        if document is None:
+        if target_source_id is not None:
+            target_source = SourceRepository(session).get(target_source_id)
+            if (
+                target_source is None
+                or target_source.project_id != project_id
+                or not is_supported_check_target(target_source)
+            ):
+                return _setup_error(
+                    request,
+                    session,
+                    project,
+                    "Документ для проверки не найден",
+                    422,
+                    catalog=catalog,
+                )
+        elif document is None:
             return _setup_error(
                 request,
                 session,
                 project,
-                "Документ для проверки не найден",
+                "Выберите документ для проверки",
                 422,
                 catalog=catalog,
             )
-        if document.template_id != template.id:
+        if target_source_id is None and document.template_id != template.id:
             return _setup_error(
                 request,
                 session,
@@ -148,7 +175,12 @@ def _start_job(
         )
 
     try:
-        job = JobRepository(session).enqueue_if_project_idle(project_id, kind, template.id)
+        job = JobRepository(session).enqueue_if_project_idle(
+            project_id,
+            kind,
+            template.id,
+            target_source_id=target_source_id,
+        )
     except ActiveProjectJobExists:
         active_job = JobRepository(session).get_active_for_project(project_id)
         if active_job is not None:

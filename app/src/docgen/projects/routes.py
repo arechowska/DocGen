@@ -6,6 +6,7 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from docgen.documents.repository import DocumentRepository
+from docgen.generation.targets import supported_check_targets
 from docgen.sources.service import SourceService
 from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import TemplateCatalog
@@ -95,13 +96,15 @@ def project_detail(
         request.app.state.settings.confluence_hosts,
     )
     documents = DocumentRepository(session)
+    sources = source_service.list(project_id)
     return templates.TemplateResponse(
         request=request,
         name="projects/detail.html",
         context={
             "project": project,
             "project_id": project_id,
-            "sources": source_service.list(project_id),
+            "sources": sources,
+            "check_targets": supported_check_targets(sources),
             "templates": TemplateCatalog().list(),
             "generation_error": None,
             "setup_fragment": False,

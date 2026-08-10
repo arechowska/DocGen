@@ -8,7 +8,7 @@ from types import FrameType
 from typing import Protocol
 
 from docgen.config import Settings
-from docgen.db import Base, build_session_factory
+from docgen.db import Base, build_session_factory, ensure_schema_compatibility
 from docgen.documents.repository import DocumentRepository
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractorRegistry
@@ -65,6 +65,7 @@ def main() -> None:
     session_factory = build_session_factory(settings.database_url)
     engine = session_factory.kw["bind"]
     Base.metadata.create_all(engine)
+    ensure_schema_compatibility(engine)
 
     worker_id = resolve_worker_id(os.environ)
     stop_event = Event()

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .config import Settings
-from .db import Base, build_session_factory
+from .db import Base, build_session_factory, ensure_schema_compatibility
 from .generation.routes import router as generation_router
 from .jobs.models import Job  # noqa: F401
 from .projects.models import Project  # noqa: F401
@@ -23,6 +23,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = session_factory.kw["bind"]
         try:
             Base.metadata.create_all(engine)
+            ensure_schema_compatibility(engine)
             application.state.session_factory = session_factory
             yield
         finally:

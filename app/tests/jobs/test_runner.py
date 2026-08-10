@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from docgen.config import Settings
 from docgen.db import Base
+from docgen.documents.repository import DocumentRepository
+from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.jobs import worker as worker_module
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.repository import JobRepository
@@ -238,6 +240,43 @@ def test_cancel_racing_final_success_wins_atomically(
     raced = persisted(session_factory, job.id)
     assert raced.status is JobStatus.CANCELLED
     assert raced.progress == 0
+
+
+def test_cancel_after_final_progress_discards_uncommitted_artifacts(
+    session_factory: sessionmaker[Session],
+) -> None:
+    previous_document = WorkingDocument(title="Предыдущий документ", template_id="use-case")
+    previous_report = CheckReport(template_id="use-case", unchecked_rules=["previous"])
+    replacement_document = WorkingDocument(title="Новый документ", template_id="use-case")
+    replacement_report = CheckReport(template_id="use-case", unchecked_rules=["replacement"])
+    with session_factory() as artifact_session:
+        documents = DocumentRepository(artifact_session)
+        documents.save_document("p1", previous_document)
+        documents.save_report("p1", previous_report)
+        artifact_session.commit()
+    job = enqueue(session_factory, JobKind.CHECK)
+
+    with session_factory() as worker_session:
+        worker_documents = DocumentRepository(worker_session)
+
+        def workflow(claimed: Job, progress: Any) -> None:
+            progress(100, "Сохранение отчёта")
+            with session_factory() as cancelling_session:
+                JobRepository(cancelling_session).request_cancel(claimed.id)
+            worker_documents.save_document(claimed.project_id, replacement_document)
+            worker_documents.save_report(claimed.project_id, replacement_report)
+
+        JobRunner(
+            JobRepository(worker_session, worker_id="worker"),
+            {JobKind.CHECK: workflow},
+        ).run_once()
+
+    cancelled = persisted(session_factory, job.id)
+    assert cancelled.status is JobStatus.CANCELLED
+    with session_factory() as artifact_session:
+        documents = DocumentRepository(artifact_session)
+        assert documents.get_document("p1") == previous_document
+        assert documents.get_report("p1") == previous_report
 
 
 def test_cancel_racing_progress_update_wins_atomically(
