@@ -14,6 +14,11 @@ def test_wheel_clean_install_renders_pages_outside_source_tree(tmp_path: Path) -
     smoke_dir = tmp_path / "independent-cwd"
     wheel_dir.mkdir()
     smoke_dir.mkdir()
+    (smoke_dir / ".env").write_text(
+        "DOCGEN_DATABASE_URL=sqlite:///wheel-smoke.db\n"
+        "DOCGEN_DATA_DIR=wheel-smoke-data\n",
+        encoding="utf-8",
+    )
     subprocess.run(
         [
             sys.executable,
@@ -82,11 +87,9 @@ def allow_loopback_only(sock, address):
     raise AssertionError("wheel smoke attempted an external network connection")
 
 socket.socket.connect = allow_loopback_only
-settings = Settings(
-    _env_file=None,
-    database_url=f"sqlite:///{smoke_dir / 'smoke.db'}",
-    data_dir=smoke_dir / "data",
-)
+settings = Settings()
+assert settings.database_url == "sqlite:///wheel-smoke.db"
+assert settings.data_dir == Path("wheel-smoke-data")
 with TestClient(create_app(settings)) as client:
     projects = client.get("/projects")
     assert projects.status_code == 200

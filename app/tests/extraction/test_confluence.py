@@ -1,5 +1,9 @@
+import base64
+from io import BytesIO
+
 import httpx
 import pytest
+from PIL import Image
 
 from docgen.config import Settings
 from docgen.extraction.confluence import ConfluenceClient
@@ -18,7 +22,18 @@ def _page_response(storage_html: str) -> httpx.Response:
     )
 
 
-def _native_attachment_transport(storage_html: str) -> httpx.MockTransport:
+def _image_bytes(width: int = 1, height: int = 1) -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (width, height)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _native_attachment_transport(
+    storage_html: str,
+    content: bytes | None = None,
+) -> httpx.MockTransport:
+    attachment_content = content if content is not None else _image_bytes()
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/rest/api/content/42":
             return _page_response(storage_html)
@@ -37,8 +52,7 @@ def _native_attachment_transport(storage_html: str) -> httpx.MockTransport:
                     ]
                 },
             )
-        filename = request.url.path.rsplit("/", 1)[-1]
-        return httpx.Response(200, content=filename.encode())
+        return httpx.Response(200, content=attachment_content)
 
     return httpx.MockTransport(handler)
 
@@ -113,7 +127,7 @@ def test_fetch_confluence_page_maps_storage_html_to_normalized_blocks(
 def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
     transport = _native_attachment_transport(
         '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
-        '<ac:image><ri:attachment ri:filename="flow.svg" /></ac:image>'
+        '<ac:image><ri:attachment ri:filename="flow.png" /></ac:image>'
     )
     client = ConfluenceClient(
         api_base="https://wiki.example.test/rest/api",
@@ -132,7 +146,7 @@ def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
         "src": "attachment:architecture.png",
         "alt": "",
         "attachment": "architecture.png",
-        "content_base64": "YXJjaGl0ZWN0dXJlLnBuZw==",
+        "content_base64": base64.b64encode(_image_bytes()).decode("ascii"),
         "media_type": "image/png",
     }
     assert result.blocks[0].text == "architecture.png"
@@ -336,6 +350,72 @@ def test_settings_allow_confluence_to_be_optional_at_startup() -> None:
     assert settings.confluence_token is None
 
 
+def test_native_attachment_accepts_image_at_configured_pixel_limit() -> None:
+    content = _image_bytes(2, 3)
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=_native_attachment_transport(
+            '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>',
+            content,
+        ),
+        max_image_pixels=6,
+    )
+
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks[0].data["content_base64"] == base64.b64encode(content).decode("ascii")
+
+
+def test_native_attachment_rejects_image_above_configured_pixel_limit() -> None:
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=_native_attachment_transport(
+            '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>',
+            _image_bytes(2, 4),
+        ),
+        max_image_pixels=6,
+    )
+
+    with pytest.raises(ExtractionError, match="Изображение слишком большое"):
+        client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
+def test_native_attachment_rejects_malformed_image_bytes() -> None:
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=_native_attachment_transport(
+            '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>',
+            b"not an image",
+        ),
+    )
+
+    with pytest.raises(ExtractionError, match="Не удалось обработать вложение Confluence"):
+        client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
+def test_client_from_settings_uses_configured_image_pixel_limit() -> None:
+    settings = Settings(
+        confluence_api_base="https://wiki.example.test/rest/api",
+        confluence_token="configured-secret",
+        confluence_hosts=("wiki.example.test",),
+        trusted_integration_hosts=("wiki.example.test",),
+        max_image_pixels=6,
+    )
+    client = ConfluenceClient.from_settings(
+        settings,
+        transport=_native_attachment_transport(
+            '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>',
+            _image_bytes(2, 4),
+        ),
+    )
+
+    with pytest.raises(ExtractionError, match="Изображение слишком большое"):
+        client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
 def test_native_attachment_is_resolved_and_downloaded_with_gate_before_each_request() -> None:
     events: list[str] = []
     observed_timeouts: list[dict[str, float]] = []
@@ -369,7 +449,7 @@ def test_native_attachment_is_resolved_and_downloaded_with_gate_before_each_requ
             )
         assert request.url.path == "/download/attachments/42/architecture.png"
         events.append("download")
-        return httpx.Response(200, content=b"native-image")
+        return httpx.Response(200, content=_image_bytes())
 
     client = ConfluenceClient(
         api_base="https://wiki.example.test/rest/api",
@@ -392,7 +472,7 @@ def test_native_attachment_is_resolved_and_downloaded_with_gate_before_each_requ
         "src": "attachment:architecture.png",
         "alt": "",
         "attachment": "architecture.png",
-        "content_base64": "bmF0aXZlLWltYWdl",
+        "content_base64": base64.b64encode(_image_bytes()).decode("ascii"),
         "media_type": "image/png",
     }
 
@@ -515,6 +595,7 @@ def test_confluence_enforces_aggregate_attachment_budget_before_retaining_second
         '<ac:image><ri:attachment ri:filename="one.png" /></ac:image>'
         '<ac:image><ri:attachment ri:filename="two.png" /></ac:image>'
     )
+    content = _image_bytes()
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/rest/api/content/42":
@@ -533,7 +614,7 @@ def test_confluence_enforces_aggregate_attachment_budget_before_retaining_second
                     ]
                 },
             )
-        return httpx.Response(200, content=b"abc")
+        return httpx.Response(200, content=content)
 
     with pytest.raises(
         ExtractionError,
@@ -544,7 +625,7 @@ def test_confluence_enforces_aggregate_attachment_budget_before_retaining_second
             token="secret",
             transport=httpx.MockTransport(handler),
             max_response_bytes=10_000,
-            max_attachment_bytes=5,
+            max_attachment_bytes=len(content) + 1,
         ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable, Iterable
+from io import BytesIO
 from typing import Protocol
 from urllib.parse import parse_qs, urljoin, urlsplit
 
@@ -11,12 +12,14 @@ from bs4 import BeautifulSoup, Tag
 from pydantic import SecretStr
 
 from docgen.config import Settings
+from docgen.extraction.image import preflight_image
 from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, stable_block_id
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.outbound import UntrustedEndpoint, validate_trusted_endpoint
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5_000_000
+_DEFAULT_MAX_IMAGE_PIXELS = 40_000_000
 _TIMEOUT_SECONDS = 30.0
 _MAX_PAGE_UNITS = 150
 _CONFLUENCE_URL_ERROR = "Разрешены только ссылки Confluence"
@@ -51,6 +54,7 @@ class ConfluenceClient:
         transport: httpx.BaseTransport | None = None,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         max_attachment_bytes: int | None = None,
+        max_image_pixels: int = _DEFAULT_MAX_IMAGE_PIXELS,
         timeout_seconds: float = _TIMEOUT_SECONDS,
     ) -> None:
         self._api_base = api_base.rstrip("/") if api_base else None
@@ -60,6 +64,7 @@ class ConfluenceClient:
         self._max_attachment_bytes = (
             max_attachment_bytes if max_attachment_bytes is not None else max_response_bytes
         )
+        self._max_image_pixels = max_image_pixels
         self._timeout_seconds = timeout_seconds
         self._allowed_hosts = frozenset(host.lower() for host in allowed_hosts or self._api_hosts())
 
@@ -90,6 +95,7 @@ class ConfluenceClient:
             transport=transport,
             max_response_bytes=max_response_bytes,
             max_attachment_bytes=max_attachment_bytes,
+            max_image_pixels=settings.max_image_pixels,
         )
 
     def fetch(
@@ -291,6 +297,11 @@ class ConfluenceClient:
             raise ExtractionError(_ATTACHMENT_RESPONSE_ERROR)
         if len(content) > remaining_attachment_bytes:
             raise ExtractionError(_ATTACHMENT_BUDGET_ERROR)
+        preflight_image(
+            BytesIO(content),
+            self._max_image_pixels,
+            read_error_message=_ATTACHMENT_RESPONSE_ERROR,
+        )
         return (
             block.model_copy(
                 update={

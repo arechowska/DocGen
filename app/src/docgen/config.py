@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOCGEN_",
-        env_file=Path(__file__).resolve().parents[3] / ".env",
+        env_file=Path(".env"),
     )
 
     database_url: str = "sqlite:///./var/docgen.db"

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from PIL import Image
 
 from docgen.ai.client import ModelConfigurationError, VisionDescription
 from docgen.ai.grounding import GroundingValidator
@@ -375,6 +377,9 @@ def test_assemble_emits_normalization_stage_once_when_project_has_no_sources() -
 
 def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_base64() -> None:
     events: list[str] = []
+    image_buffer = BytesIO()
+    Image.new("RGB", (1, 1)).save(image_buffer, format="PNG")
+    attachment_content = image_buffer.getvalue()
     source = Source(
         id="source-confluence",
         project_id="p1",
@@ -422,11 +427,11 @@ def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_bas
                 },
             )
         events.append("http:download")
-        return httpx.Response(200, content=b"native-image")
+        return httpx.Response(200, content=attachment_content)
 
     class AttachmentVision:
         def describe(self, image: bytes, media_type: str) -> VisionDescription:
-            assert image == b"native-image"
+            assert image == attachment_content
             assert media_type == "image/png"
             events.append("vision")
             return VisionDescription(description="Архитектурная схема системы")

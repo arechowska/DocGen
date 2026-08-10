@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import IO
 
 from PIL import Image, UnidentifiedImageError
 
@@ -12,6 +13,28 @@ from docgen.extraction.registry import (
 )
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source
+
+_IMAGE_READ_ERROR = "Не удалось прочитать изображение"
+_OVERSIZED_IMAGE_ERROR = "Изображение слишком большое"
+
+
+def preflight_image(
+    image_source: Path | IO[bytes],
+    max_image_pixels: int,
+    *,
+    read_error_message: str = _IMAGE_READ_ERROR,
+) -> tuple[int, int]:
+    try:
+        with Image.open(image_source) as image:
+            width, height = image.size
+            if width * height > max_image_pixels:
+                raise ExtractionError(_OVERSIZED_IMAGE_ERROR)
+            image.load()
+    except ExtractionError:
+        raise
+    except (OSError, UnidentifiedImageError) as error:
+        raise ExtractionError(read_error_message) from error
+    return width, height
 
 
 class ImageExtractor:
@@ -28,18 +51,9 @@ class ImageExtractor:
         preflight_file_size(
             path,
             self._max_file_bytes,
-            read_error_message="Не удалось прочитать изображение",
+            read_error_message=_IMAGE_READ_ERROR,
         )
-        try:
-            with Image.open(path) as image:
-                width, height = image.size
-                if width * height > self._max_image_pixels:
-                    raise ExtractionError("Изображение слишком большое")
-                image.load()
-        except ExtractionError:
-            raise
-        except (OSError, UnidentifiedImageError) as error:
-            raise ExtractionError("Не удалось прочитать изображение") from error
+        width, height = preflight_image(path, self._max_image_pixels)
 
         block = NormalizedBlock(
             id=stable_block_id(source.id, BlockKind.IMAGE, "image:1", ""),
