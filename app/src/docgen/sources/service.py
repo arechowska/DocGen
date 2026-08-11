@@ -85,6 +85,7 @@ class SourceService:
                 stored_file.size_bytes,
                 stored_file.relative_path,
             )
+            self._project_repository.name_untitled_document_from_source(project_id, filename)
             self._session.commit()
         except Exception:
             self._session.rollback()

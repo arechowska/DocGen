@@ -2,7 +2,7 @@
 
 {% block content %}
   <main class="mx-auto min-h-screen max-w-4xl px-6 py-12 sm:px-10 lg:py-20">
-    <a href="/projects" class="text-sm font-medium text-[#0066cc]">Все проекты</a>
+    <a href="/projects" class="text-sm font-medium text-[#0066cc]">Все документы</a>
 
     <section class="mt-8 rounded-[28px] bg-white p-7 sm:p-10">
       {% include "projects/name_form.html" %}
@@ -20,8 +20,8 @@
       {% include "generation/setup.html" %}
     </section>
 
-    <form action="/projects/{{ project.id }}/delete" method="post" hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить проект?" class="mt-6">
-      <button class="rounded-full px-5 py-3 text-sm font-medium text-[#0066cc]" type="submit">Удалить проект</button>
+    <form action="/projects/{{ project.id }}/delete" method="post" hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить документ?" class="mt-6">
+      <button class="rounded-full px-5 py-3 text-sm font-medium text-[#0066cc]" type="submit">Удалить документ</button>
     </form>
   </main>
 {% endblock %}

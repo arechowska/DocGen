@@ -13,7 +13,7 @@ from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.web import templates
 
-from .repository import ProjectRepository
+from .repository import UNTITLED_DOCUMENT_NAME, ProjectRepository
 from .service import ProjectService
 
 router = APIRouter(prefix="/projects")
@@ -72,10 +72,12 @@ def project_list(request: Request, repository: ProjectRepositoryDependency):
 
 @router.post("")
 def create_project(
-    name: Annotated[str, Form()], session: SessionDependency, repository: ProjectRepositoryDependency
+    session: SessionDependency,
+    repository: ProjectRepositoryDependency,
+    name: Annotated[str | None, Form()] = None,
 ):
     try:
-        project = repository.create(name)
+        project = repository.create(name.strip() if name and name.strip() else UNTITLED_DOCUMENT_NAME)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 

@@ -20,14 +20,15 @@ def existing_project(client: TestClient) -> Project:
         session.close()
 
 
-def test_projects_page_lists_projects_and_create_button(
+def test_documents_page_lists_documents_and_create_button(
     client: TestClient, existing_project: Project
 ) -> None:
     response = client.get("/projects")
 
     assert response.status_code == 200
     assert existing_project.name in response.text
-    assert "Создать проект" in response.text
+    assert "Создать документ" in response.text
+    assert "Название документа" in response.text
 
 
 def test_create_project_redirects_to_detail(client: TestClient) -> None:
@@ -39,6 +40,27 @@ def test_create_project_redirects_to_detail(client: TestClient) -> None:
     detail = client.get(response.headers["location"])
     assert detail.status_code == 200
     assert "Новый Use Case" in detail.text
+
+
+def test_first_uploaded_source_names_an_untitled_document(client: TestClient) -> None:
+    created = client.post("/projects", data={"name": ""}, follow_redirects=False)
+    assert created.status_code == 303
+    project_id = created.headers["location"].rsplit("/", 1)[-1]
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={"file": ("Руководство пользователя.md", b"# Guide", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    session = client.app.state.session_factory()
+    try:
+        document = ProjectRepository(session).get(project_id)
+        assert document is not None
+        assert document.name == "Руководство пользователя"
+    finally:
+        session.close()
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

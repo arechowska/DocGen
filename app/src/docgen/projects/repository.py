@@ -1,7 +1,11 @@
+from pathlib import Path
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Project
+
+UNTITLED_DOCUMENT_NAME = "Новый документ"
 
 
 class ProjectRepository:
@@ -28,6 +32,17 @@ class ProjectRepository:
 
         project.name = self._validated_name(name)
         self._session.flush()
+        return project
+
+    def name_untitled_document_from_source(self, project_id: str, filename: str) -> Project:
+        project = self.get(project_id)
+        if project is None:
+            raise LookupError("Проект не найден")
+        if project.name == UNTITLED_DOCUMENT_NAME:
+            source_name = Path(filename).stem.strip()
+            if source_name:
+                project.name = self._validated_name(source_name)
+                self._session.flush()
         return project
 
     def delete(self, project_id: str) -> bool:
