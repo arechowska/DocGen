@@ -40,6 +40,14 @@ def configured_models(client: TestClient) -> None:
 
 
 @pytest.fixture
+def configured_text_model(client: TestClient) -> None:
+    settings = client.app.state.settings
+    settings.local_text_base_url = "http://text-model.test/v1"
+    settings.local_text_model = "text-model"
+    settings.trusted_integration_hosts = ("text-model.test",)
+
+
+@pytest.fixture
 def empty_project(client: TestClient) -> Project:
     return _create_project(client, "Пустой проект")
 
@@ -95,6 +103,18 @@ def test_start_assemble_enqueues_job(
 
     assert response.status_code == 202
     assert "Сборка поставлена в очередь" in response.text
+    assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
+
+
+def test_text_only_model_configuration_enqueues_assemble_job(
+    client: TestClient, configured_text_model: None, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "use-case"},
+    )
+
+    assert response.status_code == 202
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 

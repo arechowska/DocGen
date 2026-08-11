@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse, Response
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
-from docgen.ai.client import ModelConfigurationError, build_text_model, build_vision_model
+from docgen.ai.client import ModelConfigurationError, build_text_model
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.extraction.confluence import ConfluenceClient
@@ -226,7 +226,6 @@ def _start_job(
 def _dependency_error(request: Request, sources: list[Source]) -> str | None:
     try:
         build_text_model(request.app.state.settings)
-        build_vision_model(request.app.state.settings)
     except ModelConfigurationError:
         return "Локальные модели не настроены"
 

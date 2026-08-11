@@ -4,10 +4,14 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def repository_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOCGEN_",
-        env_file=Path(".env"),
+        env_file=repository_root() / ".env",
     )
 
     database_url: str = "sqlite:///./var/docgen.db"
