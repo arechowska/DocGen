@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
 from docgen.jobs.models import JobKind
@@ -39,6 +40,28 @@ def test_create_project_redirects_to_detail(client: TestClient) -> None:
     detail = client.get(response.headers["location"])
     assert detail.status_code == 200
     assert "Новый Use Case" in detail.text
+
+
+def test_project_detail_renders_three_area_workspace_without_document(
+    client: TestClient,
+) -> None:
+    created = client.post("/projects", data={"name": "Интерфейс"}, follow_redirects=False)
+    project_url = created.headers["location"]
+
+    response = client.get(project_url)
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find(id="project-workspace") is not None
+    assert soup.find(id="project-source-panel") is not None
+    assert soup.find(id="project-editor-panel") is not None
+    assert soup.find(id="project-action-panel") is not None
+    editor_shell = soup.find(id="editor-shell")
+    assert editor_shell is not None
+    assert editor_shell.get("data-state") == "empty"
+    assert "Соберите документ" in editor_shell.get_text(" ")
+    assert soup.find(id="generation-setup") is not None
+    assert soup.find(id="chat-panel") is None
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

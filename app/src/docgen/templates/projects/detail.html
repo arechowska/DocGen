@@ -1,27 +1,23 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <main class="mx-auto min-h-screen max-w-4xl px-6 py-12 sm:px-10 lg:py-20">
-    <a href="/projects" class="text-sm font-medium text-[#0066cc]">Все проекты</a>
-
-    <section class="mt-8 rounded-[28px] bg-white p-7 sm:p-10">
-      {% include "projects/name_form.html" %}
-
-      <div class="mt-12 border-t border-[#f5f5f7] pt-8">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <p class="text-sm font-medium text-[#707070]">Материалы</p>
-            <h2 class="mt-2 text-2xl font-semibold tracking-tight">Источники</h2>
-          </div>
+  <main class="min-h-screen">
+    <section class="docgen-topbar">
+      <div class="mx-auto flex w-full max-w-[1600px] flex-wrap items-center justify-between gap-4 px-6 py-6">
+        <div class="min-w-0">
+          <a href="/projects" class="text-sm font-medium text-white/90">Все проекты</a>
+          <div class="mt-3">{% include "projects/name_form.html" %}</div>
         </div>
-        {% include "sources/list.html" %}
+        <form action="/projects/{{ project.id }}/delete" method="post" hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить проект?">
+          <button class="docgen-topbar-button" type="submit">Удалить проект</button>
+        </form>
       </div>
-
-      {% include "generation/setup.html" %}
     </section>
 
-    <form action="/projects/{{ project.id }}/delete" method="post" hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить проект?" class="mt-6">
-      <button class="rounded-full px-5 py-3 text-sm font-medium text-[#0066cc]" type="submit">Удалить проект</button>
-    </form>
+    <section id="project-workspace" class="docgen-workspace mx-auto w-full max-w-[1600px] px-6 py-6">
+      {% include "projects/source_panel.html" %}
+      {% include "projects/work_panel.html" %}
+      {% include "projects/action_panel.html" %}
+    </section>
   </main>
 {% endblock %}

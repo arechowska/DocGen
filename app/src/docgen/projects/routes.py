@@ -110,6 +110,9 @@ def project_detail_response(
         request.app.state.settings.confluence_hosts,
     )
     documents = DocumentRepository(session)
+    stored_document = documents.get_document_with_revision(project_id)
+    document = stored_document[0] if stored_document is not None else None
+    revision = stored_document[1] if stored_document is not None else None
     sources = source_service.list(project_id)
     return templates.TemplateResponse(
         request=request,
@@ -122,7 +125,9 @@ def project_detail_response(
             "templates": TemplateCatalog().list(),
             "generation_error": None,
             "setup_fragment": False,
-            "has_document": documents.get_document(project_id) is not None,
+            "document": document,
+            "revision": revision,
+            "has_document": document is not None,
             "has_report": documents.get_report(project_id) is not None,
             "source_error": source_error,
         },
