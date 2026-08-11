@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse, Response
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
-from docgen.ai.client import ModelConfigurationError, build_text_model, build_vision_model
+from docgen.ai.client import ModelConfigurationError, build_text_model
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.extraction.confluence import ConfluenceClient
@@ -226,8 +226,6 @@ def _start_job(
 def _dependency_error(request: Request, sources: list[Source]) -> str | None:
     try:
         build_text_model(request.app.state.settings)
-        if _may_need_vision_model(sources):
-            build_vision_model(request.app.state.settings)
     except ModelConfigurationError:
         return "Локальные модели не настроены"
 
@@ -242,15 +240,6 @@ def _dependency_error(request: Request, sources: list[Source]) -> str | None:
         if settings.confluence_api_base is None or not token_value or not token_value.strip():
             return "Интеграция Confluence не настроена"
     return None
-
-
-def _may_need_vision_model(sources: list[Source]) -> bool:
-    for source in sources:
-        if source.kind is SourceKind.CONFLUENCE:
-            return True
-        if source.kind is SourceKind.FILE and (source.media_type or "").lower().startswith("image/"):
-            return True
-    return False
 
 
 def _project_or_404(session: Session, project_id: str) -> Project:

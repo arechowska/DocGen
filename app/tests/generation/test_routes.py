@@ -40,6 +40,14 @@ def configured_models(client: TestClient) -> None:
 
 
 @pytest.fixture
+def configured_text_model(client: TestClient) -> None:
+    settings = client.app.state.settings
+    settings.local_text_base_url = "http://text-model.test/v1"
+    settings.local_text_model = "text-model"
+    settings.trusted_integration_hosts = ("text-model.test",)
+
+
+@pytest.fixture
 def empty_project(client: TestClient) -> Project:
     return _create_project(client, "Пустой проект")
 

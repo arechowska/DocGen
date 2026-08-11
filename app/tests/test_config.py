@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from docgen import config
 from docgen.config import Settings
+
+
+def test_default_env_file_is_at_repository_root() -> None:
+    assert Settings.model_config["env_file"] == config.repository_root() / ".env"
 
 
 def test_resource_and_lease_defaults_are_conservative() -> None:
