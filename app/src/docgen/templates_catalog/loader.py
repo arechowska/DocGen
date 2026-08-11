@@ -9,10 +9,6 @@ from pydantic import ValidationError
 
 from docgen.templates_catalog.schemas import SemanticTemplate
 
-REQUIRED_TEMPLATE_IDS = frozenset(
-    {"faq", "use-case", "technical-spec", "release-notes", "api-docs"}
-)
-
 
 class TemplateConfigurationError(ValueError):
     """Raised when a semantic-template catalog cannot be loaded safely."""
@@ -40,35 +36,20 @@ _StrictYamlLoader.add_constructor(
 
 
 class TemplateCatalog:
-    def __init__(self, directory: Path | None = None) -> None:
+    def __init__(
+        self,
+        directory: Path | None = None,
+        *,
+        external_directory: Path | None = None,
+    ) -> None:
         self._directory = directory
+        self._external_directory = external_directory
 
     def list(self) -> list[SemanticTemplate]:
-        templates: list[SemanticTemplate] = []
-        template_ids: set[str] = set()
-        for resource in self._yaml_resources():
-            template = self._load_template(resource)
-            if template.id in template_ids:
-                raise TemplateConfigurationError(
-                    f"Повторяющийся идентификатор шаблона: {template.id}"
-                )
-            template_ids.add(template.id)
-            templates.append(template)
-        if template_ids != REQUIRED_TEMPLATE_IDS:
-            missing_ids = sorted(REQUIRED_TEMPLATE_IDS - template_ids)
-            unexpected_ids = sorted(template_ids - REQUIRED_TEMPLATE_IDS)
-            details: list[str] = []
-            if missing_ids:
-                details.append("отсутствуют: " + ", ".join(missing_ids))
-            if unexpected_ids:
-                details.append("лишние: " + ", ".join(unexpected_ids))
-            raise TemplateConfigurationError(
-                "Полный набор идентификаторов шаблонов должен быть "
-                + ", ".join(sorted(REQUIRED_TEMPLATE_IDS))
-                + "; "
-                + "; ".join(details)
-            )
-        return templates
+        templates = self._load_directory(self._base_directory())
+        if self._external_directory is not None:
+            templates.update(self._load_directory(self._external_directory))
+        return [templates[template_id] for template_id in sorted(templates)]
 
     def get(self, template_id: str) -> SemanticTemplate:
         for template in self.list():
@@ -76,8 +57,23 @@ class TemplateCatalog:
                 return template
         raise TemplateConfigurationError(f"Шаблон не найден: {template_id}")
 
-    def _yaml_resources(self) -> list[Any]:
-        directory = self._directory or files("docgen.templates_catalog").joinpath("semantic")
+    def _base_directory(self) -> Any:
+        return self._directory or files("docgen.templates_catalog").joinpath("semantic")
+
+    @classmethod
+    def _load_directory(cls, directory: Any) -> dict[str, SemanticTemplate]:
+        templates: dict[str, SemanticTemplate] = {}
+        for resource in cls._yaml_resources(directory):
+            template = cls._load_template(resource)
+            if template.id in templates:
+                raise TemplateConfigurationError(
+                    f"Повторяющийся идентификатор шаблона: {template.id}"
+                )
+            templates[template.id] = template
+        return templates
+
+    @staticmethod
+    def _yaml_resources(directory: Any) -> list[Any]:
         try:
             resources = [resource for resource in directory.iterdir() if resource.name.endswith(".yaml")]
         except FileNotFoundError as exc:

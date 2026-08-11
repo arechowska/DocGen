@@ -141,22 +141,28 @@ def test_catalog_rejects_unknown_yaml_fields(tmp_path: Path) -> None:
         TemplateCatalog(tmp_path).list()
 
 
-def test_catalog_rejects_missing_required_template_id(tmp_path: Path) -> None:
-    """Fails if a caller can use an incomplete catalog as a supported catalog."""
-    for template_id in REQUIRED_TEMPLATE_IDS - {"api-docs"}:
-        write_yaml(tmp_path / f"{template_id}.yaml", template_with_id(template_id))
-
-    with pytest.raises(TemplateConfigurationError, match="Полный набор идентификаторов"):
-        TemplateCatalog(tmp_path).list()
+def test_catalog_accepts_a_custom_catalog_with_any_template_ids(tmp_path: Path) -> None:
+    write_yaml(tmp_path / "custom.yaml", template_with_id("custom"))
 
 
-def test_catalog_rejects_extra_template_id(tmp_path: Path) -> None:
-    """Fails if an unsupported template can be silently added to the catalog."""
-    write_complete_catalog(tmp_path)
+    assert [template.id for template in TemplateCatalog(tmp_path).list()] == ["custom"]
+
+
+def test_catalog_adds_external_template_to_bundled_templates(tmp_path: Path) -> None:
     write_yaml(tmp_path / "other.yaml", template_with_id("other"))
 
-    with pytest.raises(TemplateConfigurationError, match="Полный набор идентификаторов"):
-        TemplateCatalog(tmp_path).list()
+    assert {template.id for template in TemplateCatalog(external_directory=tmp_path).list()} == (
+        REQUIRED_TEMPLATE_IDS | {"other"}
+    )
+
+
+def test_external_template_replaces_bundled_template_with_the_same_id(tmp_path: Path) -> None:
+    replacement = template_with_id("faq").replace(
+        "name: Корректный шаблон", "name: Корпоративный FAQ", 1
+    )
+    write_yaml(tmp_path / "faq.yaml", replacement)
+
+    assert TemplateCatalog(external_directory=tmp_path).get("faq").name == "Корпоративный FAQ"
 
 
 def test_catalog_rejects_english_section_title(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,3 +34,11 @@ class Settings(BaseSettings):
     max_archive_uncompressed_bytes: int = Field(default=209_715_200, gt=0)
     max_model_request_bytes: int = Field(default=20_971_520, gt=0)
     max_job_seconds: int = Field(default=300, gt=0)
+    template_dir: Path | None = None
+
+    @field_validator("template_dir")
+    @classmethod
+    def resolve_template_dir(cls, value: Path | None) -> Path | None:
+        if value is None or value.is_absolute():
+            return value
+        return repository_root() / value

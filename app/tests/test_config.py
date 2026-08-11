@@ -38,6 +38,12 @@ def test_trusted_hosts_are_loaded_from_json_environment(
     assert settings.trusted_integration_hosts == ("model.internal", "wiki.internal")
 
 
+def test_template_directory_can_be_configured(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, template_dir=tmp_path)
+
+    assert settings.template_dir == tmp_path
+
+
 @pytest.mark.parametrize(
     "field_name",
     [

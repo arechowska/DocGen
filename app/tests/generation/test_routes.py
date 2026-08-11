@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -106,8 +108,30 @@ def test_start_assemble_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 
-def test_start_assemble_with_text_source_does_not_require_vision_model(
-    client: TestClient, project_with_source: Project
+def test_start_assemble_accepts_external_semantic_template(
+    client: TestClient,
+    configured_models: None,
+    project_with_source: Project,
+    tmp_path: Path,
+) -> None:
+    bundled_faq = files("docgen.templates_catalog").joinpath("semantic/faq.yaml")
+    (tmp_path / "custom-faq.yaml").write_text(
+        bundled_faq.read_text(encoding="utf-8").replace("id: faq", "id: custom-faq", 1),
+        encoding="utf-8",
+    )
+    client.app.state.settings.template_dir = tmp_path
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "custom-faq"},
+    )
+
+    assert response.status_code == 202
+    assert _jobs_for_project(client, project_with_source.id)[0].template_id == "custom-faq"
+
+
+def test_text_only_model_configuration_enqueues_assemble_job(
+    client: TestClient, configured_text_model: None, project_with_source: Project
 ) -> None:
     settings = client.app.state.settings
     settings.local_text_base_url = "http://text-model.test/v1"

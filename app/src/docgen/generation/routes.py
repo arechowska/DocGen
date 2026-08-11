@@ -135,7 +135,7 @@ def _start_job(
     if not sources:
         return _setup_error(request, session, project, "Добавьте хотя бы один источник", 422)
 
-    catalog = TemplateCatalog()
+    catalog = TemplateCatalog(external_directory=request.app.state.settings.template_dir)
     try:
         template = catalog.get(template_id)
     except TemplateConfigurationError:
@@ -271,7 +271,9 @@ def _setup_error(
     *,
     catalog: TemplateCatalog | None = None,
 ) -> Response:
-    template_catalog = catalog or TemplateCatalog()
+    template_catalog = catalog or TemplateCatalog(
+        external_directory=request.app.state.settings.template_dir
+    )
     documents = DocumentRepository(session)
     if _wants_full_page(request):
         sources = SourceRepository(session).list_for_project(project.id)

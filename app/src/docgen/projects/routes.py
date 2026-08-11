@@ -119,7 +119,9 @@ def project_detail_response(
             "project_id": project_id,
             "sources": sources,
             "check_targets": supported_check_targets(sources),
-            "templates": TemplateCatalog().list(),
+            "templates": TemplateCatalog(
+                external_directory=request.app.state.settings.template_dir
+            ).list(),
             "generation_error": None,
             "setup_fragment": False,
             "has_document": documents.get_document(project_id) is not None,
