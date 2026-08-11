@@ -31,6 +31,7 @@ build-backend = "setuptools.build_meta"
   "templates/*.html",
   "templates/*/*.html",
   "static/css/*",
+  "static/js/*",
   "static/vendor/*",
 ]
 "docgen.templates_catalog" = ["semantic/*.yaml"]

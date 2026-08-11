@@ -503,7 +503,8 @@ def test_full_page_generation_error_keeps_workspace_context(
 
     assert response.status_code == 422
     assert 'id="project-workspace"' in response.text
-    assert 'id="editor-shell"' in response.text
+    assert 'id="docgen2Editor"' in response.text
+    assert 'id="docgen2DocumentCanvas"' in response.text
     assert 'data-state="ready"' in response.text
     assert "Шаблон не найден" in response.text
 

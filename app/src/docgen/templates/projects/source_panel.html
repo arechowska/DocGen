@@ -1,7 +1,154 @@
-<aside id="project-source-panel" class="docgen-panel">
-  <div class="mb-5">
-    <p class="docgen-eyebrow">Материалы</p>
-    <h2 class="mt-1 text-lg font-semibold text-[#101828]">Источники</h2>
+<section id="sourcesPanel" class="panel sources-panel mobile-active" aria-labelledby="sourcesTitle">
+  <a class="project-return-link" href="/projects" data-action="back-to-projects">← К выбору проекта</a>
+
+  <div class="panel-heading">
+    <h1 id="sourcesTitle">Источники</h1>
+    <span id="sourceCount" class="count">{{ sources|length }}</span>
   </div>
-  {% include "sources/list.html" %}
-</aside>
+
+  <form
+    action="/projects/{{ project_id }}/sources/files"
+    method="post"
+    enctype="multipart/form-data"
+    hx-post="/projects/{{ project_id }}/sources/files"
+    hx-encoding="multipart/form-data"
+    hx-target="#sourcesPanel"
+    hx-swap="outerHTML"
+    hx-indicator="#source-request-indicator"
+    hx-trigger="change from:#fileInput"
+  >
+    <label id="dropZone" class="drop-zone" for="fileInput">
+      <span class="file-glyph" aria-hidden="true"></span>
+      <strong>Перетащите DOCX сюда</strong>
+      <span>или нажмите для выбора</span>
+      <small>До 12 МБ на файл</small>
+    </label>
+    <input id="fileInput" class="visually-hidden" name="file" type="file" accept=".docx,.pdf,.txt,.md,.png,.jpg,.jpeg,.webp" required>
+    <button class="visually-hidden" type="submit">Добавить файл</button>
+  </form>
+
+  <form
+    id="urlForm"
+    class="url-form"
+    action="/projects/{{ project_id }}/sources/confluence"
+    method="post"
+    hx-post="/projects/{{ project_id }}/sources/confluence"
+    hx-target="#sourcesPanel"
+    hx-swap="outerHTML"
+    hx-indicator="#source-request-indicator"
+  >
+    <label for="urlInput">Добавить ссылку</label>
+    <div class="url-row">
+      <span class="link-icon" aria-hidden="true"></span>
+      <input id="urlInput" name="url" type="url" inputmode="url" placeholder="https://example.com/document" autocomplete="url" required>
+      <button class="icon-button" type="submit" title="Добавить ссылку" aria-label="Добавить ссылку">
+        <span class="arrow-icon" aria-hidden="true"></span>
+      </button>
+    </div>
+  </form>
+
+  <p id="source-request-indicator" class="htmx-indicator source-loading">Загрузка…</p>
+  <div id="sources-error" aria-live="polite">
+    {% if source_error %}
+      {% with error=source_error %}{% include "sources/error.html" %}{% endwith %}
+    {% endif %}
+  </div>
+
+  <div class="source-list-heading">
+    <h2>Добавлено</h2>
+    <span id="sourceSummary">{% if sources %}{{ sources|length }} источник{% else %}Нет источников{% endif %}</span>
+  </div>
+  <ul id="sourceList" class="source-list" aria-live="polite">
+    {% for source in sources %}
+      <li class="source-item">
+        <span class="source-type {% if source.kind.value != 'file' %}url{% endif %}">{% if source.kind.value == "file" %}W{% else %}URL{% endif %}</span>
+        <div class="source-data">
+          <strong title="{{ source.display_name }}">{{ source.display_name }}</strong>
+          <span>{% if source.kind.value == "file" %}DOCX{% else %}Confluence{% endif %}</span>
+        </div>
+        <form
+          action="/projects/{{ project_id }}/sources/{{ source.id }}/delete"
+          method="post"
+          hx-delete="/projects/{{ project_id }}/sources/{{ source.id }}"
+          hx-target="#sourcesPanel"
+          hx-swap="outerHTML"
+          hx-indicator="#source-request-indicator"
+          hx-confirm="Удалить источник?"
+        >
+          <button class="icon-button" type="submit" aria-label="Удалить источник">×</button>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+
+  {% if check_targets %}
+    <label class="check-target-control" for="checkTargetSelect">
+      <span>Документ для проверки</span>
+      <select id="checkTargetSelect" name="target_source_id" form="checkForm" {% if not has_document %}required{% endif %}>
+        {% if has_document %}<option value="">Текущий документ</option>{% endif %}
+        {% for source in check_targets %}
+          <option value="{{ source.id }}">{{ source.display_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  {% endif %}
+
+  <div class="source-note">
+    <span class="info-icon" aria-hidden="true">i</span>
+    <span>Источники используются для генерации. Правки вносятся через чат.</span>
+  </div>
+
+  <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle">
+    <div class="result-heading">
+      <h2 id="resultTitle">Результат</h2>
+      <span id="resultStatus" class="ready-label {% if has_document %}done{% endif %}">{% if has_document %}Готово{% else %}Не собран{% endif %}</span>
+    </div>
+    {% if has_document %}
+      <div id="resultReady" class="result-ready">
+        <div class="result-file">
+          <span id="resultFileIcon" class="result-file-icon">D</span>
+          <div>
+            <strong id="resultFilename">{{ document.title }}</strong>
+            <span id="resultMeta">DOCX · текущий документ</span>
+          </div>
+        </div>
+        <div class="result-actions">
+          <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
+            <span>Открыть</span>
+            <span class="external-icon" aria-hidden="true"></span>
+          </a>
+          <a id="downloadButton" class="button primary" href="/projects/{{ project.id }}/document">
+            <span class="download-icon" aria-hidden="true"></span>
+            <span>Скачать</span>
+          </a>
+        </div>
+      </div>
+    {% else %}
+      <div id="resultEmpty" class="result-empty">Готовый файл появится после сборки.</div>
+    {% endif %}
+  </section>
+
+  <form
+    id="assembleForm"
+    action="/projects/{{ project.id }}/jobs/assemble"
+    method="post"
+    hx-post="/projects/{{ project.id }}/jobs/assemble"
+    hx-target="#generation-status"
+    hx-swap="outerHTML"
+  ></form>
+  <form
+    id="checkForm"
+    action="/projects/{{ project.id }}/jobs/check"
+    method="post"
+    hx-post="/projects/{{ project.id }}/jobs/check"
+    hx-target="#generation-status"
+    hx-swap="outerHTML"
+  >
+    <input type="hidden" name="template_id" value="{% if templates %}{{ templates[0].id }}{% endif %}">
+  </form>
+  <div id="generation-status" aria-live="polite">
+    {% if generation_error %}
+      <section class="error-banner" role="alert">{{ generation_error }}</section>
+    {% endif %}
+  </div>
+</section>

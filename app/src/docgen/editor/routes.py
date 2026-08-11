@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import uuid4
 
+from bs4 import BeautifulSoup, Comment
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import Response
-from pydantic import ValidationError
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from docgen.documents.edit_service import DocumentEditService, EditConflict
@@ -28,6 +29,11 @@ from docgen.web import templates
 router = APIRouter(prefix="/projects")
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+
+
+class Docgen2SavePayload(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    html: str = Field(max_length=500_000)
 
 
 @router.get("/{project_id}/editor")
@@ -53,6 +59,38 @@ def editor_view(request: Request, project_id: str, session: SessionDependency) -
             "revision": revision,
         },
     )
+
+
+@router.post("/{project_id}/editor/save")
+def save_docgen2_workspace(
+    project_id: str,
+    payload: Docgen2SavePayload,
+    session: SessionDependency,
+) -> Response:
+    project = _project_or_404(session, project_id)
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Название проекта обязательно",
+        )
+    project.name = title
+    html = _sanitize_workspace_html(payload.html)
+    document = WorkingDocument(
+        title=title,
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                id="docgen2-workspace",
+                kind=NodeKind.PARAGRAPH,
+                text=_workspace_text(html),
+                data={"html": html},
+            )
+        ],
+    )
+    revision = DocumentRepository(session).save_document(project_id, document)
+    session.commit()
+    return JSONResponse({"revision": revision, "title": title})
 
 
 @router.patch("/{project_id}/editor/nodes/{node_id}/text")
@@ -244,12 +282,14 @@ async def update_image_node(
     )
 
 
-def _project_or_404(session: Session, project_id: str) -> None:
-    if ProjectRepository(session).get(project_id) is None:
+def _project_or_404(session: Session, project_id: str):
+    project = ProjectRepository(session).get(project_id)
+    if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Проект не найден",
         )
+    return project
 
 
 def _apply_and_render_node(
@@ -411,6 +451,85 @@ def _validated_payload(model, payload):
 
 def _is_json(request: Request) -> bool:
     return "application/json" in request.headers.get("content-type", "")
+
+
+ALLOWED_WORKSPACE_TAGS = {
+    "a",
+    "b",
+    "blockquote",
+    "br",
+    "code",
+    "div",
+    "em",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "th",
+    "thead",
+    "tr",
+    "u",
+    "ul",
+}
+
+ALLOWED_WORKSPACE_ATTRIBUTES = {
+    "a": {"href", "title"},
+    "img": {"alt", "src", "title"},
+    "td": {"colspan", "rowspan"},
+    "th": {"colspan", "rowspan"},
+}
+
+
+def _sanitize_workspace_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+    for tag in list(soup.find_all(True)):
+        if tag.name in {"script", "style", "template"}:
+            tag.decompose()
+            continue
+        if tag.name not in ALLOWED_WORKSPACE_TAGS:
+            tag.unwrap()
+            continue
+        allowed_attributes = ALLOWED_WORKSPACE_ATTRIBUTES.get(tag.name, set())
+        for attribute in list(tag.attrs):
+            if attribute not in allowed_attributes:
+                del tag.attrs[attribute]
+                continue
+            value = tag.attrs.get(attribute)
+            if attribute in {"href", "src"} and not _is_safe_workspace_url(value):
+                del tag.attrs[attribute]
+    return "".join(str(item) for item in soup.contents).strip()
+
+
+def _is_safe_workspace_url(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(
+        ("#", "/", "http://", "https://", "mailto:", "data:image/")
+    )
+
+
+def _workspace_text(html: str) -> str:
+    return BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
 
 
 def _new_node(kind: str) -> DocumentNode:

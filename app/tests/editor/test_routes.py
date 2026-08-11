@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,7 @@ from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.main import create_app
 from docgen.models import Project
+from docgen.projects.repository import ProjectRepository
 
 
 @pytest.fixture
@@ -177,6 +179,63 @@ def test_delete_node_removes_it_from_document(
             "image-1",
             "gap-1",
         ]
+
+
+def test_docgen2_editor_save_stores_title_and_workspace_html(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Saved workspace",
+            "html": "<h1>Saved workspace</h1><p><strong>Important</strong> paragraph</p><table><tbody><tr><td>A</td></tr></tbody></table>",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["revision"] == 2
+    with _session(client) as session:
+        project = ProjectRepository(session).get(project_with_document.id)
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert project is not None
+        assert project.name == "Saved workspace"
+        assert document is not None
+        assert document.title == "Saved workspace"
+        assert document.nodes == [
+            DocumentNode(
+                id="docgen2-workspace",
+                kind=NodeKind.PARAGRAPH,
+                text="Saved workspace Important paragraph A",
+                data={
+                    "html": "<h1>Saved workspace</h1><p><strong>Important</strong> paragraph</p><table><tbody><tr><td>A</td></tr></tbody></table>",
+                },
+            )
+        ]
+
+
+def test_project_detail_restores_saved_docgen2_workspace_html(
+    client: TestClient, project_with_document: Project
+) -> None:
+    saved = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Restored project",
+            "html": "<h1>Restored</h1><p><em>Editable</em> content</p>",
+        },
+    )
+    assert saved.status_code == 200
+
+    response = client.get(f"/projects/{project_with_document.id}")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    title = soup.find(id="docgen2EditorTitle")
+    canvas = soup.find(id="docgen2DocumentCanvas")
+    assert title is not None
+    assert title.get("value") == "Restored project"
+    assert canvas is not None
+    assert canvas.find("em") is not None
+    assert canvas.get_text(" ", strip=True) == "Restored Editable content"
 
 
 @contextmanager

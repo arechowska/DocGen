@@ -50,7 +50,10 @@ def test_upload_file_returns_updated_source_list(
 
     assert response.status_code == 200
     assert "case.md" in response.text
-    assert "Файл" in response.text
+    assert 'id="sourcesPanel"' in response.text
+    assert 'class="panel sources-panel mobile-active"' in response.text
+    assert 'id="sources-panel"' not in response.text
+    assert "DOCX" in response.text
 
 
 def test_chunked_upload_is_rejected_before_spool_exceeds_file_limit(
@@ -107,6 +110,8 @@ def test_chunked_upload_is_rejected_before_spool_exceeds_file_limit(
     )
     assert accepted.status_code == 200
     assert "boundary.md" in accepted.text
+    assert 'id="sourcesPanel"' in accepted.text
+    assert 'id="sources-panel"' not in accepted.text
 
 
 @pytest.mark.parametrize(
@@ -160,6 +165,8 @@ def test_add_confluence_link_returns_updated_source_list(
 
     assert response.status_code == 200
     assert "wiki.example.test" in response.text
+    assert 'id="sourcesPanel"' in response.text
+    assert 'id="sources-panel"' not in response.text
     assert "Confluence" in response.text
 
 
@@ -245,7 +252,8 @@ def test_delete_source_returns_updated_source_list(
     )
 
     assert response.status_code == 200
-    assert "Источники пока не добавлены." in response.text
+    assert 'id="sourcesPanel"' in response.text
+    assert "Нет источников" in response.text
     assert "case.md" not in response.text
 
 

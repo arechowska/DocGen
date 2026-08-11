@@ -1,23 +1,55 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <main class="min-h-screen">
-    <section class="docgen-topbar">
-      <div class="mx-auto flex w-full max-w-[1600px] flex-wrap items-center justify-between gap-4 px-6 py-6">
-        <div class="min-w-0">
-          <a href="/projects" class="text-sm font-medium text-white/90">Все проекты</a>
-          <div class="mt-3">{% include "projects/name_form.html" %}</div>
-        </div>
-        <form action="/projects/{{ project.id }}/delete" method="post" hx-delete="/projects/{{ project.id }}" hx-confirm="Удалить проект?">
-          <button class="docgen-topbar-button" type="submit">Удалить проект</button>
-        </form>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="Colvir Formatta">
+        <span class="brand-mark" aria-hidden="true">F</span>
+        <span class="brand-copy">
+          <strong>Formatta</strong>
+        </span>
       </div>
-    </section>
 
-    <section id="project-workspace" class="docgen-workspace mx-auto w-full max-w-[1600px] px-6 py-6">
+      <label class="control template-control">
+        <span>Шаблон</span>
+        <select id="templateSelect" name="template_id" form="assembleForm" {% if not sources %}disabled{% endif %}>
+          {% for semantic_template in templates %}
+            <option value="{{ semantic_template.id }}" {% if semantic_template.id == "use-case" %}selected{% endif %}>{{ semantic_template.name }}{% if semantic_template.id == "use-case" %} (Use Case){% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="control format-control">
+        <span>Формат</span>
+        <select id="formatSelect" name="format" form="assembleForm">
+          <option value="docx">DOCX</option>
+          <option value="html">HTML</option>
+          <option value="pdf">PDF</option>
+        </select>
+      </label>
+
+      <div class="topbar-actions">
+        <button id="reviewButton" class="button secondary" type="submit" form="checkForm" {% if not has_document %}disabled{% endif %}>
+          <span class="button-icon shield-icon" aria-hidden="true"></span>
+          <span>Проверить по шаблону</span>
+        </button>
+        <button id="buildButton" class="button primary" type="submit" form="assembleForm" {% if not sources %}disabled{% endif %}>
+          <span class="button-icon build-icon" aria-hidden="true"></span>
+          <span>Собрать</span>
+        </button>
+      </div>
+    </header>
+
+    <nav class="mobile-tabs" aria-label="Разделы">
+      <button class="mobile-tab active" data-panel="sourcesPanel" type="button">Источники</button>
+      <button class="mobile-tab" data-panel="docgen2Editor" type="button">Редактор</button>
+      <button class="mobile-tab" data-panel="chatPanel" type="button">Чат</button>
+    </nav>
+
+    <main class="workspace" id="project-workspace">
       {% include "projects/source_panel.html" %}
       {% include "projects/work_panel.html" %}
       {% include "projects/action_panel.html" %}
-    </section>
-  </main>
+    </main>
+  </div>
 {% endblock %}

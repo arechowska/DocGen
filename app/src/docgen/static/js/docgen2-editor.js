@@ -1,0 +1,272 @@
+(() => {
+  document.querySelectorAll("form[data-confirm-delete]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      const message = form.dataset.confirmMessage || "Удалить проект?";
+      if (!window.confirm(message)) event.preventDefault();
+    });
+  });
+
+  document.querySelectorAll(".mobile-tab[data-panel]").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".mobile-tab").forEach((item) => item.classList.remove("active"));
+      document.querySelectorAll(".workspace > .panel").forEach((panel) => {
+        panel.classList.remove("mobile-active");
+      });
+      tab.classList.add("active");
+      document.querySelector(`#${CSS.escape(tab.dataset.panel)}`)?.classList.add("mobile-active");
+    });
+  });
+
+  const editor = document.querySelector("#docgen2Editor");
+  if (!editor) return;
+
+  const canvas = editor.querySelector("#docgen2DocumentCanvas");
+  const titleInput = editor.querySelector("#docgen2EditorTitle");
+  const headingSelect = editor.querySelector("[data-editor-heading]");
+  const imageInput = editor.querySelector("#docgen2ImageInput");
+  const tableButton = editor.querySelector("[data-editor-command=\"table\"]");
+  const tableMenu = editor.querySelector("#tableMenu");
+  const tableRows = editor.querySelector("[data-table-rows]");
+  const tableColumns = editor.querySelector("[data-table-columns]");
+  const saveButton = editor.querySelector("[data-editor-save]");
+  const saveStatus = editor.querySelector("[data-editor-save-status]");
+  if (!canvas) return;
+  let lastTableContext = null;
+
+  const focusCanvas = () => {
+    canvas.focus();
+  };
+
+  const runCommand = (command, value = null) => {
+    focusCanvas();
+    document.execCommand(command, false, value);
+  };
+
+  const setSaveStatus = (message, state = "") => {
+    if (!saveStatus) return;
+    saveStatus.textContent = message;
+    saveStatus.dataset.state = state;
+  };
+
+  const markDocumentReady = () => {
+    const statusBadge = document.querySelector("#statusBadge");
+    const statusText = document.querySelector("#statusText");
+    const chatInput = document.querySelector("#chatInput");
+    const sendButton = document.querySelector("#sendButton");
+    statusBadge?.setAttribute("data-state", "ready");
+    if (statusText) statusText.textContent = "Готово";
+    chatInput?.removeAttribute("disabled");
+    sendButton?.removeAttribute("disabled");
+  };
+
+  const saveWorkspace = async () => {
+    const saveUrl = editor.dataset.saveUrl;
+    if (!saveUrl || !saveButton) return;
+    saveButton.disabled = true;
+    setSaveStatus("Сохранение...", "pending");
+    try {
+      const response = await fetch(saveUrl, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: titleInput?.value || "Новый документ",
+          html: canvas.innerHTML,
+        }),
+      });
+      if (!response.ok) throw new Error("save failed");
+      await response.json();
+      markDocumentReady();
+      setSaveStatus("Сохранено", "saved");
+    } catch {
+      setSaveStatus("Не удалось сохранить", "error");
+    } finally {
+      saveButton.disabled = false;
+    }
+  };
+
+  const closeTableMenu = () => {
+    if (!tableMenu || !tableButton) return;
+    tableMenu.hidden = true;
+    tableButton.setAttribute("aria-expanded", "false");
+  };
+
+  const toggleTableMenu = () => {
+    if (!tableMenu || !tableButton) return;
+    tableMenu.hidden = !tableMenu.hidden;
+    tableButton.setAttribute("aria-expanded", tableMenu.hidden ? "false" : "true");
+  };
+
+  const clampSize = (value) => {
+    const number = Number.parseInt(value, 10);
+    if (Number.isNaN(number)) return 3;
+    return Math.min(6, Math.max(1, number));
+  };
+
+  const tableCellHtml = (tag) => `<${tag}><br></${tag}>`;
+
+  const insertTable = (rows = 3, columns = 3) => {
+    const safeRows = clampSize(rows);
+    const safeColumns = clampSize(columns);
+    const body = Array.from({ length: safeRows }, (_, rowIndex) => {
+      const tag = rowIndex === 0 ? "th" : "td";
+      const cells = Array.from({ length: safeColumns }, () => tableCellHtml(tag)).join("");
+      return `<tr>${cells}</tr>`;
+    }).join("");
+    runCommand("insertHTML", `<table><tbody>${body}</tbody></table><p></p>`);
+  };
+
+  const rememberTableContext = (cell) => {
+    const table = cell?.closest("table") || null;
+    const row = cell?.closest("tr") || null;
+    if (!table || !row || !cell) return null;
+    lastTableContext = {
+      table,
+      row,
+      rowIndex: Array.from(table.querySelectorAll("tr")).indexOf(row),
+      cellIndex: cell.cellIndex,
+    };
+    return lastTableContext;
+  };
+
+  const contextCell = () => {
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    const selectedCell = element?.closest("td,th") || null;
+    if (selectedCell) return rememberTableContext(selectedCell)?.row.children[selectedCell.cellIndex] || null;
+    const table = lastTableContext?.table;
+    if (!table?.isConnected) return null;
+    const row =
+      lastTableContext.row?.isConnected
+        ? lastTableContext.row
+        : table.querySelectorAll("tr")[Math.min(lastTableContext.rowIndex, table.querySelectorAll("tr").length - 1)];
+    return row?.children[Math.min(lastTableContext.cellIndex, row.children.length - 1)] || null;
+  };
+
+  const currentRow = () => contextCell()?.closest("tr") || null;
+
+  const currentTable = () => contextCell()?.closest("table") || null;
+
+  const addTableRow = () => {
+    const row = currentRow();
+    if (!row) return;
+    const clone = row.cloneNode(true);
+    clone.querySelectorAll("td,th").forEach((cell) => {
+      cell.innerHTML = "<br>";
+    });
+    row.after(clone);
+  };
+
+  const deleteTableRow = () => {
+    const row = currentRow();
+    const table = currentTable();
+    if (!row || !table) return;
+    if (table.querySelectorAll("tr").length <= 1) {
+      table.remove();
+      return;
+    }
+    row.remove();
+  };
+
+  const addTableColumn = () => {
+    const cell = contextCell();
+    const table = currentTable();
+    if (!cell || !table) return;
+    const index = cell.cellIndex;
+    table.querySelectorAll("tr").forEach((row) => {
+      const reference = row.children[index];
+      const tag = reference?.tagName.toLowerCase() === "th" ? "th" : "td";
+      const newCell = document.createElement(tag);
+      newCell.innerHTML = "<br>";
+      reference?.after(newCell);
+    });
+  };
+
+  const deleteTableColumn = () => {
+    const cell = contextCell();
+    const table = currentTable();
+    if (!cell || !table) return;
+    const index = cell.cellIndex;
+    const firstRow = table.querySelector("tr");
+    if ((firstRow?.children.length || 0) <= 1) {
+      table.remove();
+      return;
+    }
+    table.querySelectorAll("tr").forEach((row) => {
+      row.children[index]?.remove();
+    });
+  };
+
+  canvas.addEventListener("keyup", () => {
+    contextCell();
+  });
+
+  canvas.addEventListener("mouseup", () => {
+    contextCell();
+  });
+
+  const insertImage = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      runCommand("insertImage", String(reader.result));
+    });
+    reader.readAsDataURL(file);
+  };
+
+  editor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-editor-command]");
+    if (!button) return;
+    const command = button.dataset.editorCommand;
+    if (command === "link") {
+      const selectedText = String(window.getSelection() || "");
+      const url = window.prompt("Адрес ссылки", selectedText.startsWith("http") ? selectedText : "");
+      if (url) runCommand("createLink", url);
+      return;
+    }
+    if (command === "image") {
+      imageInput?.click();
+      return;
+    }
+    if (command === "table") {
+      toggleTableMenu();
+      return;
+    }
+    runCommand(command);
+  });
+
+  tableMenu?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-table-action]");
+    if (!button) return;
+    event.preventDefault();
+    const action = button.dataset.tableAction;
+    if (action === "insert") insertTable(tableRows?.value, tableColumns?.value);
+    if (action === "add-row") addTableRow();
+    if (action === "delete-row") deleteTableRow();
+    if (action === "add-column") addTableColumn();
+    if (action === "delete-column") deleteTableColumn();
+    if (action === "insert") closeTableMenu();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!tableMenu || tableMenu.hidden) return;
+    if (editor.contains(event.target)) return;
+    closeTableMenu();
+  });
+
+  headingSelect?.addEventListener("change", () => {
+    runCommand("formatBlock", headingSelect.value || "p");
+  });
+
+  imageInput?.addEventListener("change", () => {
+    insertImage(imageInput.files?.[0]);
+    imageInput.value = "";
+  });
+
+  saveButton?.addEventListener("click", () => {
+    saveWorkspace();
+  });
+})();

@@ -15,6 +15,7 @@ def test_ui_uses_local_assets_and_restrictive_csp(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert 'src="/static/vendor/htmx-2.0.8.min.js"' in response.text
+    assert 'src="/static/js/docgen2-editor.js"' in response.text
     assert 'href="/static/css/docgen.css"' in response.text
     assert "https://cdn.tailwindcss.com" not in response.text
     assert "unpkg.com" not in response.text
@@ -25,6 +26,7 @@ def test_ui_uses_local_assets_and_restrictive_csp(client: TestClient) -> None:
     assert "object-src 'none'" in csp
     assert "unsafe-inline" not in csp
     assert client.get("/static/vendor/htmx-2.0.8.min.js").status_code == 200
+    assert client.get("/static/js/docgen2-editor.js").status_code == 200
     stylesheet = client.get("/static/css/docgen.css")
     assert stylesheet.status_code == 200
     assert ".htmx-indicator{opacity:0}" in stylesheet.text
@@ -62,16 +64,69 @@ def test_workspace_css_contains_corporate_layout_tokens(client: TestClient) -> N
     assert stylesheet.status_code == 200
     css = stylesheet.text.lower()
     for token in (
-        ".docgen-workspace",
-        "grid-template-columns:320px minmax(0,1fr) 320px",
+        ".app-shell",
+        ".topbar",
+        ".mobile-tabs",
+        ".workspace",
+        "grid-template-columns:clamp(300px,17vw,360px) minmax(620px,1fr)",
+        "grid-template-rows:minmax(0,2fr) minmax(0,1fr)",
+        ".sources-panel",
+        ".editor-card",
+        ".editor-topline",
+        ".document-canvas",
+        ".tool-button",
+        ".table-menu",
+        ".table-size-grid",
+        ".chat-panel",
+        ".result-panel",
+        ".project-card-link{min-height:76px;display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center",
+        ".project-delete-button{position:absolute;top:10px;right:10px",
         "#60bcff",
         "#3196df",
         "#f9f9fc",
         "#f3f6fa",
-        ".docgen-document-sheet",
         "@media (max-width:1023px)",
     ):
         assert token in css
+
+
+def test_heading_select_chevron_is_vertically_aligned_like_docgen2(
+    client: TestClient,
+) -> None:
+    stylesheet = client.get("/static/css/docgen.css")
+
+    assert stylesheet.status_code == 200
+    css = stylesheet.text.lower()
+    assert ".select-chevron{position:absolute;top:11px;right:9px" in css
+
+
+def test_docgen2_editor_script_supports_table_menu_and_table_edits(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    source = script.text
+    for token in (
+        '[data-editor-command=\\"table\\"]',
+        "tableMenu",
+        "data-table-action",
+        "insertTable",
+        "addTableRow",
+        "deleteTableRow",
+        "addTableColumn",
+        "deleteTableColumn",
+        "closest(\"table\")",
+    ):
+        assert token in source
+
+
+def test_shared_ui_script_confirms_project_delete_forms(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    source = script.text
+    assert "form[data-confirm-delete]" in source
+    assert "window.confirm(message)" in source
+    assert "event.preventDefault()" in source
 
 
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(

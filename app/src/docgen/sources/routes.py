@@ -7,8 +7,12 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 
+from docgen.documents.repository import DocumentRepository
+from docgen.generation.targets import supported_check_targets
 from docgen.jobs.repository import ActiveProjectJobExists
+from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import SessionDependency, project_detail_response
+from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.web import templates
 
 from .service import SourceService
@@ -80,11 +84,38 @@ def _error_response(
     return response
 
 
-def _source_list_response(request: Request, project_id: str, service: SourceService):
+def _source_list_response(
+    request: Request,
+    project_id: str,
+    service: SourceService,
+    session: Session | None = None,
+):
     if _wants_full_page(request):
         return RedirectResponse(
             url=f"/projects/{project_id}",
             status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if session is not None:
+        project = ProjectRepository(session).get(project_id)
+        if project is None:
+            raise LookupError("Проект не найден")
+        documents = DocumentRepository(session)
+        document = documents.get_document(project_id)
+        sources = service.list(project_id)
+        return templates.TemplateResponse(
+            request=request,
+            name="projects/source_panel.html",
+            context={
+                "project": project,
+                "project_id": project_id,
+                "sources": sources,
+                "check_targets": supported_check_targets(sources),
+                "templates": TemplateCatalog().list(),
+                "document": document,
+                "has_document": document is not None,
+                "generation_error": None,
+                "source_error": None,
+            },
         )
     return templates.TemplateResponse(
         request=request,
@@ -107,9 +138,10 @@ def _add_file_response(
     media_type: str,
     stream: BinaryIO,
     service: SourceService,
+    session: Session | None = None,
 ):
     service.add_file(project_id, filename, media_type, stream)
-    return _source_list_response(request, project_id, service)
+    return _source_list_response(request, project_id, service, session)
 
 
 async def _parse_single_upload(request: Request, max_file_bytes: int) -> UploadFile:
@@ -150,6 +182,7 @@ async def _process_upload(
             file.content_type or "application/octet-stream",
             file.file,
             service,
+            session,
         )
     except ValueError as error:
         return _error_response(
@@ -200,7 +233,7 @@ def add_confluence(
 ):
     try:
         service.add_confluence(project_id, url)
-        return _source_list_response(request, project_id, service)
+        return _source_list_response(request, project_id, service, session)
     except ValueError as error:
         return _error_response(
             request,
@@ -225,7 +258,7 @@ def delete_source(
 ):
     try:
         service.delete(project_id, source_id)
-        return _source_list_response(request, project_id, service)
+        return _source_list_response(request, project_id, service, session)
     except LookupError as error:
         return _error_response(
             request, project_id, error, status.HTTP_404_NOT_FOUND, session
