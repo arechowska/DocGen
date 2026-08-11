@@ -192,7 +192,7 @@ def _assemble_prompt(template: SemanticTemplate, blocks: list[NormalizedBlock]) 
             "верхнеуровневый узел с точным section_id. Для каждого фактического узла "
             "укажите id исходного блока в provenance.source_id, его исходный locator и "
             "точную непустую quote из текста блока. Если данных для раздела нет, создайте "
-            "пустой gap с section_id и флагом missing-source-data. Не требуйте, чтобы "
+            "пустой gap с section_id и флагом missing-source-data. не требуйте, чтобы "
             "источник уже был написан в формате шаблона: преобразуйте подтверждённые факты "
             "из источников в нужную структуру, если каждый вывод можно подтвердить точной quote."
         ),
@@ -210,7 +210,7 @@ def _json_rules(template: SemanticTemplate) -> str:
     return (
         f"Верните только объект WorkingDocument: title, template_id='{template.id}', nodes. "
         f"В nodes должен быть ровно один верхнеуровневый node для каждого section_id: "
-        f"{section_ids}. Не добавляйте section_id вне этого списка и не дублируйте section_id. "
+        f"{section_ids}. не добавляйте section_id вне этого списка и не дублируйте section_id. "
         "Если section_id можно заполнить фактами из источников, node не должен быть kind='gap'. "
         "Для kind='gap' используйте section_id из списка разделов, flags=['missing-source-data'], "
         "без text, data, children и provenance. Для kind='list' кладите элементы списка в data.items "

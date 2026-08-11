@@ -286,6 +286,9 @@ def _setup_error(
     documents = DocumentRepository(session)
     if _wants_full_page(request):
         sources = SourceRepository(session).list_for_project(project.id)
+        stored_document = documents.get_document_with_revision(project.id)
+        document = stored_document[0] if stored_document is not None else None
+        revision = stored_document[1] if stored_document is not None else None
         return templates.TemplateResponse(
             request=request,
             name="projects/detail.html",
@@ -299,8 +302,11 @@ def _setup_error(
                 "templates": template_catalog.list(),
                 "generation_error": message,
                 "setup_fragment": False,
-                "has_document": documents.get_document(project.id) is not None,
+                "document": document,
+                "revision": revision,
+                "has_document": document is not None,
                 "has_report": documents.get_report(project.id) is not None,
+                "source_error": None,
             },
             status_code=status_code,
         )
@@ -355,11 +361,19 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                 else None
             )
             if document is not None:
-                return _document_response(
+                if _wants_full_page(request):
+                    return _document_response(
+                        request,
+                        job.project_id,
+                        document,
+                        standalone=True,
+                        warnings=job.warning_messages,
+                    )
+                return _editor_response(
                     request,
                     job.project_id,
                     document,
-                    standalone=_wants_full_page(request),
+                    job.result_document_revision or 1,
                     warnings=job.warning_messages,
                 )
         else:
@@ -411,6 +425,26 @@ def _document_response(
             "project_id": project_id,
             "document": document,
             "standalone": standalone,
+            "warnings": warnings,
+        },
+    )
+
+
+def _editor_response(
+    request: Request,
+    project_id: str,
+    document: WorkingDocument,
+    revision: int,
+    *,
+    warnings: tuple[str, ...] = (),
+) -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="editor/surface.html",
+        context={
+            "project_id": project_id,
+            "document": document,
+            "revision": revision,
             "warnings": warnings,
         },
     )

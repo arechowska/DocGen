@@ -1,0 +1,39 @@
+<section id="chatPanel" class="panel chat-panel" aria-labelledby="chatTitle">
+  <div class="panel-heading chat-heading">
+    <h1 id="chatTitle">Чат</h1>
+    <span id="statusBadge" class="status-badge" data-state="{% if document %}ready{% else %}idle{% endif %}">
+      <span class="status-dot"></span>
+      <span id="statusText">{% if document %}Готово{% else %}Ожидание{% endif %}</span>
+    </span>
+  </div>
+
+  <div id="messages" class="messages" aria-live="polite">
+    {% if not document %}
+      <div class="empty-chat">
+        <span class="chat-glyph" aria-hidden="true"></span>
+        <strong>Загрузите материалы</strong>
+        <p>После сборки здесь можно уточнять и дополнять документ.</p>
+      </div>
+    {% endif %}
+    <div id="chat-messages"></div>
+  </div>
+
+  <div id="errorBanner" class="error-banner" role="alert" hidden></div>
+
+  <form
+    id="chatForm"
+    class="chat-form"
+    action="/projects/{{ project_id }}/chat"
+    method="post"
+    hx-post="/projects/{{ project_id }}/chat"
+    hx-target="#chat-messages"
+    hx-swap="beforeend"
+  >
+    <textarea id="chatInput" name="message" rows="1" maxlength="4000" placeholder="Напишите, что изменить..." {% if not document %}disabled{% endif %}></textarea>
+    <input type="hidden" name="revision" value="{{ revision }}">
+    <button id="sendButton" class="send-button" type="submit" title="Отправить" aria-label="Отправить" {% if not document %}disabled{% endif %}>
+      <span class="send-icon" aria-hidden="true"></span>
+    </button>
+  </form>
+  <p class="chat-help">Редактор и файл обновляются после каждой правки.</p>
+</section>

@@ -74,6 +74,14 @@ def test_edit_chat_save_restart_and_recheck() -> None:
         assert "Ручная правка" in editor.text
         assert "Уточнённый результат" in editor.text
 
+        project_page = restarted.get(f"/projects/{project_id}")
+        assert project_page.status_code == 200
+        assert 'id="project-workspace"' in project_page.text
+        assert 'id="docgen2Editor"' in project_page.text
+        assert 'id="docgen2DocumentCanvas"' in project_page.text
+        assert "Ручная правка" in project_page.text
+        assert "Уточнённый результат" in project_page.text
+
         response = restarted.post(
             f"/projects/{project_id}/jobs/check",
             data={"template_id": "use-case"},

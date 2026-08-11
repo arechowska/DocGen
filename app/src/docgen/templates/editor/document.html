@@ -1,43 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Редактор DocGen{% endblock %}
+{% block title %}Редактор Formatta{% endblock %}
 
 {% block content %}
-<main class="mx-auto flex w-full max-w-6xl gap-6 px-6 py-8" id="editor-shell">
-  <section
-    class="min-w-0 flex-1"
-    id="editor-document"
-    data-project-id="{{ project_id }}"
-    data-revision="{{ revision }}"
-    hx-get="/projects/{{ project_id }}/editor"
-    hx-trigger="docgen:document-updated from:body"
-    hx-target="#editor-shell"
-    hx-swap="outerHTML"
-  >
-    <div class="mb-6 flex items-center justify-between gap-4">
-      <div>
-        <p class="text-sm text-slate-500">Рабочий документ</p>
-        <h1 class="text-2xl font-semibold text-slate-950">{{ document.title }}</h1>
-      </div>
-      <a class="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" href="/projects/{{ project_id }}">К проекту</a>
+<main id="editor-page" class="mx-auto flex w-full max-w-[1400px] gap-6 px-6 py-8">
+  <section class="min-w-0 flex-1">
+    <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <a class="text-sm font-medium text-[#3196df]" href="/projects/{{ project_id }}">К проекту</a>
     </div>
-    <div class="mb-4 flex flex-wrap gap-2">
-      {% for kind, label in [("heading", "Раздел"), ("paragraph", "Абзац"), ("list", "Список"), ("table", "Таблица")] %}
-        <button
-          class="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-          type="button"
-          hx-post="/projects/{{ project_id }}/editor/nodes"
-          hx-vals='{"kind": "{{ kind }}", "revision": "{{ revision }}"}'
-          hx-target="#editor-shell"
-          hx-swap="outerHTML"
-        >{{ label }}</button>
-      {% endfor %}
-    </div>
-    <div class="space-y-3">
-      {% for node in document.nodes %}
-        {% include "editor/node.html" %}
-      {% endfor %}
-    </div>
+    {% include "editor/surface.html" %}
   </section>
   {% include "chat/panel.html" %}
 </main>

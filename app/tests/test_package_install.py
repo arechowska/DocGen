@@ -40,11 +40,16 @@ def test_wheel_clean_install_renders_pages_outside_source_tree(tmp_path: Path) -
     with ZipFile(wheel) as archive:
         members = set(archive.namelist())
     assert "docgen/templates/projects/index.html" in members
+    assert "docgen/templates/projects/source_panel.html" in members
+    assert "docgen/templates/projects/work_panel.html" in members
+    assert "docgen/templates/projects/action_panel.html" in members
+    assert "docgen/templates/editor/surface.html" in members
     assert "docgen/templates/generation/status.html" in members
     assert "docgen/static/vendor/htmx-2.0.8.min.js" in members
     assert "docgen/static/vendor/HTMX-LICENSE.txt" in members
     assert "docgen/static/vendor/TAILWIND-LICENSE.txt" in members
     assert "docgen/static/css/docgen.css" in members
+    assert "docgen/static/js/docgen2-editor.js" in members
 
     subprocess.run(
         [
@@ -102,7 +107,9 @@ with TestClient(create_app(settings)) as client:
     assert created.status_code == 303
     detail = client.get(created.headers["location"])
     assert detail.status_code == 200
-    assert "Сборка и проверка" in detail.text
+    assert "Formatta" in detail.text
+    assert "К выбору проекта" in detail.text
+    assert "Wheel smoke" in detail.text
     assert client.get("/static/vendor/htmx-2.0.8.min.js").status_code == 200
 '''
     environment = os.environ.copy()
