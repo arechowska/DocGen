@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,7 +19,12 @@ from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.templates_catalog.schemas import SemanticRule, SemanticSection, SemanticTemplate
 from docgen.workflows.assemble import WorkflowError
-from docgen.workflows.check import CheckWorkflow, _target_document, _validated_report
+from docgen.workflows.check import (
+    CheckWorkflow,
+    _check_prompt,
+    _target_document,
+    _validated_report,
+)
 from docgen.workflows.normalize import NormalizedProject
 
 
@@ -61,12 +67,15 @@ class FakeNormalization:
 class FakeModel:
     result: object
     events: list[str]
+    system_prompt: str = ""
     user_prompt: str = ""
 
     def generate_json(self, system: str, user: str, schema: type[Any]) -> object:
+        assert "CheckReport" in system
         assert "низкой уверенностью" in system
         assert schema is CheckReport
         self.events.append("model")
+        self.system_prompt = system
         self.user_prompt = user
         return self.result
 
@@ -246,6 +255,7 @@ def test_check_separates_confirmed_and_low_confidence_findings_and_checks_every_
     assert report.passed_rule_ids == ()
     assert documents.get_report("p1") == report
     assert all(rule.id in model.user_prompt for rule in semantic_template.rules)
+    assert "верхнеуровневым узлом" not in model.system_prompt
     assert progress.values == [10, 35, 70, 90, 100]
     assert events == [
         "progress:10",
@@ -259,6 +269,28 @@ def test_check_separates_confirmed_and_low_confidence_findings_and_checks_every_
         "checkpoint",
         "save",
     ]
+
+
+def test_check_prompt_requires_exact_template_id_and_report_shape(
+    semantic_template: SemanticTemplate,
+    document: WorkingDocument,
+) -> None:
+    block = NormalizedBlock(
+        id="block-1",
+        kind=BlockKind.TEXT,
+        text="Пользователь оплачивает заказ",
+        provenance=[Provenance(source_id="source-1", locator="paragraph:1")],
+        confidence=1,
+    )
+
+    payload = json.loads(_check_prompt(semantic_template, [block], document))
+
+    assert payload["формат_ответа"]["template_id"] == semantic_template.id
+    assert payload["формат_ответа"]["findings"] == []
+    assert payload["формат_ответа"]["passed_rule_ids"] == [
+        rule.id for rule in semantic_template.rules
+    ]
+    assert "не faq_validation_result" in payload["важно"]
 
 
 def test_check_publishes_normalization_warnings_before_model_call(

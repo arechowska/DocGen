@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from docgen.ai.client import TextModel, VisionModel
 from docgen.ai.grounding import GroundingValidator
-from docgen.ai.prompts import DOCUMENT_SYSTEM_PROMPT
+from docgen.ai.prompts import CHECK_SYSTEM_PROMPT
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import (
     CheckFinding,
@@ -93,8 +93,7 @@ class CheckWorkflow:
 
         progress(90, "Проверка документа моделью")
         raw_report = self._text_model.generate_json(
-            DOCUMENT_SYSTEM_PROMPT
-            + "\nПроверьте каждое правило шаблона. Отдельно отмечайте выводы с низкой уверенностью.",
+            CHECK_SYSTEM_PROMPT,
             _check_prompt(template, blocks, document),
             CheckReport,
         )
@@ -258,6 +257,17 @@ def _check_prompt(
             "которые невозможно проверить, запишите в unchecked_rules. Эти три группы "
             "должны быть непересекающимся полным покрытием всех rule id."
         ),
+        "важно": (
+            f"template_id в ответе должен быть ровно '{template.id}', не "
+            f"{template.id}_validation_result и не faq_validation_result. Верните только "
+            "CheckReport: template_id, findings, passed_rule_ids, unchecked_rules."
+        ),
+        "формат_ответа": {
+            "template_id": template.id,
+            "findings": [],
+            "passed_rule_ids": [rule.id for rule in template.rules],
+            "unchecked_rules": [],
+        },
         "правила": [rule.model_dump(mode="json") for rule in template.rules],
         "стилевые_правила": list(template.style_rules),
         "исходные_блоки": public_blocks(blocks),
