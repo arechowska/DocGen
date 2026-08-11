@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from docgen.config import Settings
+
+
+def test_default_env_file_is_repository_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(repository_root / "app")
+
+    env_file = Path(Settings.model_config["env_file"])
+
+    assert env_file.is_absolute()
+    assert env_file == repository_root / ".env"
 
 
 def test_resource_and_lease_defaults_are_conservative() -> None:

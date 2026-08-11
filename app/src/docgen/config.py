@@ -3,11 +3,13 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+REPOSITORY_ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOCGEN_",
-        env_file=Path(".env"),
+        env_file=REPOSITORY_ROOT_ENV,
     )
 
     database_url: str = "sqlite:///./var/docgen.db"

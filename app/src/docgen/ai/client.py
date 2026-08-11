@@ -85,6 +85,8 @@ class _OpenAICompatibleModel:
             content = response_data["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError("model content is not a string")
+            print("=== DOCGEN MODEL RESPONSE CONTENT ===")
+            print(content)
             return schema.model_validate_json(content)
         except (IndexError, KeyError, TypeError, UnicodeDecodeError, ValidationError, json.JSONDecodeError) as exc:
             raise ModelError("Модель вернула некорректный структурированный ответ") from exc
