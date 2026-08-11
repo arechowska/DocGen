@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 from docgen.ai.client import ModelConfigurationError, ModelError, build_text_model
 from docgen.chat.schemas import ChatEditRequest
 from docgen.chat.service import ChatGroundingError, ChatService, ChatValidationError
+from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
 from docgen.extraction.confluence import ConfluenceClient
-from docgen.extraction.registry import ExtractionError, ExtractorRegistry
+from docgen.extraction.registry import ExtractorRegistry
 from docgen.extraction.schemas import NormalizedBlock
 from docgen.projects.routes import get_session
 from docgen.sources.repository import SourceRepository
@@ -83,12 +84,11 @@ def _chat_service(request: Request, session: Session):
 
 
 def _source_blocks_from_project(
-    session: Session, settings: object, project_id: str
+    session: Session, settings: Settings, project_id: str
 ) -> list[NormalizedBlock]:
-    data_dir = getattr(settings, "data_dir")
     normalization = NormalizationWorkflow(
         SourceRepository(session),
-        LocalStorage(data_dir),
+        LocalStorage(settings.data_dir),
         ExtractorRegistry.default(settings),
         ConfluenceClient.from_settings(settings),
     )
