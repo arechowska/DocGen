@@ -53,6 +53,9 @@ def test_upload_file_returns_updated_source_list(
     assert 'id="sourcesPanel"' in response.text
     assert 'class="panel sources-panel mobile-active"' in response.text
     assert 'id="sources-panel"' not in response.text
+    assert 'id="buildButton"' in response.text
+    assert 'hx-swap-oob="outerHTML"' in response.text
+    assert 'id="buildButton" class="button primary" type="submit" form="assembleForm" disabled' not in response.text
     assert "DOCX" in response.text
 
 
@@ -253,6 +256,9 @@ def test_delete_source_returns_updated_source_list(
 
     assert response.status_code == 200
     assert 'id="sourcesPanel"' in response.text
+    assert 'id="buildButton"' in response.text
+    assert 'hx-swap-oob="outerHTML"' in response.text
+    assert 'form="assembleForm"\n  disabled' in response.text
     assert "Нет источников" in response.text
     assert "case.md" not in response.text
 

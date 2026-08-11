@@ -30,7 +30,13 @@
   </svg>
 {%- endmacro %}
 
-<section id="docgen2Editor" class="panel editor-card" aria-labelledby="docgen2EditorTitle" data-save-url="/projects/{{ project_id }}/editor/save">
+<section
+  id="docgen2Editor"
+  class="panel editor-card"
+  aria-labelledby="docgen2EditorTitle"
+  data-save-url="/projects/{{ project_id }}/editor/save"
+  {% if editor_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
   <div class="editor-topline">
     <div>
       <input

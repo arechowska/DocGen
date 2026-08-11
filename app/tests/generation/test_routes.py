@@ -441,8 +441,9 @@ def test_cancel_race_renders_completed_result_instead_of_cancellation_notice(
     response = client.post(f"/projects/{project_with_source.id}/jobs/{job.id}/cancel")
 
     assert response.status_code == 200
-    assert 'id="editor-shell"' in response.text
-    assert 'data-state="ready"' in response.text
+    assert 'id="docgen2Editor"' in response.text
+    assert 'hx-swap-oob="outerHTML"' in response.text
+    assert 'id="editor-shell"' not in response.text
     assert "Оплата заказа" in response.text
     assert "Отмена запрошена" not in response.text
 
@@ -710,7 +711,7 @@ def test_report_view_groups_findings_and_links_to_document_nodes(
     )
 
 
-def test_succeeded_assemble_job_swaps_to_editor_surface(
+def test_succeeded_assemble_job_updates_docgen2_editor_out_of_band(
     client: TestClient, project_with_source: Project
 ) -> None:
     _save_document(client, project_with_source.id, _document())
@@ -726,10 +727,11 @@ def test_succeeded_assemble_job_swaps_to_editor_surface(
     )
 
     assert response.status_code == 200
-    assert 'id="editor-shell"' in response.text
-    assert 'data-state="ready"' in response.text
+    assert 'id="docgen2Editor"' in response.text
+    assert 'hx-swap-oob="outerHTML"' in response.text
     assert "Оплата заказа" in response.text
-    assert 'id="generation-status"' not in response.text
+    assert 'id="editor-shell"' not in response.text
+    assert 'id="generation-status"' in response.text
     assert 'hx-trigger="every 2s"' not in response.text
 
 

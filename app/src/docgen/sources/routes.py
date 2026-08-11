@@ -104,7 +104,7 @@ def _source_list_response(
         sources = service.list(project_id)
         return templates.TemplateResponse(
             request=request,
-            name="projects/source_panel.html",
+            name="sources/project_update.html",
             context={
                 "project": project,
                 "project_id": project_id,

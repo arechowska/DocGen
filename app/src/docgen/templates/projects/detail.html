@@ -12,7 +12,7 @@
 
       <label class="control template-control">
         <span>Шаблон</span>
-        <select id="templateSelect" name="template_id" form="assembleForm" {% if not sources %}disabled{% endif %}>
+        <select id="templateSelect" name="template_id" form="assembleForm">
           {% for semantic_template in templates %}
             <option value="{{ semantic_template.id }}" {% if semantic_template.id == "use-case" %}selected{% endif %}>{{ semantic_template.name }}{% if semantic_template.id == "use-case" %} (Use Case){% endif %}</option>
           {% endfor %}
@@ -33,10 +33,7 @@
           <span class="button-icon shield-icon" aria-hidden="true"></span>
           <span>Проверить по шаблону</span>
         </button>
-        <button id="buildButton" class="button primary" type="submit" form="assembleForm" {% if not sources %}disabled{% endif %}>
-          <span class="button-icon build-icon" aria-hidden="true"></span>
-          <span>Собрать</span>
-        </button>
+        {% include "projects/build_button.html" %}
       </div>
     </header>
 

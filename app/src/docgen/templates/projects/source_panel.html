@@ -1,4 +1,9 @@
-<section id="sourcesPanel" class="panel sources-panel mobile-active" aria-labelledby="sourcesTitle">
+<section
+  id="sourcesPanel"
+  class="panel sources-panel mobile-active"
+  aria-labelledby="sourcesTitle"
+  {% if source_panel_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
   <a class="project-return-link" href="/projects" data-action="back-to-projects">← К выбору проекта</a>
 
   <div class="panel-heading">

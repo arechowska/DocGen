@@ -129,7 +129,9 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     assert "Шаг 2" not in editor_panel.get_text(" ")
     assert "Документ готов к редактированию" not in editor_panel.get_text(" ")
     assert "Загрузите Markdown, DOCX или PDF либо начните редактирование здесь." in editor_panel.get_text(" ")
-    assert soup.find(id="templateSelect") is not None
+    template_select = soup.find(id="templateSelect")
+    assert template_select is not None
+    assert not template_select.has_attr("disabled")
     assert soup.find(id="formatSelect") is not None
     assert soup.find(id="buildButton") is not None
     assert soup.find(id="chat-panel") is None

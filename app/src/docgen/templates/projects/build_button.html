@@ -1,0 +1,11 @@
+<button
+  id="buildButton"
+  class="button primary"
+  type="submit"
+  form="assembleForm"
+  {% if not sources %}disabled{% endif %}
+  {% if build_button_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <span class="button-icon build-icon" aria-hidden="true"></span>
+  <span>Собрать</span>
+</button>

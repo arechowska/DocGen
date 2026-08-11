@@ -1,4 +1,9 @@
-<section id="chatPanel" class="panel chat-panel" aria-labelledby="chatTitle">
+<section
+  id="chatPanel"
+  class="panel chat-panel"
+  aria-labelledby="chatTitle"
+  {% if editor_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
   <div class="panel-heading chat-heading">
     <h1 id="chatTitle">Чат</h1>
     <span id="statusBadge" class="status-badge" data-state="{% if document %}ready{% else %}idle{% endif %}">

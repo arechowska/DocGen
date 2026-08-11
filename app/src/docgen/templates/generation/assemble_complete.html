@@ -1,0 +1,17 @@
+<div id="generation-status" aria-live="polite">
+  {% if warnings %}
+    <section class="mt-4 rounded-xl bg-[#fff8e6] p-4" aria-label="Предупреждения">
+      <h2 class="text-sm font-semibold">Предупреждения</h2>
+      <ul class="mt-2 list-disc space-y-1 pl-5 text-sm">
+        {% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+</div>
+
+{% set source_panel_oob = true %}
+{% include "projects/source_panel.html" %}
+
+{% set editor_oob = true %}
+{% include "projects/work_panel.html" %}
+{% include "projects/action_panel.html" %}

@@ -379,8 +379,9 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                         standalone=True,
                         warnings=job.warning_messages,
                     )
-                return _editor_response(
+                return _assemble_complete_response(
                     request,
+                    session,
                     job.project_id,
                     document,
                     job.result_document_revision or 1,
@@ -455,6 +456,43 @@ def _editor_response(
             "project_id": project_id,
             "document": document,
             "revision": revision,
+            "warnings": warnings,
+        },
+    )
+
+
+def _assemble_complete_response(
+    request: Request,
+    session: Session,
+    project_id: str,
+    document: WorkingDocument,
+    revision: int,
+    *,
+    warnings: tuple[str, ...] = (),
+) -> Response:
+    project = _project_or_404(session, project_id)
+    sources = SourceRepository(session).list_for_project(project_id)
+    documents = DocumentRepository(session)
+    template_catalog = TemplateCatalog(
+        external_directory=request.app.state.settings.template_dir
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="generation/assemble_complete.html",
+        context={
+            "project": project,
+            "project_id": project_id,
+            "sources": sources,
+            "check_targets": [
+                source for source in sources if is_supported_check_target(source)
+            ],
+            "templates": template_catalog.list(),
+            "document": document,
+            "revision": revision,
+            "has_document": True,
+            "has_report": documents.get_report(project_id) is not None,
+            "source_error": None,
+            "generation_error": None,
             "warnings": warnings,
         },
     )
