@@ -66,6 +66,34 @@ def test_editor_renders_all_node_kinds(
         assert marker in response.text
 
 
+def test_standalone_editor_uses_shared_surface(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(f"/projects/{project_with_document.id}/editor")
+
+    assert response.status_code == 200
+    assert 'id="editor-page"' in response.text
+    assert 'id="editor-shell"' in response.text
+    assert 'data-state="ready"' in response.text
+    assert 'hx-target="#editor-shell"' in response.text
+    assert 'id="chat-panel"' in response.text
+
+
+def test_htmx_editor_refresh_returns_shared_surface_only(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(
+        f"/projects/{project_with_document.id}/editor",
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "<!doctype html>" not in response.text.lower()
+    assert 'id="editor-page"' not in response.text
+    assert 'id="editor-shell"' in response.text
+    assert 'data-state="ready"' in response.text
+
+
 def test_text_autosave_returns_new_revision(
     client: TestClient, project_with_document: Project
 ) -> None:

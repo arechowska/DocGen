@@ -4,6 +4,8 @@ import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
+from docgen.documents.repository import DocumentRepository
+from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.jobs.models import JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.projects.models import Project
@@ -62,6 +64,36 @@ def test_project_detail_renders_three_area_workspace_without_document(
     assert "Соберите документ" in editor_shell.get_text(" ")
     assert soup.find(id="generation-setup") is not None
     assert soup.find(id="chat-panel") is None
+
+
+def test_project_detail_embeds_editor_when_document_exists(client: TestClient) -> None:
+    created = client.post("/projects", data={"name": "Редактор"}, follow_redirects=False)
+    project_url = created.headers["location"]
+    project_id = project_url.rsplit("/", 1)[-1]
+    with client.app.state.session_factory() as session:
+        DocumentRepository(session).save_document(
+            project_id,
+            WorkingDocument(
+                title="Техническое задание",
+                template_id="use-case",
+                nodes=[
+                    DocumentNode(id="intro", kind=NodeKind.PARAGRAPH, text="Введение")
+                ],
+            ),
+        )
+        session.commit()
+
+    response = client.get(project_url)
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    editor_shell = soup.find(id="editor-shell")
+    assert editor_shell is not None
+    assert editor_shell.get("data-state") == "ready"
+    assert editor_shell.get("data-revision") == "1"
+    assert "Техническое задание" in editor_shell.get_text(" ")
+    assert soup.find(id="node-intro") is not None
+    assert soup.find(id="chat-panel") is not None
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

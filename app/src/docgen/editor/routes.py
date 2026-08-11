@@ -42,7 +42,11 @@ def editor_view(request: Request, project_id: str, session: SessionDependency) -
     document, revision = stored
     return templates.TemplateResponse(
         request=request,
-        name="editor/document.html",
+        name=(
+            "editor/document.html"
+            if request.headers.get("HX-Request") != "true"
+            else "editor/surface.html"
+        ),
         context={
             "project_id": project_id,
             "document": document,
@@ -323,7 +327,7 @@ def _apply_and_render_document(
     session.commit()
     return templates.TemplateResponse(
         request=request,
-        name="editor/document.html",
+        name="editor/surface.html",
         context={
             "project_id": project_id,
             "document": result.document,
