@@ -355,11 +355,19 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                 else None
             )
             if document is not None:
-                return _document_response(
+                if _wants_full_page(request):
+                    return _document_response(
+                        request,
+                        job.project_id,
+                        document,
+                        standalone=True,
+                        warnings=job.warning_messages,
+                    )
+                return _editor_response(
                     request,
                     job.project_id,
                     document,
-                    standalone=_wants_full_page(request),
+                    job.result_document_revision or 1,
                     warnings=job.warning_messages,
                 )
         else:
@@ -411,6 +419,26 @@ def _document_response(
             "project_id": project_id,
             "document": document,
             "standalone": standalone,
+            "warnings": warnings,
+        },
+    )
+
+
+def _editor_response(
+    request: Request,
+    project_id: str,
+    document: WorkingDocument,
+    revision: int,
+    *,
+    warnings: tuple[str, ...] = (),
+) -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="editor/surface.html",
+        context={
+            "project_id": project_id,
+            "document": document,
+            "revision": revision,
             "warnings": warnings,
         },
     )
