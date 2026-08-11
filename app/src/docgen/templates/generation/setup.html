@@ -1,17 +1,17 @@
 {% if setup_fragment %}
-<section id="generation-status" class="mt-6 rounded-2xl bg-[#fff2f2] px-4 py-3" role="alert" aria-live="polite">
+<section id="generation-status" class="rounded-2xl bg-[#fff2f2] px-4 py-3" role="alert" aria-live="polite">
   <p class="text-sm text-[#b42318]">{{ generation_error }}</p>
 </section>
 {% else %}
-<section id="generation-setup" class="mt-12 border-t border-[#f5f5f7] pt-8">
-  <div class="flex flex-wrap items-end justify-between gap-4">
+<section id="generation-setup">
+  <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <p class="text-sm font-medium text-[#707070]">AI-конвейер</p>
-      <h2 class="mt-2 text-2xl font-semibold tracking-tight">Сборка и проверка</h2>
+      <p class="docgen-eyebrow">AI-конвейер</p>
+      <h2 class="mt-1 text-lg font-semibold text-[#101828]">Сборка и проверка</h2>
     </div>
     <div class="flex gap-3 text-sm">
-      {% if has_document %}<a class="font-medium text-[#0066cc]" href="/projects/{{ project.id }}/document">Документ</a>{% endif %}
-      {% if has_report %}<a class="font-medium text-[#0066cc]" href="/projects/{{ project.id }}/report">Отчёт</a>{% endif %}
+      {% if has_document %}<a class="font-medium text-[#3196df]" href="/projects/{{ project.id }}/document">Preview</a>{% endif %}
+      {% if has_report %}<a class="font-medium text-[#3196df]" href="/projects/{{ project.id }}/report">Отчёт</a>{% endif %}
     </div>
   </div>
 
@@ -19,14 +19,14 @@
     <p class="mt-5 rounded-2xl bg-[#fff2f2] px-4 py-3 text-sm text-[#b42318]" role="alert">{{ generation_error }}</p>
   {% endif %}
 
-  <div class="mt-6 grid gap-4 sm:grid-cols-2">
+  <div class="mt-5 space-y-4">
     <form
       action="/projects/{{ project.id }}/jobs/assemble"
       method="post"
       hx-post="/projects/{{ project.id }}/jobs/assemble"
       hx-target="#generation-status"
       hx-swap="outerHTML"
-      class="rounded-2xl border border-[#e5e5e7] p-5"
+      class="rounded-2xl border border-[#e3e8ec] bg-[#f9f9fc] p-4"
     >
       <label class="block text-sm font-medium" for="assemble-template-{{ project.id }}">Шаблон документа</label>
       <select id="assemble-template-{{ project.id }}" name="template_id" class="mt-3 w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2" required>
@@ -34,7 +34,7 @@
           <option value="{{ semantic_template.id }}">{{ semantic_template.name }}</option>
         {% endfor %}
       </select>
-      <button class="mt-4 rounded-full bg-[#0066cc] px-5 py-3 text-sm font-medium text-white" type="submit">Собрать документ</button>
+      <button class="docgen-primary-button mt-4 w-full" type="submit">Собрать документ</button>
     </form>
 
     <form
@@ -43,7 +43,7 @@
       hx-post="/projects/{{ project.id }}/jobs/check"
       hx-target="#generation-status"
       hx-swap="outerHTML"
-      class="rounded-2xl border border-[#e5e5e7] p-5"
+      class="rounded-2xl border border-[#e3e8ec] bg-[#f9f9fc] p-4"
     >
       <label class="block text-sm font-medium" for="check-target-{{ project.id }}">Документ для проверки</label>
       <select id="check-target-{{ project.id }}" name="target_source_id" class="mt-3 w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2" {% if not has_document %}required{% endif %}>
@@ -56,7 +56,7 @@
           <option value="{{ semantic_template.id }}">{{ semantic_template.name }}</option>
         {% endfor %}
       </select>
-      <button class="mt-4 rounded-full bg-[#1d1d1f] px-5 py-3 text-sm font-medium text-white" type="submit">Проверить документ</button>
+      <button class="docgen-secondary-button mt-4 w-full justify-center" type="submit">Проверить документ</button>
     </form>
   </div>
 

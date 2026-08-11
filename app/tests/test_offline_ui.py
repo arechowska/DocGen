@@ -47,8 +47,30 @@ def test_templates_have_no_inline_handlers_styles_or_public_executable_assets() 
         markup = path.read_text(encoding="utf-8")
         assert "hx-on" not in markup, path
         assert " style=" not in markup, path
+        assert "onclick=" not in markup, path
+        assert "onchange=" not in markup, path
         assert "https://cdn.tailwindcss.com" not in markup, path
+        assert "fonts.googleapis.com" not in markup, path
         assert "unpkg.com" not in markup, path
+        assert "lucide" not in markup.lower(), path
+
+
+def test_workspace_css_contains_corporate_layout_tokens(client: TestClient) -> None:
+    stylesheet = client.get("/static/css/docgen.css")
+
+    assert stylesheet.status_code == 200
+    css = stylesheet.text.lower()
+    for token in (
+        ".docgen-workspace",
+        "grid-template-columns:320px minmax(0,1fr) 320px",
+        "#60bcff",
+        "#3196df",
+        "#f9f9fc",
+        "#f3f6fa",
+        ".docgen-document-sheet",
+        "@media (max-width:1023px)",
+    ):
+        assert token in css
 
 
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(
