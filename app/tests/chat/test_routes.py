@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from docgen.chat.routes import _source_blocks_from_project
 from docgen.chat.schemas import ChatEditRequest, ChatEditResult
 from docgen.chat.service import ChatGroundingError
 from docgen.config import Settings
@@ -86,3 +87,27 @@ def test_chat_grounding_error_preserves_document(
 
     assert response.status_code == 422
     assert "нет подтверждения в источниках" in response.text
+
+
+def test_chat_source_blocks_come_from_uploaded_sources(
+    client: TestClient, project_with_document: Project
+) -> None:
+    upload = client.post(
+        f"/projects/{project_with_document.id}/sources/files",
+        files={
+            "file": ("source.md", "# Подтверждённый факт".encode(), "text/markdown")
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    session = client.app.state.session_factory()
+    try:
+        blocks = _source_blocks_from_project(
+            session, client.app.state.settings, project_with_document.id
+        )
+    finally:
+        session.close()
+
+    assert [block.text for block in blocks] == ["Подтверждённый факт"]
+    assert not any(block.id.startswith("document:") for block in blocks)
