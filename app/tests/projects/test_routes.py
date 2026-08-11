@@ -88,7 +88,7 @@ def test_blank_autosave_returns_inline_error(
     assert form["hx-swap"] == "outerHTML"
     assert "hx-on::before-swap" not in form
     page = client.get(f"/projects/{existing_project.id}")
-    assert '"code":"[234].."' in page.text
+    assert '"code":"[2345].."' in page.text
 
 
 def test_delete_project_redirects_to_listing(

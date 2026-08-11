@@ -5,7 +5,7 @@ import json
 from typing import Protocol, TypeVar
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from docgen.ai.prompts import VISION_SYSTEM_PROMPT
 from docgen.config import Settings
@@ -44,6 +44,7 @@ class _OpenAICompatibleModel:
         *,
         base_url: str,
         model: str,
+        api_key: SecretStr | str | None = None,
         transport: httpx.BaseTransport | None = None,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         max_request_bytes: int = _DEFAULT_MAX_REQUEST_BYTES,
@@ -54,6 +55,9 @@ class _OpenAICompatibleModel:
             raise ValueError("max_request_bytes must be positive")
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._api_key = (
+            api_key.get_secret_value() if isinstance(api_key, SecretStr) else api_key
+        )
         self._transport = transport
         self._max_response_bytes = max_response_bytes
         self._max_request_bytes = max_request_bytes
@@ -71,7 +75,11 @@ class _OpenAICompatibleModel:
                 },
             },
         }
+        print("=== DOCGEN MODEL REQUEST PAYLOAD ===")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         response_bytes = self._post(payload)
+        print("=== DOCGEN MODEL RESPONSE RAW ===")
+        print(response_bytes.decode("utf-8", errors="replace"))
         try:
             response_data = json.loads(response_bytes)
             content = response_data["choices"][0]["message"]["content"]
@@ -96,7 +104,7 @@ class _OpenAICompatibleModel:
                     "POST",
                     f"{self._base_url}/chat/completions",
                     content=payload_bytes,
-                    headers={"Content-Type": "application/json"},
+                    headers=self._headers(),
                 ) as response,
             ):
                 response.raise_for_status()
@@ -115,6 +123,12 @@ class _OpenAICompatibleModel:
                 raise ModelError("Ответ модели слишком большой")
             response_body.extend(chunk)
         return bytes(response_body)
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
 
 
 class OpenAICompatibleTextModel(_OpenAICompatibleModel):
@@ -164,6 +178,7 @@ def build_text_model(settings: Settings) -> TextModel:
     return OpenAICompatibleTextModel(
         base_url=base_url,
         model=settings.local_text_model,
+        api_key=settings.local_text_api_key,
         max_request_bytes=settings.max_model_request_bytes,
     )
 
@@ -183,5 +198,6 @@ def build_vision_model(settings: Settings) -> VisionModel:
     return OpenAICompatibleVisionModel(
         base_url=base_url,
         model=settings.local_vision_model,
+        api_key=settings.local_vision_api_key,
         max_request_bytes=settings.max_model_request_bytes,
     )

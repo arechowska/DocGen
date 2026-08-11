@@ -192,12 +192,108 @@ def _assemble_prompt(template: SemanticTemplate, blocks: list[NormalizedBlock]) 
             "верхнеуровневый узел с точным section_id. Для каждого фактического узла "
             "укажите id исходного блока в provenance.source_id, его исходный locator и "
             "точную непустую quote из текста блока. Если данных для раздела нет, создайте "
-            "пустой gap с section_id и флагом missing-source-data."
+            "пустой gap с section_id и флагом missing-source-data. Не требуйте, чтобы "
+            "источник уже был написан в формате шаблона: преобразуйте подтверждённые факты "
+            "из источников в нужную структуру, если каждый вывод можно подтвердить точной quote."
         ),
+        "правила_json": _json_rules(template),
+        "пример_формата": _format_example(template),
+        "инструкция_для_шаблона": _template_instruction(template),
         "шаблон": template.model_dump(mode="json"),
         "исходные_блоки": public_blocks(blocks),
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _json_rules(template: SemanticTemplate) -> str:
+    section_ids = ", ".join(section.id for section in template.sections)
+    return (
+        f"Верните только объект WorkingDocument: title, template_id='{template.id}', nodes. "
+        f"В nodes должен быть ровно один верхнеуровневый node для каждого section_id: "
+        f"{section_ids}. Не добавляйте section_id вне этого списка и не дублируйте section_id. "
+        "Если section_id можно заполнить фактами из источников, node не должен быть kind='gap'. "
+        "Для kind='gap' используйте section_id из списка разделов, flags=['missing-source-data'], "
+        "без text, data, children и provenance. Для kind='list' кладите элементы списка в data.items "
+        "как массив строк. Для kind='paragraph' кладите текст в поле text. Каждый негэповый node "
+        "обязан иметь provenance с source_id, locator и quote, где quote является точной подстрокой "
+        "соответствующего исходного блока."
+    )
+
+
+def _format_example(template: SemanticTemplate) -> str:
+    if template.id == "faq":
+        example = {
+            "title": "FAQ по материалам источников",
+            "template_id": "faq",
+            "nodes": [
+                {
+                    "kind": "paragraph",
+                    "section_id": "purpose",
+                    "text": "Краткое назначение FAQ на основе источников.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "questions",
+                    "text": "Вопросы и ответы",
+                    "data": {
+                        "items": [
+                            "Вопрос: ... Ответ: ...",
+                            "Вопрос: ... Ответ: ...",
+                        ]
+                    },
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "references",
+                    "text": "Источники сведений",
+                    "data": {"items": ["<название или id источника>"]},
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+            ],
+        }
+        return json.dumps(example, ensure_ascii=False, indent=2)
+    return (
+        "Верните WorkingDocument с nodes, где каждый верхнеуровневый node содержит "
+        "kind, section_id, text или data, а также provenance для всех фактических данных."
+    )
+
+
+def _template_instruction(template: SemanticTemplate) -> str:
+    if template.id == "faq":
+        return (
+            "Для FAQ преобразуйте описания, процедурные шаги, правила и ограничения из "
+            "источников в вопросы и ответы от лица пользователя. Секция purpose должна быть "
+            "paragraph с назначением FAQ. Секция questions должна быть list, где data.items "
+            "содержит строки вида 'Вопрос: ... Ответ: ...'. Секция references должна быть list "
+            "с перечислением использованных источников. Не создавайте gap только потому, что "
+            "источник не содержит готовых вопросов. Каждый ответ должен быть основан на факте "
+            "из исходных блоков и иметь provenance с точной quote. Если по конкретному вопросу "
+            "нет подтверждения в источниках, не придумывайте ответ."
+        )
+    return (
+        "Адаптируйте подтверждённые факты из источников под разделы шаблона. Создавайте gap "
+        "только для разделов, для которых в исходных блоках нет подходящих подтверждённых фактов."
+    )
 
 
 def _validate_document_structure(

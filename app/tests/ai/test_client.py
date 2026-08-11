@@ -67,6 +67,26 @@ def test_text_model_parses_structured_response(mock_transport: httpx.MockTranspo
     assert result.template_id == "use-case"
 
 
+def test_text_model_prints_payload_to_worker_console(
+    mock_transport: httpx.MockTransport,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL, model="local-text", transport=mock_transport
+    )
+
+    model.generate_json("system", "user", WorkingDocument)
+
+    captured = capsys.readouterr()
+    assert "=== DOCGEN MODEL REQUEST PAYLOAD ===" in captured.out
+    assert '"model": "local-text"' in captured.out
+    assert '"messages": [' in captured.out
+    assert '"content": "user"' in captured.out
+    assert "=== DOCGEN MODEL RESPONSE RAW ===" in captured.out
+    assert '"choices"' in captured.out
+    assert '"template_id": "use-case"' in captured.out
+
+
 def test_model_request_budget_accepts_exact_serialized_boundary_and_rejects_before_http() -> None:
     request_sizes: list[int] = []
 
@@ -180,6 +200,28 @@ def test_text_model_uses_120_second_timeout() -> None:
     assert model.generate_json("system", "user", WorkingDocument).title == "T"
 
 
+def test_text_model_sends_bearer_token_when_configured() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer test-token"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": '{"title":"T","template_id":"use-case","nodes":[]}'}}
+                ]
+            },
+        )
+
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL,
+        model="local-text",
+        api_key="test-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert model.generate_json("system", "user", WorkingDocument).title == "T"
+
+
 def test_vision_model_describes_image_with_structured_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -198,7 +240,7 @@ def test_vision_model_describes_image_with_structured_response() -> None:
 
 
 def test_model_factories_require_complete_configuration() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     with pytest.raises(ModelConfigurationError, match="Локальные модели не настроены"):
         build_text_model(settings)
@@ -210,13 +252,20 @@ def test_model_factories_build_http_adapters_only() -> None:
     settings = Settings(
         local_text_base_url=LOCAL_URL,
         local_text_model="local-text",
+        local_text_api_key="text-token",
         local_vision_base_url=LOCAL_URL,
         local_vision_model="local-vision",
+        local_vision_api_key="vision-token",
         trusted_integration_hosts=("model.example.test",),
     )
 
-    assert type(build_text_model(settings)) is OpenAICompatibleTextModel
-    assert type(build_vision_model(settings)) is OpenAICompatibleVisionModel
+    text_model = build_text_model(settings)
+    vision_model = build_vision_model(settings)
+
+    assert type(text_model) is OpenAICompatibleTextModel
+    assert text_model._api_key == "text-token"
+    assert type(vision_model) is OpenAICompatibleVisionModel
+    assert vision_model._api_key == "vision-token"
 
 
 @pytest.mark.parametrize(

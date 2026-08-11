@@ -98,6 +98,24 @@ def test_start_assemble_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 
+def test_start_assemble_with_text_source_does_not_require_vision_model(
+    client: TestClient, project_with_source: Project
+) -> None:
+    settings = client.app.state.settings
+    settings.local_text_base_url = "http://text-model.test/v1"
+    settings.local_text_model = "text-model"
+    settings.trusted_integration_hosts = ("text-model.test",)
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "use-case"},
+    )
+
+    assert response.status_code == 202
+    assert "Сборка поставлена в очередь" in response.text
+    assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
+
+
 def test_start_check_enqueues_job(
     client: TestClient, configured_models: None, project_with_source: Project
 ) -> None:
@@ -467,7 +485,7 @@ def test_missing_artifact_retry_swaps_error_responses_into_status(
     assert "Результат пока недоступен" in response.text
     assert "hx-on" not in response.text
     project_page = client.get(f"/projects/{project_with_source.id}")
-    assert '"code":"[234].."' in project_page.text
+    assert '"code":"[2345].."' in project_page.text
 
 
 def test_document_view_renders_all_node_kinds_in_order_and_explicit_gap(

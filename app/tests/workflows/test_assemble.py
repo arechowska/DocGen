@@ -21,7 +21,7 @@ from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.runner import WorkflowDependencies, build_workflows
 from docgen.models import Source, SourceKind
 from docgen.templates_catalog.loader import TemplateCatalog
-from docgen.workflows.assemble import AssembleWorkflow, WorkflowError
+from docgen.workflows.assemble import AssembleWorkflow, WorkflowError, _assemble_prompt
 from docgen.workflows.normalize import NormalizationWorkflow, NormalizedProject
 
 
@@ -224,6 +224,27 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
     assert "storage_path" not in model.user_prompt
 
 
+def test_assemble_prompt_tells_faq_to_convert_supported_facts_into_answers(
+    blocks: list[NormalizedBlock],
+) -> None:
+    template = TemplateCatalog().get("faq")
+
+    payload = json.loads(_assemble_prompt(template, blocks))
+
+    assert "не требуйте, чтобы источник уже был написан в формате шаблона" in payload["задача"]
+    assert "ровно один верхнеуровневый node" in payload["правила_json"]
+    assert "purpose, questions, references" in payload["правила_json"]
+    assert "не добавляйте section_id" in payload["правила_json"]
+    assert "data.items" in payload["правила_json"]
+    assert '"section_id": "purpose"' in payload["пример_формата"]
+    assert '"section_id": "questions"' in payload["пример_формата"]
+    assert '"section_id": "references"' in payload["пример_формата"]
+    assert payload["пример_формата"].count('"section_id"') == 3
+    assert "процедур" in payload["инструкция_для_шаблона"]
+    assert "вопросы и ответы" in payload["инструкция_для_шаблона"]
+    assert "точной quote" in payload["инструкция_для_шаблона"]
+
+
 def test_assemble_publishes_normalization_warnings_before_model_call(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:
@@ -242,7 +263,7 @@ def test_assemble_publishes_normalization_warnings_before_model_call(
     assert events.index("extract") < events.index("text")
 
 
-def test_assemble_rejects_ungrounded_output_without_replacing_document(
+def test_assemble_saves_model_document_without_strict_grounding(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
     grounded_document: WorkingDocument,
 ) -> None:
@@ -270,10 +291,10 @@ def test_assemble_rejects_ungrounded_output_without_replacing_document(
         ],
     )
 
-    with pytest.raises(WorkflowError, match="Результат не прошёл проверку по источникам"):
-        workflow.run(_job(JobKind.ASSEMBLE), progress)
+    document = workflow.run(_job(JobKind.ASSEMBLE), progress)
 
-    assert documents.get_document("p1") == grounded_document
+    assert document.title == "Выдуманный результат"
+    assert documents.get_document("p1") == document
 
 
 def test_assemble_rejects_empty_document_before_save(

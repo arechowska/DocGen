@@ -31,6 +31,15 @@ def test_ui_uses_local_assets_and_restrictive_csp(client: TestClient) -> None:
     assert ".htmx-request .htmx-indicator" in stylesheet.text
 
 
+def test_htmx_error_fragments_are_swapped_into_target() -> None:
+    base_template = Path(__file__).parents[1] / "src" / "docgen" / "templates" / "base.html"
+
+    markup = base_template.read_text(encoding="utf-8")
+
+    assert '"code":"[2345]..","swap":true' in markup
+    assert '"code":"[45]..","swap":false' not in markup
+
+
 def test_templates_have_no_inline_handlers_styles_or_public_executable_assets() -> None:
     template_root = Path(__file__).parents[1] / "src" / "docgen" / "templates"
 

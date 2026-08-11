@@ -13,6 +13,7 @@ from docgen.main import create_app
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
     settings = Settings(
+        _env_file=None,
         database_url=f"sqlite:///{tmp_path / 'test.db'}",
         data_dir=tmp_path / "data",
         confluence_hosts=("wiki.example.test",),

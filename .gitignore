@@ -6,6 +6,9 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+app/.pytest-tmp/
+app/pytest-of-*/
+app/tmp-pytest-run/
 *.egg-info/
 app/build/
 app/.tmp*/

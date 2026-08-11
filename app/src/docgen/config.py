@@ -17,8 +17,10 @@ class Settings(BaseSettings):
     confluence_token: SecretStr | None = None
     local_text_base_url: str | None = None
     local_text_model: str | None = None
+    local_text_api_key: SecretStr | None = None
     local_vision_base_url: str | None = None
     local_vision_model: str | None = None
+    local_vision_api_key: SecretStr | None = None
     trusted_integration_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
     worker_lease_seconds: int = Field(default=30, gt=0)
     max_upload_bytes: int = Field(default=52_428_800, gt=0)

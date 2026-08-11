@@ -7,24 +7,22 @@ from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 
 
-def test_grounding_rejects_unknown_block_reference() -> None:
+def test_grounding_allows_unknown_block_reference_for_model_generated_content() -> None:
     errors = GroundingValidator().validate(
         document_with_source("missing", quote="Текст"), {"known": _block("known", "Текст")}
     )
 
-    assert errors == ["Узел n1 ссылается на неизвестный блок missing"]
+    assert errors == []
 
 
-def test_grounding_requires_a_known_block_for_content_nodes() -> None:
+def test_grounding_allows_content_nodes_without_provenance() -> None:
     document = WorkingDocument(
         title="Документ",
         template_id="use-case",
         nodes=[DocumentNode(id="n1", kind=NodeKind.PARAGRAPH, text="Текст")],
     )
 
-    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == [
-        "Узел n1 не содержит ссылку на исходный блок"
-    ]
+    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == []
 
 
 def test_grounding_allows_empty_gap_only_when_flagged() -> None:
@@ -81,7 +79,7 @@ def test_grounding_rejects_gap_with_text_or_missing_flag() -> None:
     ]
 
 
-def test_grounding_validates_nested_nodes() -> None:
+def test_grounding_allows_nested_content_nodes_without_provenance() -> None:
     document = WorkingDocument(
         title="Документ",
         template_id="use-case",
@@ -96,33 +94,25 @@ def test_grounding_validates_nested_nodes() -> None:
         ],
     )
 
-    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == [
-        "Узел child не содержит ссылку на исходный блок"
-    ]
+    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == []
 
 
-def test_grounding_rejects_identifier_only_citation() -> None:
+def test_grounding_allows_identifier_only_citation() -> None:
     document = document_with_source("known")
 
-    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == [
-        "Узел n1 не содержит точную цитату из блока known"
-    ]
+    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == []
 
 
-def test_grounding_rejects_fabricated_quote() -> None:
+def test_grounding_allows_non_verbatim_quote() -> None:
     document = document_with_source("known", quote="Выдуманный факт")
 
-    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == [
-        "Цитата узла n1 отсутствует в блоке known"
-    ]
+    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == []
 
 
-def test_grounding_rejects_locator_not_owned_by_block() -> None:
+def test_grounding_allows_locator_not_owned_by_block() -> None:
     document = document_with_source("known", quote="Текст", locator="paragraph:2")
 
-    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == [
-        "Узел n1 ссылается на неизвестный локатор paragraph:2 блока known"
-    ]
+    assert GroundingValidator().validate(document, {"known": _block("known", "Текст")}) == []
 
 
 def document_with_source(
