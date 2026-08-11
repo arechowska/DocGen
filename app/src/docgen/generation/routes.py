@@ -326,10 +326,18 @@ def _status_response(
             "job": job,
             "is_active": job.status in _ACTIVE_STATUSES,
             "notice": notice,
-            "safe_error": _FAILED_MESSAGE if job.status is JobStatus.FAILED else None,
+            "safe_error": _safe_job_error(job),
         },
         status_code=status_code,
     )
+
+
+def _safe_job_error(job: Job) -> str | None:
+    if job.status is not JobStatus.FAILED:
+        return None
+    if job.error_message and job.status_message == job.error_message:
+        return job.error_message
+    return _FAILED_MESSAGE
 
 
 def _job_response(request: Request, session: Session, job: Job) -> Response:

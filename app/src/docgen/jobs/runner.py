@@ -199,7 +199,11 @@ class JobRunner:
             if self._repository.is_cancel_requested(job_id):
                 self._repository.mark_cancelled(job_id)
             else:
-                self._repository.mark_failed(job_id, error_message)
+                self._repository.mark_failed(
+                    job_id,
+                    error_message,
+                    user_message=error_message,
+                )
         except JobCancellationRequested:
             self._cancel_if_present(job_id)
         except (InvalidJobTransition, JobNotFound):

@@ -168,6 +168,25 @@ def test_missing_model_configuration_returns_503(
     assert _jobs_for_project(client, project_with_source.id) == []
 
 
+def test_failed_job_renders_safe_worker_error(
+    client: TestClient, project_with_source: Project
+) -> None:
+    with _session(client) as session:
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(project_with_source.id, JobKind.ASSEMBLE, "use-case")
+        repository.claim_next()
+        repository.mark_failed(
+            job.id,
+            "Локальная модель недоступна",
+            user_message="Локальная модель недоступна",
+        )
+
+    response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+
+    assert response.status_code == 200
+    assert "Локальная модель недоступна" in response.text
+
+
 def test_missing_confluence_configuration_returns_503_before_enqueue(
     client: TestClient, configured_models: None
 ) -> None:
