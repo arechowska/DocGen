@@ -227,27 +227,10 @@ def _format_example(template: SemanticTemplate) -> str:
             "template_id": "faq",
             "nodes": [
                 {
-                    "kind": "paragraph",
-                    "section_id": "purpose",
-                    "text": "Краткое назначение FAQ на основе источников.",
-                    "provenance": [
-                        {
-                            "source_id": "<id исходного блока>",
-                            "locator": "<locator исходного блока>",
-                            "quote": "<точная цитата из блока>",
-                        }
-                    ],
-                },
-                {
                     "kind": "list",
-                    "section_id": "questions",
-                    "text": "Вопросы и ответы",
-                    "data": {
-                        "items": [
-                            "Вопрос: ... Ответ: ...",
-                            "Вопрос: ... Ответ: ...",
-                        ]
-                    },
+                    "section_id": section.id,
+                    "text": section.title,
+                    "data": {"items": ["Вопрос: ... Ответ: ..."]},
                     "provenance": [
                         {
                             "source_id": "<id исходного блока>",
@@ -255,20 +238,8 @@ def _format_example(template: SemanticTemplate) -> str:
                             "quote": "<точная цитата из блока>",
                         }
                     ],
-                },
-                {
-                    "kind": "list",
-                    "section_id": "references",
-                    "text": "Источники сведений",
-                    "data": {"items": ["<название или id источника>"]},
-                    "provenance": [
-                        {
-                            "source_id": "<id исходного блока>",
-                            "locator": "<locator исходного блока>",
-                            "quote": "<точная цитата из блока>",
-                        }
-                    ],
-                },
+                }
+                for section in template.sections
             ],
         }
         return json.dumps(example, ensure_ascii=False, indent=2)
@@ -280,14 +251,15 @@ def _format_example(template: SemanticTemplate) -> str:
 
 def _template_instruction(template: SemanticTemplate) -> str:
     if template.id == "faq":
+        section_ids = ", ".join(section.id for section in template.sections)
         return (
             "Для FAQ преобразуйте описания, процедурные шаги, правила и ограничения из "
-            "источников в вопросы и ответы от лица пользователя. Секция purpose должна быть "
-            "paragraph с назначением FAQ. Секция questions должна быть list, где data.items "
-            "содержит строки вида 'Вопрос: ... Ответ: ...'. Секция references должна быть list "
-            "с перечислением использованных источников. Не создавайте gap только потому, что "
-            "источник не содержит готовых вопросов. Каждый ответ должен быть основан на факте "
-            "из исходных блоков и иметь provenance с точной quote. Если по конкретному вопросу "
+            "источников в вопросы и ответы от лица пользователя. Распределяйте их по разделам "
+            f"шаблона: {section_ids}. Каждый раздел делайте list, где data.items содержит "
+            "строки вида 'Вопрос: ... Ответ: ...'. Не создавайте gap только потому, что источник "
+            "не содержит готовых вопросов. Каждый ответ должен быть основан на факте из исходных "
+            "блоков и иметь provenance с точной quote. Не включайте в готовый FAQ перечень "
+            "источников, идентификаторы или служебные комментарии. Если по конкретному вопросу "
             "нет подтверждения в источниках, не придумывайте ответ."
         )
     return (
