@@ -19,6 +19,14 @@
       </div>
       <span class="docgen-status-pill">Ревизия {{ revision }}</span>
     </div>
+    {% if warnings %}
+      <section class="mx-5 mt-4 rounded-2xl bg-[#fff8e6] p-4" aria-label="Предупреждения">
+        <h3 class="text-sm font-semibold text-[#101828]">Предупреждения</h3>
+        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-[#667085]">
+          {% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}
+        </ul>
+      </section>
+    {% endif %}
     <div class="docgen-editor-toolbar" aria-label="Инструменты редактора">
       {% for kind, label in [("heading", "Раздел"), ("paragraph", "Абзац"), ("list", "Список"), ("table", "Таблица")] %}
         <button
