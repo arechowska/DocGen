@@ -83,8 +83,12 @@ def test_text_model_prints_payload_to_worker_console(
     assert '"messages": [' in captured.out
     assert '"content": "user"' in captured.out
     assert "=== DOCGEN MODEL RESPONSE RAW ===" in captured.out
-    assert '"choices"' in captured.out
-    assert '"template_id": "use-case"' in captured.out
+    raw_response = captured.out.split("=== DOCGEN MODEL RESPONSE RAW ===", maxsplit=1)[
+        1
+    ].split("=== DOCGEN MODEL RESPONSE CONTENT ===", maxsplit=1)[0]
+    response_payload = json.loads(raw_response)
+    document_payload = json.loads(response_payload["choices"][0]["message"]["content"])
+    assert document_payload["template_id"] == "use-case"
 
 
 def test_model_request_budget_accepts_exact_serialized_boundary_and_rejects_before_http() -> None:

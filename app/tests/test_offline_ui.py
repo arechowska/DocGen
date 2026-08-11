@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -41,6 +43,20 @@ def test_htmx_error_fragments_are_swapped_into_target() -> None:
     assert '"code":"[2345]..","swap":true' in markup
     assert '"code":"[45]..","swap":false' not in markup
     assert '"includeIndicatorStyles":false' in markup
+
+
+def test_htmx_shows_safe_model_configuration_error(client: TestClient) -> None:
+    """A missing model configuration must explain why a generation button did nothing."""
+    page = BeautifulSoup(client.get("/projects").text, "html.parser")
+    config = json.loads(page.find("meta", attrs={"name": "htmx-config"})["content"])
+
+    rule = next(
+        item
+        for item in config["responseHandling"]
+        if re.fullmatch(item["code"], "503")
+    )
+
+    assert rule["swap"] is True
 
 
 def test_templates_have_no_inline_handlers_styles_or_public_executable_assets() -> None:

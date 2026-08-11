@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse, Response
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
-from docgen.ai.client import ModelConfigurationError, build_text_model, build_vision_model
+from docgen.ai.client import ModelConfigurationError, build_text_model
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.extraction.confluence import ConfluenceClient
@@ -135,7 +135,7 @@ def _start_job(
     if not sources:
         return _setup_error(request, session, project, "Добавьте хотя бы один источник", 422)
 
-    catalog = TemplateCatalog()
+    catalog = TemplateCatalog(external_directory=request.app.state.settings.template_dir)
     try:
         template = catalog.get(template_id)
     except TemplateConfigurationError:
@@ -161,14 +161,20 @@ def _start_job(
                     catalog=catalog,
                 )
         elif document is None:
-            return _setup_error(
-                request,
-                session,
-                project,
-                "Выберите документ для проверки",
-                422,
-                catalog=catalog,
-            )
+            check_targets = [
+                source for source in sources if is_supported_check_target(source)
+            ]
+            if len(check_targets) == 1:
+                target_source_id = check_targets[0].id
+            else:
+                return _setup_error(
+                    request,
+                    session,
+                    project,
+                    "Выберите документ для проверки",
+                    422,
+                    catalog=catalog,
+                )
         if target_source_id is None and document.template_id != template.id:
             return _setup_error(
                 request,
@@ -226,8 +232,6 @@ def _start_job(
 def _dependency_error(request: Request, sources: list[Source]) -> str | None:
     try:
         build_text_model(request.app.state.settings)
-        if _may_need_vision_model(sources):
-            build_vision_model(request.app.state.settings)
     except ModelConfigurationError:
         return "Локальные модели не настроены"
 
@@ -242,15 +246,6 @@ def _dependency_error(request: Request, sources: list[Source]) -> str | None:
         if settings.confluence_api_base is None or not token_value or not token_value.strip():
             return "Интеграция Confluence не настроена"
     return None
-
-
-def _may_need_vision_model(sources: list[Source]) -> bool:
-    for source in sources:
-        if source.kind is SourceKind.CONFLUENCE:
-            return True
-        if source.kind is SourceKind.FILE and (source.media_type or "").lower().startswith("image/"):
-            return True
-    return False
 
 
 def _project_or_404(session: Session, project_id: str) -> Project:
@@ -282,7 +277,9 @@ def _setup_error(
     *,
     catalog: TemplateCatalog | None = None,
 ) -> Response:
-    template_catalog = catalog or TemplateCatalog()
+    template_catalog = catalog or TemplateCatalog(
+        external_directory=request.app.state.settings.template_dir
+    )
     documents = DocumentRepository(session)
     if _wants_full_page(request):
         sources = SourceRepository(session).list_for_project(project.id)
@@ -320,6 +317,11 @@ def _setup_error(
             "setup_fragment": True,
             "has_document": documents.get_document(project.id) is not None,
             "has_report": documents.get_report(project.id) is not None,
+            "check_targets": [
+                source
+                for source in SourceRepository(session).list_for_project(project.id)
+                if is_supported_check_target(source)
+            ],
         },
         status_code=status_code,
     )
@@ -343,10 +345,18 @@ def _status_response(
             "job": job,
             "is_active": job.status in _ACTIVE_STATUSES,
             "notice": notice,
-            "safe_error": _FAILED_MESSAGE if job.status is JobStatus.FAILED else None,
+            "safe_error": _safe_job_error(job),
         },
         status_code=status_code,
     )
+
+
+def _safe_job_error(job: Job) -> str | None:
+    if job.status is not JobStatus.FAILED:
+        return None
+    if job.error_message and job.status_message == job.error_message:
+        return job.error_message
+    return _FAILED_MESSAGE
 
 
 def _job_response(request: Request, session: Session, job: Job) -> Response:

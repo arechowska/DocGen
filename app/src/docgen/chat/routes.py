@@ -10,11 +10,16 @@ from sqlalchemy.orm import Session
 from docgen.ai.client import ModelConfigurationError, ModelError, build_text_model
 from docgen.chat.schemas import ChatEditRequest
 from docgen.chat.service import ChatGroundingError, ChatService, ChatValidationError
+from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind
-from docgen.extraction.schemas import BlockKind, NormalizedBlock
+from docgen.extraction.confluence import ConfluenceClient
+from docgen.extraction.registry import ExtractorRegistry
+from docgen.extraction.schemas import NormalizedBlock
 from docgen.projects.routes import get_session
+from docgen.sources.repository import SourceRepository
+from docgen.sources.storage import LocalStorage
 from docgen.web import templates
+from docgen.workflows.normalize import NormalizationWorkflow
 
 router = APIRouter(prefix="/projects")
 
@@ -72,42 +77,22 @@ def _chat_service(request: Request, session: Session):
     return ChatService(
         documents=DocumentRepository(session),
         model=build_text_model(request.app.state.settings),
-        source_blocks=lambda project_id: _source_blocks_from_document(session, project_id),
+        source_blocks=lambda project_id: _source_blocks_from_project(
+            session, request.app.state.settings, project_id
+        ),
     )
 
 
-def _source_blocks_from_document(session: Session, project_id: str) -> list[NormalizedBlock]:
-    document = DocumentRepository(session).get_document(project_id)
-    if document is None:
-        return []
-    return [
-        NormalizedBlock(
-            id=f"document:{node.id}",
-            kind=_block_kind(node.kind),
-            text=node.text or json.dumps(node.data, ensure_ascii=False),
-            confidence=1,
-        )
-        for node in _walk_nodes(document.nodes)
-        if node.text or node.data
-    ]
-
-
-def _block_kind(kind: NodeKind) -> BlockKind:
-    if kind is NodeKind.HEADING:
-        return BlockKind.HEADING
-    if kind is NodeKind.LIST:
-        return BlockKind.LIST
-    if kind is NodeKind.TABLE:
-        return BlockKind.TABLE
-    if kind is NodeKind.IMAGE:
-        return BlockKind.IMAGE
-    return BlockKind.TEXT
-
-
-def _walk_nodes(nodes: list[DocumentNode]):
-    for node in nodes:
-        yield node
-        yield from _walk_nodes(node.children)
+def _source_blocks_from_project(
+    session: Session, settings: Settings, project_id: str
+) -> list[NormalizedBlock]:
+    normalization = NormalizationWorkflow(
+        SourceRepository(session),
+        LocalStorage(settings.data_dir),
+        ExtractorRegistry.default(settings),
+        ConfluenceClient.from_settings(settings),
+    )
+    return normalization.run(project_id).blocks
 
 
 __all__ = ["router"]

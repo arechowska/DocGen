@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<9", "ruff>=0.9,<1"]
+dev = ["pytest>=8.3,<9", "ruff>=0.9,<1", "setuptools>=75"]
 
 [build-system]
 requires = ["setuptools>=75"]

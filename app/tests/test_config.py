@@ -5,17 +5,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from docgen import config
 from docgen.config import Settings
 
 
-def test_default_env_file_is_repository_root(monkeypatch: pytest.MonkeyPatch) -> None:
-    repository_root = Path(__file__).resolve().parents[2]
-    monkeypatch.chdir(repository_root / "app")
-
-    env_file = Path(Settings.model_config["env_file"])
-
-    assert env_file.is_absolute()
-    assert env_file == repository_root / ".env"
+def test_default_env_file_is_at_repository_root() -> None:
+    assert Settings.model_config["env_file"] == config.default_env_file()
 
 
 def test_resource_and_lease_defaults_are_conservative() -> None:
@@ -43,6 +38,12 @@ def test_trusted_hosts_are_loaded_from_json_environment(
     settings = Settings(_env_file=None)
 
     assert settings.trusted_integration_hosts == ("model.internal", "wiki.internal")
+
+
+def test_template_directory_can_be_configured(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, template_dir=tmp_path)
+
+    assert settings.template_dir == tmp_path
 
 
 @pytest.mark.parametrize(

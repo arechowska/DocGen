@@ -338,12 +338,18 @@ class JobRepository:
             updated_at=now,
         )
 
-    def mark_failed(self, job_id: str, error_message: str) -> Job:
+    def mark_failed(
+        self,
+        job_id: str,
+        error_message: str,
+        *,
+        user_message: str | None = None,
+    ) -> Job:
         now = self._now()
         return self._atomic_owned_update(
             job_id,
             status=JobStatus.FAILED,
-            status_message=_FAILED_MESSAGE,
+            status_message=user_message or _FAILED_MESSAGE,
             error_message=error_message,
             lease_expires_at=None,
             finished_at=now,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -37,6 +39,14 @@ def configured_models(client: TestClient) -> None:
     settings.local_vision_base_url = "http://vision-model.test/v1"
     settings.local_vision_model = "vision-model"
     settings.trusted_integration_hosts = ("text-model.test", "vision-model.test")
+
+
+@pytest.fixture
+def configured_text_model(client: TestClient) -> None:
+    settings = client.app.state.settings
+    settings.local_text_base_url = "http://text-model.test/v1"
+    settings.local_text_model = "text-model"
+    settings.trusted_integration_hosts = ("text-model.test",)
 
 
 @pytest.fixture
@@ -98,8 +108,30 @@ def test_start_assemble_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 
-def test_start_assemble_with_text_source_does_not_require_vision_model(
-    client: TestClient, project_with_source: Project
+def test_start_assemble_accepts_external_semantic_template(
+    client: TestClient,
+    configured_models: None,
+    project_with_source: Project,
+    tmp_path: Path,
+) -> None:
+    bundled_faq = files("docgen.templates_catalog").joinpath("semantic/faq.yaml")
+    (tmp_path / "custom-faq.yaml").write_text(
+        bundled_faq.read_text(encoding="utf-8").replace("id: faq", "id: custom-faq", 1),
+        encoding="utf-8",
+    )
+    client.app.state.settings.template_dir = tmp_path
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "custom-faq"},
+    )
+
+    assert response.status_code == 202
+    assert _jobs_for_project(client, project_with_source.id)[0].template_id == "custom-faq"
+
+
+def test_text_only_model_configuration_enqueues_assemble_job(
+    client: TestClient, configured_text_model: None, project_with_source: Project
 ) -> None:
     settings = client.app.state.settings
     settings.local_text_base_url = "http://text-model.test/v1"
@@ -158,6 +190,25 @@ def test_missing_model_configuration_returns_503(
     assert response.status_code == 503
     assert "Локальные модели не настроены" in response.text
     assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_failed_job_renders_safe_worker_error(
+    client: TestClient, project_with_source: Project
+) -> None:
+    with _session(client) as session:
+        repository = JobRepository(session, worker_id="route-test-worker")
+        job = repository.enqueue(project_with_source.id, JobKind.ASSEMBLE, "use-case")
+        repository.claim_next()
+        repository.mark_failed(
+            job.id,
+            "Локальная модель недоступна",
+            user_message="Локальная модель недоступна",
+        )
+
+    response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+
+    assert response.status_code == 200
+    assert "Локальная модель недоступна" in response.text
 
 
 def test_missing_confluence_configuration_returns_503_before_enqueue(
@@ -229,17 +280,19 @@ def test_invalid_template_is_rejected(
     assert "Шаблон не найден" in response.text
 
 
-def test_check_without_current_document_or_target_is_rejected_before_enqueue(
+def test_check_uses_the_only_uploaded_document_without_reselecting_it(
     client: TestClient, configured_models: None, project_with_source: Project
 ) -> None:
+    target_source_id = _source_id(client, project_with_source.id, "case.md")
+
     response = client.post(
         f"/projects/{project_with_source.id}/jobs/check",
         data={"template_id": "use-case"},
     )
 
-    assert response.status_code == 422
-    assert "Выберите документ для проверки" in response.text
-    assert _jobs_for_project(client, project_with_source.id) == []
+    assert response.status_code == 202
+    job = _jobs_for_project(client, project_with_source.id)[0]
+    assert job.target_source_id == target_source_id
 
 
 def test_check_rejects_target_source_from_another_project(

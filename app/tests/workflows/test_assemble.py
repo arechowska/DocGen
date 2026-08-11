@@ -231,17 +231,26 @@ def test_assemble_prompt_tells_faq_to_convert_supported_facts_into_answers(
 
     payload = json.loads(_assemble_prompt(template, blocks))
 
-    assert "не требуйте, чтобы источник уже был написан в формате шаблона" in payload["задача"]
+    assert "не требуйте, чтобы источник уже был написан в формате шаблона" in payload[
+        "задача"
+    ].lower()
     assert "ровно один верхнеуровневый node" in payload["правила_json"]
-    assert "purpose, questions, references" in payload["правила_json"]
-    assert "не добавляйте section_id" in payload["правила_json"]
+    assert (
+        "general_questions, getting_started, working_with_system, errors_and_limitations"
+        in payload["правила_json"]
+    )
+    assert "не добавляйте section_id" in payload["правила_json"].lower()
     assert "data.items" in payload["правила_json"]
-    assert '"section_id": "purpose"' in payload["пример_формата"]
-    assert '"section_id": "questions"' in payload["пример_формата"]
-    assert '"section_id": "references"' in payload["пример_формата"]
-    assert payload["пример_формата"].count('"section_id"') == 3
+    assert '"section_id": "general_questions"' in payload["пример_формата"]
+    assert '"section_id": "getting_started"' in payload["пример_формата"]
+    assert '"section_id": "working_with_system"' in payload["пример_формата"]
+    assert '"section_id": "errors_and_limitations"' in payload["пример_формата"]
+    assert '"section_id": "purpose"' not in payload["пример_формата"]
+    assert '"section_id": "references"' not in payload["пример_формата"]
     assert "процедур" in payload["инструкция_для_шаблона"]
     assert "вопросы и ответы" in payload["инструкция_для_шаблона"]
+    assert "Секция purpose" not in payload["инструкция_для_шаблона"]
+    assert "Секция references" not in payload["инструкция_для_шаблона"]
     assert "точной quote" in payload["инструкция_для_шаблона"]
 
 
@@ -362,7 +371,7 @@ def test_production_builder_never_falls_back_to_fake_models(
         templates=TemplateCatalog(),
         documents=documents,
     )
-    workflows = build_workflows(Settings(data_dir=tmp_path), dependencies)
+    workflows = build_workflows(Settings(_env_file=None, data_dir=tmp_path), dependencies)
 
     with pytest.raises(ModelConfigurationError, match="Локальные модели не настроены"):
         workflows[JobKind.ASSEMBLE].run(_job(JobKind.ASSEMBLE), ProgressSpy(events))

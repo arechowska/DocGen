@@ -85,7 +85,7 @@ def main() -> None:
                 WorkflowDependencies(
                     projects=ProjectRepository(session),
                     normalization=normalization,
-                    templates=TemplateCatalog(),
+                    templates=TemplateCatalog(external_directory=settings.template_dir),
                     documents=DocumentRepository(session),
                 ),
             )
