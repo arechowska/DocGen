@@ -8,10 +8,17 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def default_env_file() -> Path:
+    root = repository_root()
+    if (root / "app" / "pyproject.toml").is_file():
+        return root / ".env"
+    return Path(".env")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOCGEN_",
-        env_file=repository_root() / ".env",
+        env_file=default_env_file(),
     )
 
     database_url: str = "sqlite:///./var/docgen.db"

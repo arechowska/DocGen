@@ -8,7 +8,7 @@ from docgen.config import Settings
 
 
 def test_default_env_file_is_at_repository_root() -> None:
-    assert Settings.model_config["env_file"] == config.repository_root() / ".env"
+    assert Settings.model_config["env_file"] == config.default_env_file()
 
 
 def test_resource_and_lease_defaults_are_conservative() -> None:

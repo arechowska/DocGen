@@ -161,14 +161,20 @@ def _start_job(
                     catalog=catalog,
                 )
         elif document is None:
-            return _setup_error(
-                request,
-                session,
-                project,
-                "Выберите документ для проверки",
-                422,
-                catalog=catalog,
-            )
+            check_targets = [
+                source for source in sources if is_supported_check_target(source)
+            ]
+            if len(check_targets) == 1:
+                target_source_id = check_targets[0].id
+            else:
+                return _setup_error(
+                    request,
+                    session,
+                    project,
+                    "Выберите документ для проверки",
+                    422,
+                    catalog=catalog,
+                )
         if target_source_id is None and document.template_id != template.id:
             return _setup_error(
                 request,
@@ -305,6 +311,11 @@ def _setup_error(
             "setup_fragment": True,
             "has_document": documents.get_document(project.id) is not None,
             "has_report": documents.get_report(project.id) is not None,
+            "check_targets": [
+                source
+                for source in SourceRepository(session).list_for_project(project.id)
+                if is_supported_check_target(source)
+            ],
         },
         status_code=status_code,
     )

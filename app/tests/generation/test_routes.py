@@ -280,17 +280,19 @@ def test_invalid_template_is_rejected(
     assert "Шаблон не найден" in response.text
 
 
-def test_check_without_current_document_or_target_is_rejected_before_enqueue(
+def test_check_uses_the_only_uploaded_document_without_reselecting_it(
     client: TestClient, configured_models: None, project_with_source: Project
 ) -> None:
+    target_source_id = _source_id(client, project_with_source.id, "case.md")
+
     response = client.post(
         f"/projects/{project_with_source.id}/jobs/check",
         data={"template_id": "use-case"},
     )
 
-    assert response.status_code == 422
-    assert "Выберите документ для проверки" in response.text
-    assert _jobs_for_project(client, project_with_source.id) == []
+    assert response.status_code == 202
+    job = _jobs_for_project(client, project_with_source.id)[0]
+    assert job.target_source_id == target_source_id
 
 
 def test_check_rejects_target_source_from_another_project(
