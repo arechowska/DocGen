@@ -490,6 +490,24 @@ def test_missing_artifact_retry_swaps_error_responses_into_status(
     assert '"code":"[2345].."' in project_page.text
 
 
+def test_full_page_generation_error_keeps_workspace_context(
+    client: TestClient, project_with_source: Project
+) -> None:
+    _save_document(client, project_with_source.id, _document())
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "missing"},
+        headers={"Accept": "text/html"},
+    )
+
+    assert response.status_code == 422
+    assert 'id="project-workspace"' in response.text
+    assert 'id="editor-shell"' in response.text
+    assert 'data-state="ready"' in response.text
+    assert "Шаблон не найден" in response.text
+
+
 def test_document_view_renders_all_node_kinds_in_order_and_explicit_gap(
     client: TestClient, project_with_source: Project
 ) -> None:

@@ -40,6 +40,10 @@ def test_wheel_clean_install_renders_pages_outside_source_tree(tmp_path: Path) -
     with ZipFile(wheel) as archive:
         members = set(archive.namelist())
     assert "docgen/templates/projects/index.html" in members
+    assert "docgen/templates/projects/source_panel.html" in members
+    assert "docgen/templates/projects/work_panel.html" in members
+    assert "docgen/templates/projects/action_panel.html" in members
+    assert "docgen/templates/editor/surface.html" in members
     assert "docgen/templates/generation/status.html" in members
     assert "docgen/static/vendor/htmx-2.0.8.min.js" in members
     assert "docgen/static/vendor/HTMX-LICENSE.txt" in members

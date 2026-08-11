@@ -286,6 +286,9 @@ def _setup_error(
     documents = DocumentRepository(session)
     if _wants_full_page(request):
         sources = SourceRepository(session).list_for_project(project.id)
+        stored_document = documents.get_document_with_revision(project.id)
+        document = stored_document[0] if stored_document is not None else None
+        revision = stored_document[1] if stored_document is not None else None
         return templates.TemplateResponse(
             request=request,
             name="projects/detail.html",
@@ -299,8 +302,11 @@ def _setup_error(
                 "templates": template_catalog.list(),
                 "generation_error": message,
                 "setup_fragment": False,
-                "has_document": documents.get_document(project.id) is not None,
+                "document": document,
+                "revision": revision,
+                "has_document": document is not None,
                 "has_report": documents.get_report(project.id) is not None,
+                "source_error": None,
             },
             status_code=status_code,
         )
