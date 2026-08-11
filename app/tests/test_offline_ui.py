@@ -38,6 +38,7 @@ def test_htmx_error_fragments_are_swapped_into_target() -> None:
 
     assert '"code":"[2345]..","swap":true' in markup
     assert '"code":"[45]..","swap":false' not in markup
+    assert '"includeIndicatorStyles":false' in markup
 
 
 def test_templates_have_no_inline_handlers_styles_or_public_executable_assets() -> None:
