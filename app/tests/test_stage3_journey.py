@@ -134,6 +134,16 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
         assert uploaded_job.target_source_id == source_id
         assert uploaded_job.check_target_kind is CheckTargetKind.SOURCE
 
+    with TestClient(create_app(settings)) as restarted:
+        editor = restarted.get(f"{project_url}/editor")
+        assert editor.status_code == 200
+        assert "FAQ по работе с Formatta" in editor.text
+        assert "Загрузите Markdown и выберите FAQ" in editor.text
+        assert "Проверено редактором" in editor.text
+        persisted = _stored_document(restarted, project_id)
+        assert persisted.template_id == "faq"
+        assert persisted.nodes[:4] == saved.nodes[:4]
+
 
 class _JourneyModel:
     def __init__(self) -> None:
