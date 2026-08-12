@@ -67,6 +67,36 @@ def test_text_model_parses_structured_response(mock_transport: httpx.MockTranspo
     assert result.template_id == "use-case"
 
 
+def test_qwen_text_model_disables_thinking_for_structured_output() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"title": "FAQ", "template_id": "faq", "nodes": []}
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL,
+        model="qwen3.6-35b-256k",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = model.generate_json("system", "user", WorkingDocument)
+
+    assert result.template_id == "faq"
+
+
 def test_text_model_prints_payload_to_worker_console(
     mock_transport: httpx.MockTransport,
     capsys: pytest.CaptureFixture[str],

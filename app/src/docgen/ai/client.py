@@ -75,6 +75,8 @@ class _OpenAICompatibleModel:
                 },
             },
         }
+        if self._model.lower().startswith("qwen"):
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         print("=== DOCGEN MODEL REQUEST PAYLOAD ===")
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         response_bytes = self._post(payload)
