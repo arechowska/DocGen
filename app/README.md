@@ -54,6 +54,37 @@ cd app
 
 Интерфейс доступен по `http://127.0.0.1:8000/projects`.
 
+## Запуск через Docker
+
+Из корня репозитория можно запустить web и worker одной командой:
+
+```bash
+docker compose up --build
+```
+
+Compose собирает один локальный образ `docgen:local` и запускает два сервиса:
+
+- `web` — FastAPI/uvicorn, порт `8000`;
+- `worker` — обработчик очереди `python -m docgen.jobs.worker`.
+
+Интерфейс будет доступен по `http://127.0.0.1:8000/projects`.
+
+Runtime-данные SQLite и загруженные файлы хранятся в volume `docgen-var`.
+Файл `.env` не копируется в Docker-образ и исключён из build context через `.dockerignore`;
+compose подключает его только во время запуска через `env_file`.
+
+Минимальная конфигурация для text-only сборки:
+
+```env
+DOCGEN_LOCAL_TEXT_BASE_URL=https://example.local
+DOCGEN_LOCAL_TEXT_MODEL=model-name
+DOCGEN_LOCAL_TEXT_API_KEY=replace-with-local-secret
+DOCGEN_TRUSTED_INTEGRATION_HOSTS=["localhost","127.0.0.1","::1","example.local"]
+```
+
+Для внешней Confluence и vision-модели используются те же переменные `DOCGEN_*`,
+которые перечислены ниже в разделе конфигурации.
+
 ## Конфигурация
 
 При запуске из исходного репозитория `Settings` автоматически загружает `.env` из корня DocGen; переменные окружения процесса имеют приоритет. У установленного wheel `.env` ищется в текущей рабочей директории. Вручную выполнять `. ./.env` для полей `Settings` не требуется. `DOCGEN_WORKER_ID` читается worker напрямую из окружения процесса и не является полем `Settings`.

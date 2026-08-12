@@ -1,0 +1,35 @@
+services:
+  web:
+    build:
+      context: .
+    image: docgen:local
+    env_file:
+      - .env
+    environment:
+      DOCGEN_DATABASE_URL: sqlite:////app/var/docgen.db
+      DOCGEN_DATA_DIR: /app/var/data
+    ports:
+      - "8000:8000"
+    volumes:
+      - docgen-var:/app/var
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    image: docgen:local
+    command: ["python", "-m", "docgen.jobs.worker"]
+    env_file:
+      - .env
+    environment:
+      DOCGEN_DATABASE_URL: sqlite:////app/var/docgen.db
+      DOCGEN_DATA_DIR: /app/var/data
+      DOCGEN_WORKER_ID: docker-worker-1
+    volumes:
+      - docgen-var:/app/var
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  docgen-var:
