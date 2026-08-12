@@ -71,6 +71,69 @@ def test_replacing_document_increments_revision_and_invalidates_report(
     assert repository.get_report(project.id) is None
 
 
+def test_workspace_save_uses_revision_and_stores_html(
+    artifact_session: Session,
+) -> None:
+    project = ProjectRepository(artifact_session).create("Проект")
+    repository = DocumentRepository(artifact_session)
+    first = WorkingDocument(
+        title="Первая версия",
+        template_id="faq",
+        nodes=[DocumentNode(id="n1", kind=NodeKind.PARAGRAPH, text="Первая")],
+    )
+    saved = first.model_copy(update={"title": "Ручная правка"})
+    repository.save_document(project.id, first)
+
+    revision = repository.save_workspace(
+        project.id,
+        expected_revision=1,
+        document=saved,
+        html='<p data-node-id="n1">Ручная правка</p>',
+    )
+
+    assert revision == 2
+    assert repository.get_document(project.id) == saved
+    assert repository.get_workspace_html(project.id) == (
+        '<p data-node-id="n1">Ручная правка</p>'
+    )
+
+    stale_revision = repository.save_workspace(
+        project.id,
+        expected_revision=1,
+        document=first,
+        html="<p>Устаревшее</p>",
+    )
+
+    assert stale_revision is None
+    assert repository.get_document(project.id) == saved
+    assert repository.get_workspace_html(project.id) == (
+        '<p data-node-id="n1">Ручная правка</p>'
+    )
+
+
+def test_structured_document_writes_clear_stale_workspace_html(
+    artifact_session: Session,
+) -> None:
+    project = ProjectRepository(artifact_session).create("Проект")
+    repository = DocumentRepository(artifact_session)
+    first = WorkingDocument(
+        title="Первая версия",
+        template_id="faq",
+        nodes=[DocumentNode(id="n1", kind=NodeKind.PARAGRAPH, text="Первая")],
+    )
+    second = first.model_copy(update={"title": "Вторая версия"})
+    third = first.model_copy(update={"title": "Третья версия"})
+    repository.save_document(project.id, first)
+    repository.save_workspace(project.id, 1, first, "<p>Снимок 1</p>")
+
+    assert repository.save_document(project.id, second) == 3
+    assert repository.get_workspace_html(project.id) is None
+
+    repository.save_workspace(project.id, 3, second, "<p>Снимок 2</p>")
+    assert repository.replace_document(project.id, 4, third) == 5
+    assert repository.get_workspace_html(project.id) is None
+
+
 def test_report_is_hidden_when_bound_revision_does_not_match_document(
     artifact_session: Session,
 ) -> None:

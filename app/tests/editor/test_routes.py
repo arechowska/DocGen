@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.extraction.schemas import Provenance
 from docgen.main import create_app
 from docgen.models import Project
-from docgen.projects.repository import ProjectRepository
 
 
 @pytest.fixture
@@ -38,7 +38,20 @@ def project_with_document(client: TestClient) -> Project:
             title="Рабочий документ",
             template_id="use-case",
             nodes=[
-                DocumentNode(id="n1", kind=NodeKind.HEADING, text="Заголовок"),
+                DocumentNode(
+                    id="n1",
+                    kind=NodeKind.HEADING,
+                    section_id="summary",
+                    text="Заголовок",
+                    provenance=[
+                        Provenance(
+                            source_id="source-1",
+                            locator="heading:1",
+                            quote="Заголовок",
+                        )
+                    ],
+                    flags=["reviewed"],
+                ),
                 DocumentNode(id="p1", kind=NodeKind.PARAGRAPH, text="Абзац"),
                 DocumentNode(id="list-1", kind=NodeKind.LIST, data={"items": ["Пункт"]}),
                 DocumentNode(id="table-1", kind=NodeKind.TABLE, data={"rows": [["A", "B"]]}),
@@ -181,36 +194,116 @@ def test_delete_node_removes_it_from_document(
         ]
 
 
-def test_docgen2_editor_save_stores_title_and_workspace_html(
+def test_workspace_save_preserves_semantic_metadata(
     client: TestClient, project_with_document: Project
 ) -> None:
+    original = _stored_document(client, project_with_document.id)
     response = client.post(
         f"/projects/{project_with_document.id}/editor/save",
         json={
-            "title": "Saved workspace",
-            "html": "<h1>Saved workspace</h1><p><strong>Important</strong> paragraph</p><table><tbody><tr><td>A</td></tr></tbody></table>",
+            "title": "Исправленный FAQ",
+            "html": '<h2 data-node-id="n1">Новый заголовок</h2>',
+            "revision": 1,
         },
     )
 
     assert response.status_code == 200
     assert response.json()["revision"] == 2
-    with _session(client) as session:
-        project = ProjectRepository(session).get(project_with_document.id)
-        document = DocumentRepository(session).get_document(project_with_document.id)
-        assert project is not None
-        assert project.name == "Saved workspace"
-        assert document is not None
-        assert document.title == "Saved workspace"
-        assert document.nodes == [
-            DocumentNode(
-                id="docgen2-workspace",
-                kind=NodeKind.PARAGRAPH,
-                text="Saved workspace Important paragraph A",
-                data={
-                    "html": "<h1>Saved workspace</h1><p><strong>Important</strong> paragraph</p><table><tbody><tr><td>A</td></tr></tbody></table>",
-                },
-            )
-        ]
+    saved = _stored_document(client, project_with_document.id)
+    assert saved.title == "Исправленный FAQ"
+    assert saved.template_id == original.template_id
+    assert saved.nodes[0].id == "n1"
+    assert saved.nodes[0].text == "Новый заголовок"
+    assert saved.nodes[0].section_id == original.nodes[0].section_id
+    assert saved.nodes[0].provenance == original.nodes[0].provenance
+    assert saved.nodes[0].flags == original.nodes[0].flags
+
+
+def test_workspace_save_updates_order_lists_tables_and_new_manual_nodes(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Новый порядок",
+            "html": (
+                '<table data-node-id="table-1"><tbody><tr><th>Ключ</th><th>Значение</th></tr>'
+                "<tr><td>A</td><td>1</td></tr></tbody></table>"
+                '<ul data-node-id="list-1"><li>Первый</li><li>Второй</li></ul>'
+                "<p>Добавленный вручную абзац</p>"
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id)
+    assert [node.kind for node in saved.nodes] == [
+        NodeKind.TABLE,
+        NodeKind.LIST,
+        NodeKind.PARAGRAPH,
+    ]
+    assert [node.id for node in saved.nodes[:2]] == ["table-1", "list-1"]
+    assert saved.nodes[0].data["rows"] == [["Ключ", "Значение"], ["A", "1"]]
+    assert saved.nodes[1].data["items"] == ["Первый", "Второй"]
+    assert saved.nodes[2].text == "Добавленный вручную абзац"
+    assert saved.nodes[2].flags == ["manual-edit"]
+    assert saved.nodes[2].provenance == []
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<h2 data-node-id="missing">Чужой узел</h2>',
+        '<h2 data-node-id="n1">Первый</h2><h2 data-node-id="n1">Повтор</h2>',
+    ],
+)
+def test_workspace_save_rejects_invalid_claimed_node_ids(
+    client: TestClient, project_with_document: Project, html: str
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={"title": "Не сохранять", "html": html, "revision": 1},
+    )
+
+    assert response.status_code == 422
+    assert _stored_document(client, project_with_document.id).title == "Рабочий документ"
+
+
+def test_stale_workspace_save_returns_conflict(
+    client: TestClient, project_with_document: Project
+) -> None:
+    first = _save_workspace(client, project_with_document.id, revision=1)
+    second = _save_workspace(client, project_with_document.id, revision=1)
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert _stored_document(client, project_with_document.id).title == "Версия 1"
+
+
+def test_stale_workspace_save_returns_conflict_before_node_validation(
+    client: TestClient, project_with_document: Project
+) -> None:
+    first = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Узел n1 удалён",
+            "html": '<p data-node-id="p1">Сохранённый абзац</p>',
+            "revision": 1,
+        },
+    )
+    stale = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Устаревшая правка",
+            "html": '<h2 data-node-id="n1">Устаревший узел</h2>',
+            "revision": 1,
+        },
+    )
+
+    assert first.status_code == 200
+    assert stale.status_code == 409
+    assert _stored_document(client, project_with_document.id).title == "Узел n1 удалён"
 
 
 def test_project_detail_restores_saved_docgen2_workspace_html(
@@ -220,7 +313,8 @@ def test_project_detail_restores_saved_docgen2_workspace_html(
         f"/projects/{project_with_document.id}/editor/save",
         json={
             "title": "Restored project",
-            "html": "<h1>Restored</h1><p><em>Editable</em> content</p>",
+            "html": '<h1 data-node-id="n1">Restored</h1><p><em>Editable</em> content</p>',
+            "revision": 1,
         },
     )
     assert saved.status_code == 200
@@ -236,6 +330,42 @@ def test_project_detail_restores_saved_docgen2_workspace_html(
     assert canvas is not None
     assert canvas.find("em") is not None
     assert canvas.get_text(" ", strip=True) == "Restored Editable content"
+    assert canvas.find(attrs={"data-node-id": "n1"}) is not None
+    editor = soup.find(id="docgen2Editor")
+    assert editor is not None
+    assert editor.get("data-revision") == "2"
+
+
+def test_project_detail_renders_semantic_node_identifiers(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(f"/projects/{project_with_document.id}")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    heading = soup.find(attrs={"data-node-id": "n1"})
+    assert heading is not None
+    assert heading.get("data-kind") == "heading"
+    assert heading.get("data-section-id") == "summary"
+    assert soup.find(id="docgen2Editor").get("data-revision") == "1"
+
+
+def _save_workspace(client: TestClient, project_id: str, revision: int):
+    return client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": f"Версия {revision}",
+            "html": '<h2 data-node-id="n1">Обновлённый заголовок</h2>',
+            "revision": revision,
+        },
+    )
+
+
+def _stored_document(client: TestClient, project_id: str) -> WorkingDocument:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_id)
+        assert document is not None
+        return document
 
 
 @contextmanager

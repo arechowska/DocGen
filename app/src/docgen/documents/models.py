@@ -16,6 +16,7 @@ class ProjectArtifact(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
     )
     document_json: Mapped[str | None] = mapped_column(Text)
+    workspace_html: Mapped[str | None] = mapped_column(Text)
     report_json: Mapped[str | None] = mapped_column(Text)
     document_revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")

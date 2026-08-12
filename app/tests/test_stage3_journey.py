@@ -48,12 +48,17 @@ def test_edit_chat_save_restart_and_recheck() -> None:
     app.state.chat_service_factory = lambda request, session: JourneyChat(session)
     with TestClient(app) as client:
         project_id = _seed_project(client)
-        text_url = f"/projects/{project_id}/editor/nodes/manual/text"
         chat_url = f"/projects/{project_id}/chat"
-        response = client.patch(
-            text_url,
-            data={"text": "Ручная правка", "revision": "1"},
-            headers={"HX-Request": "true"},
+        response = client.post(
+            f"/projects/{project_id}/editor/save",
+            json={
+                "title": "Документ Stage 3",
+                "html": (
+                    '<p data-node-id="manual">Ручная правка</p>'
+                    '<p data-node-id="result">Исходный результат</p>'
+                ),
+                "revision": 1,
+            },
         )
         assert response.status_code == 200
 
@@ -65,6 +70,16 @@ def test_edit_chat_save_restart_and_recheck() -> None:
             },
         )
         assert response.status_code == 200
+        session = client.app.state.session_factory()
+        try:
+            repository = DocumentRepository(session)
+            saved = repository.get_document(project_id)
+            assert saved is not None
+            assert saved.nodes[0].text == "Ручная правка"
+            assert saved.nodes[1].text == "Уточнённый результат"
+            assert repository.get_workspace_html(project_id) is None
+        finally:
+            session.close()
 
     restarted_app = create_app(settings)
     restarted_app.state.chat_service_factory = lambda request, session: JourneyChat(session)

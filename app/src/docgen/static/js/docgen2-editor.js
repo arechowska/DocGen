@@ -28,12 +28,11 @@
     synchronizeTemplate();
     templateSource.addEventListener("change", synchronizeTemplate);
   }
-  document.addEventListener("htmx:afterSwap", synchronizeTemplate);
+  const initializeEditor = () => {
+    const editor = document.querySelector("#docgen2Editor");
+    if (!editor || editor.dataset.editorInitialized === "true") return;
 
-  const editor = document.querySelector("#docgen2Editor");
-  if (!editor) return;
-
-  const canvas = editor.querySelector("#docgen2DocumentCanvas");
+    const canvas = editor.querySelector("#docgen2DocumentCanvas");
   const titleInput = editor.querySelector("#docgen2EditorTitle");
   const headingSelect = editor.querySelector("[data-editor-heading]");
   const imageInput = editor.querySelector("#docgen2ImageInput");
@@ -43,7 +42,8 @@
   const tableColumns = editor.querySelector("[data-table-columns]");
   const saveButton = editor.querySelector("[data-editor-save]");
   const saveStatus = editor.querySelector("[data-editor-save-status]");
-  if (!canvas) return;
+    if (!canvas) return;
+    editor.dataset.editorInitialized = "true";
   let lastTableContext = null;
 
   const focusCanvas = () => {
@@ -87,10 +87,15 @@
         body: JSON.stringify({
           title: titleInput?.value || "Новый документ",
           html: canvas.innerHTML,
+          revision: Number.parseInt(editor.dataset.revision, 10),
         }),
       });
       if (!response.ok) throw new Error("save failed");
-      await response.json();
+      const result = await response.json();
+      editor.dataset.revision = String(result.revision);
+      document.querySelectorAll('input[name="revision"]').forEach((input) => {
+        input.value = String(result.revision);
+      });
       markDocumentReady();
       setSaveStatus("Сохранено", "saved");
     } catch {
@@ -264,12 +269,6 @@
     if (action === "insert") closeTableMenu();
   });
 
-  document.addEventListener("click", (event) => {
-    if (!tableMenu || tableMenu.hidden) return;
-    if (editor.contains(event.target)) return;
-    closeTableMenu();
-  });
-
   headingSelect?.addEventListener("change", () => {
     runCommand("formatBlock", headingSelect.value || "p");
   });
@@ -280,6 +279,22 @@
   });
 
   saveButton?.addEventListener("click", () => {
-    saveWorkspace();
+    return saveWorkspace();
   });
+  };
+
+  document.addEventListener("click", (event) => {
+    const activeEditor = document.querySelector("#docgen2Editor");
+    const activeMenu = activeEditor?.querySelector("#tableMenu");
+    if (!activeMenu || activeMenu.hidden || activeEditor.contains(event.target)) return;
+    activeMenu.hidden = true;
+    activeEditor
+      .querySelector('[data-editor-command="table"]')
+      ?.setAttribute("aria-expanded", "false");
+  });
+  document.addEventListener("htmx:afterSwap", () => {
+    synchronizeTemplate();
+    initializeEditor();
+  });
+  initializeEditor();
 })();

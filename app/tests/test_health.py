@@ -109,6 +109,7 @@ def test_startup_adds_check_target_column_to_existing_sqlite_database(
         "document_revision",
         "report_revision",
         "report_generation",
+        "workspace_html",
     }.issubset(artifact_columns)
     assert migrated_target is None
 

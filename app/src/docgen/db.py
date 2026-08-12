@@ -88,6 +88,10 @@ def _migrate_project_artifacts(connection: Connection) -> None:
     if "project_artifacts" not in _table_names(connection):
         return
     columns = _columns(connection, "project_artifacts")
+    if "workspace_html" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE project_artifacts ADD COLUMN workspace_html TEXT"
+        )
     added_revision = "document_revision" not in columns
     if added_revision:
         connection.exec_driver_sql(

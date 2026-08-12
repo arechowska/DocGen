@@ -179,6 +179,71 @@ if (targets.some((target) => target.value !== "faq")) {{
     subprocess.run(["node", "-e", harness], check=True, capture_output=True, text=True)
 
 
+def test_editor_save_is_initialized_after_htmx_replaces_workspace(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const documentListeners = new Map();
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: '<p data-node-id="n1">Правка</p>', focus() {{}} }});
+const title = element({{ value: "После сборки" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+let currentEditor = null;
+let posted = null;
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#docgen2Editor") return currentEditor;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener(type, listener) {{ documentListeners.set(type, listener); }},
+  execCommand() {{}},
+}};
+globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.fetch = async (url, options) => {{
+  posted = {{ url, payload: JSON.parse(options.body) }};
+  return {{ ok: true, async json() {{ return {{ revision: 2 }}; }} }};
+}};
+{script.text}
+currentEditor = editor;
+documentListeners.get("htmx:afterSwap")();
+await saveButton.listeners.get("click")();
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (posted?.url !== "/projects/p1/editor/save") throw new Error("save was not posted");
+if (posted.payload.revision !== 1) throw new Error("revision was not posted");
+if (editor.dataset.revision !== "2") throw new Error("revision was not updated");
+"""
+
+    subprocess.run(
+        ["node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(
     client: TestClient,
 ) -> None:
