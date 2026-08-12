@@ -4,7 +4,7 @@
 
 **Goal:** Стабилизировать новый интерфейс Formatta: корректно запускать сборку и самостоятельную проверку по выбранному шаблону, сохранять визуальные правки без потери структуры и grounding, применять спокойную корпоративную палитру.
 
-**Architecture:** Верхний селектор шаблона синхронизируется с отдельными формами сборки и проверки. HTML-представление визуального редактора хранится отдельно в `ProjectArtifact`, а `WorkingDocument` остаётся смысловым источником для чата и проверки. Пользовательский бренд меняется на Formatta, внутренний пакет `docgen` и переменные `DOCGEN_*` сохраняются для совместимости.
+**Architecture:** Верхний селектор шаблона синхронизируется с отдельными формами сборки и проверки. Элементы визуального редактора связаны с `WorkingDocument.nodes` через `data-node-id`; сервер преобразует очищенный HTML обратно в структурированные узлы, сохраняя смысловые метаданные существующих узлов. HTML хранится как визуальное представление и сбрасывается после сборки или чат-правки. Пользовательский бренд меняется на Formatta, внутренний пакет `docgen` и переменные `DOCGEN_*` сохраняются для совместимости.
 
 **Tech Stack:** FastAPI, SQLAlchemy, SQLite, Pydantic, Jinja2, HTMX, vanilla JavaScript, static CSS, pytest, Ruff.
 
@@ -12,7 +12,7 @@
 
 - Этап 4, экспорт и шаблоны оформления не реализуются.
 - Самостоятельная проверка одного загруженного файла не требует предварительной сборки или повторного выбора файла.
-- Ручное сохранение не меняет `WorkingDocument.template_id`, `nodes`, `provenance` и `flags`.
+- Ручное сохранение обновляет `WorkingDocument.nodes`, но не меняет `template_id`, `section_id`, provenance и служебные флаги существующих узлов; новые узлы получают флаг `manual-edit` без вымышленных provenance.
 - Чат проверяет факты по нормализованным загруженным источникам.
 - В пользовательском интерфейсе используется только название `Formatta`.
 - Заголовки внутри листа документа могут быть синими как часть корпоративного оформления; интерфейсные заголовки и тексты остаются графитовыми.
@@ -89,7 +89,7 @@ git add app/src/docgen/templates/projects/detail.html app/src/docgen/templates/p
 git commit -m "fix: stabilize workspace check controls"
 ```
 
-### Task 2: Отдельное HTML-представление редактора
+### Task 2: Структурное сохранение визуального редактора
 
 **Files:**
 - Modify: `app/src/docgen/documents/models.py`
@@ -105,24 +105,31 @@ git commit -m "fix: stabilize workspace check controls"
 **Interfaces:**
 - Produces: nullable `ProjectArtifact.workspace_html`.
 - Produces: `DocumentRepository.get_workspace_html(project_id: str) -> str | None`.
-- Produces: `DocumentRepository.save_workspace(project_id: str, expected_revision: int, title: str, html: str) -> int | None`.
+- Produces: `workspace_document(current: WorkingDocument, title: str, html: str) -> WorkingDocument`.
+- Produces: `DocumentRepository.save_workspace(project_id: str, expected_revision: int, document: WorkingDocument, html: str) -> int | None`.
 - Consumes: `Docgen2SavePayload(title: str, html: str, revision: int)`.
 
 - [ ] **Step 1: Write failing repository and route tests**
 
 ```python
-def test_workspace_save_preserves_semantic_document(client, project_with_document):
+def test_workspace_save_updates_nodes_and_preserves_semantic_metadata(client, project_with_document):
     original = _stored_document(client, project_with_document.id)
     response = client.post(
         f"/projects/{project_with_document.id}/editor/save",
-        json={"title": "Исправленный FAQ", "html": "<h1>FAQ</h1>", "revision": 1},
+        json={
+            "title": "Исправленный FAQ",
+            "html": '<h2 data-node-id="n1">Новый заголовок</h2>',
+            "revision": 1,
+        },
     )
     saved = _stored_document(client, project_with_document.id)
 
     assert response.status_code == 200
     assert saved.title == "Исправленный FAQ"
     assert saved.template_id == original.template_id
-    assert saved.nodes == original.nodes
+    assert saved.nodes[0].text == "Новый заголовок"
+    assert saved.nodes[0].section_id == original.nodes[0].section_id
+    assert saved.nodes[0].provenance == original.nodes[0].provenance
 ```
 
 ```python
@@ -150,17 +157,17 @@ if "workspace_html" not in columns:
     )
 ```
 
-Implement repository read/save methods. `save_workspace` loads the current document, verifies `expected_revision`, uses `model_copy(update={"title": title})`, stores `workspace_html`, increments the revision and clears a stale report. It returns `None` if the expected revision is stale.
+Implement repository read/save methods. `save_workspace` atomically verifies `expected_revision`, stores the already validated `WorkingDocument` and `workspace_html`, increments the revision and clears a stale report. It returns `None` if the expected revision is stale. `save_document` and `replace_document` clear `workspace_html`, so assembly and chat never leave a stale visual representation.
 
 - [ ] **Step 4: Adapt route, rendering and client revision**
 
-Add `revision: int = Field(ge=1)` to `Docgen2SavePayload`. Sanitize HTML before repository save; return `409` without committing on stale revision. Pass `workspace_html` from `project_detail_response` and `editor_view` to `work_panel.html`. Render `workspace_html | safe` when present, otherwise render semantic nodes. Add `data-revision` to the editor and update it in JavaScript after a successful save.
+Add `revision: int = Field(ge=1)` to `Docgen2SavePayload`. Render each semantic node with `data-node-id`, `data-kind` and optional `data-section-id`. Extend the sanitizer to retain only those data attributes. Implement `workspace_document`: recognized IDs reuse the existing node metadata while updating text/list/table content and order; deleted elements remove nodes; new supported elements become new nodes with `flags=["manual-edit"]` and empty provenance. Reject duplicate or unknown claimed node IDs with `422`. Return `409` without committing on a stale revision. Pass `workspace_html` from `project_detail_response` and `editor_view` to `work_panel.html`; add `data-revision` to the editor and update it in JavaScript after a successful save.
 
 - [ ] **Step 5: Run storage and editor tests**
 
 Run: `cd app && .venv/bin/python -m pytest tests/documents/test_repository.py tests/editor/test_routes.py tests/test_stage3_journey.py -q`
 
-Expected: PASS; visual HTML survives reload while the semantic document remains usable by chat and check.
+Expected: PASS; visual HTML survives reload and its edits are present in the semantic document used by chat and repeat check.
 
 - [ ] **Step 6: Commit**
 
