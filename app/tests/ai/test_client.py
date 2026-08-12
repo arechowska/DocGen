@@ -67,6 +67,32 @@ def test_text_model_parses_structured_response(mock_transport: httpx.MockTranspo
     assert result.template_id == "use-case"
 
 
+def test_text_model_parses_json_wrapped_in_markdown_fence() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "```json\n"
+                                '{"title":"FAQ","template_id":"faq","nodes":[]}\n'
+                                "```"
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+    )
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL, model="qwen3.6-35b-256k", transport=transport
+    )
+
+    assert model.generate_json("system", "user", WorkingDocument).title == "FAQ"
+
+
 def test_qwen_text_model_uses_prompt_json_mode_without_schema_constraint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)

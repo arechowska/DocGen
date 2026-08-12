@@ -91,7 +91,7 @@ class _OpenAICompatibleModel:
                 raise TypeError("model content is not a string")
             print("=== DOCGEN MODEL RESPONSE CONTENT ===")
             print(content)
-            return schema.model_validate_json(content)
+            return schema.model_validate_json(_unwrap_json_fence(content))
         except (IndexError, KeyError, TypeError, UnicodeDecodeError, ValidationError, json.JSONDecodeError) as exc:
             raise ModelError("Модель вернула некорректный структурированный ответ") from exc
 
@@ -135,6 +135,16 @@ class _OpenAICompatibleModel:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
+
+
+def _unwrap_json_fence(content: str) -> str:
+    stripped = content.strip()
+    if not stripped.startswith("```") or not stripped.endswith("```"):
+        return stripped
+    _opening, separator, body = stripped.partition("\n")
+    if not separator:
+        return stripped
+    return body.rsplit("```", maxsplit=1)[0].strip()
 
 
 class OpenAICompatibleTextModel(_OpenAICompatibleModel):
