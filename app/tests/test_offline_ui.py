@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -143,6 +144,39 @@ def test_shared_ui_script_confirms_project_delete_forms(client: TestClient) -> N
     assert "form[data-confirm-delete]" in source
     assert "window.confirm(message)" in source
     assert "event.preventDefault()" in source
+
+
+def test_template_selector_syncs_every_workspace_form_target(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const listeners = new Map();
+const source = {{
+  value: "use-case",
+  addEventListener(type, listener) {{ listeners.set(type, listener); }},
+}};
+const targets = [{{ value: "use-case" }}, {{ value: "use-case" }}];
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "[data-template-source]") return source;
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === "[data-template-target]") return targets;
+    return [];
+  }},
+  addEventListener() {{}},
+}};
+{script.text}
+source.value = "faq";
+listeners.get("change")();
+if (targets.some((target) => target.value !== "faq")) {{
+  throw new Error(`template targets were not synchronized: ${{targets.map((target) => target.value)}}`);
+}}
+"""
+
+    subprocess.run(["node", "-e", harness], check=True, capture_output=True, text=True)
 
 
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(
