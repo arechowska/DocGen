@@ -1,0 +1,46 @@
+services:
+  web:
+    build:
+      context: .
+    image: formatta:local
+    env_file:
+      - .env
+    environment:
+      DOCGEN_DATABASE_URL: sqlite:////app/var/docgen.db
+      DOCGEN_DATA_DIR: /app/var/data
+    expose:
+      - "8000"
+    volumes:
+      - formatta-var:/app/var
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    image: formatta:local
+    command: ["python", "-m", "docgen.jobs.worker"]
+    env_file:
+      - .env
+    environment:
+      DOCGEN_DATABASE_URL: sqlite:////app/var/docgen.db
+      DOCGEN_DATA_DIR: /app/var/data
+      DOCGEN_WORKER_ID: dockploy-worker-1
+    volumes:
+      - formatta-var:/app/var
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  formatta-var:

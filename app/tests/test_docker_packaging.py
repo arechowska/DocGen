@@ -39,6 +39,35 @@ def test_docker_compose_runs_web_and_worker_from_one_image() -> None:
     assert "docgen-var" in compose["volumes"]
 
 
+def test_dokploy_compose_keeps_web_internal_and_worker_ready() -> None:
+    compose = yaml.safe_load(
+        (REPOSITORY_ROOT / "docker-compose.dokploy.yml").read_text(encoding="utf-8")
+    )
+
+    services = compose["services"]
+    web = services["web"]
+    worker = services["worker"]
+
+    assert sorted(services) == ["web", "worker"]
+    assert web["build"]["context"] == "."
+    assert web["expose"] == ["8000"]
+    assert "ports" not in web
+    assert web["healthcheck"]["test"] == [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+    ]
+    assert web["environment"]["DOCGEN_DATABASE_URL"] == "sqlite:////app/var/docgen.db"
+    assert "formatta-var:/app/var" in web["volumes"]
+
+    assert worker["command"] == ["python", "-m", "docgen.jobs.worker"]
+    assert worker["environment"]["DOCGEN_WORKER_ID"] == "dockploy-worker-1"
+    assert worker["depends_on"]["web"]["condition"] == "service_healthy"
+    assert "formatta-var:/app/var" in worker["volumes"]
+    assert "formatta-var" in compose["volumes"]
+
+
 def test_dockerignore_excludes_secrets_runtime_data_and_local_artifacts() -> None:
     patterns = {
         line.strip()
@@ -59,3 +88,12 @@ def test_readme_documents_docker_startup() -> None:
     assert "docker compose up --build" in readme
     assert "http://127.0.0.1:8000/projects" in readme
     assert "DOCGEN_LOCAL_TEXT_API_KEY" in readme
+
+
+def test_readme_documents_dokploy_deployment() -> None:
+    readme = (REPOSITORY_ROOT / "app" / "README.md").read_text(encoding="utf-8")
+
+    assert "docker-compose.dokploy.yml" in readme
+    assert "сервису `web`" in readme
+    assert "внутренний порт контейнера `8000`" in readme
+    assert "http://<домен>/health" in readme
