@@ -12,7 +12,7 @@ from docgen.ai.client import TextModel, VisionDescription, VisionModel
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import DOCUMENT_SYSTEM_PROMPT
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import WorkingDocument
+from docgen.documents.schemas import DocumentNode, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.runner import ProgressSink, UserSafeJobError
@@ -75,6 +75,7 @@ class AssembleWorkflow:
         except ValidationError as exc:
             raise WorkflowError(_DOCUMENT_SCHEMA_ERROR) from exc
         document = document.model_copy(update={"template_id": template.id})
+        document = _add_missing_required_sections(document, template)
 
         _validate_document_structure(document, template)
         grounding_errors = self._grounding.validate(
@@ -285,6 +286,25 @@ def _validate_document_structure(
         raise WorkflowError(
             "Документ не содержит все обязательные разделы шаблона"
         )
+
+
+def _add_missing_required_sections(
+    document: WorkingDocument, template: SemanticTemplate
+) -> WorkingDocument:
+    if not document.nodes:
+        return document
+
+    present_section_ids = {node.section_id for node in document.nodes}
+    missing_nodes = [
+        DocumentNode(
+            kind="gap",
+            section_id=section.id,
+            flags=["missing-source-data"],
+        )
+        for section in template.sections
+        if section.required and section.id not in present_section_ids
+    ]
+    return document.model_copy(update={"nodes": [*document.nodes, *missing_nodes]})
 
 
 __all__ = ["AssembleWorkflow", "WorkflowError"]

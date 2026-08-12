@@ -365,7 +365,7 @@ def test_assemble_rejects_empty_document_before_save(
     assert documents.get_document("p1") is None
 
 
-def test_assemble_rejects_missing_required_section_ids(
+def test_assemble_adds_missing_required_sections_as_source_gaps(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:
     workflow, model, documents, progress, _events = assembled
@@ -389,10 +389,17 @@ def test_assemble_rejects_missing_required_section_ids(
         ],
     )
 
-    with pytest.raises(WorkflowError, match="обязательные разделы"):
-        workflow.run(_job(JobKind.ASSEMBLE), progress)
+    document = workflow.run(_job(JobKind.ASSEMBLE), progress)
 
-    assert documents.get_document("p1") is None
+    assert [node.section_id for node in document.nodes] == [
+        "actors",
+        "preconditions",
+        "main-flow",
+        "result",
+    ]
+    assert [node.kind for node in document.nodes[1:]] == [NodeKind.GAP] * 3
+    assert all(node.flags == ["missing-source-data"] for node in document.nodes[1:])
+    assert documents.get_document("p1") == document
 
 
 def test_assemble_validates_model_schema_before_saving(
