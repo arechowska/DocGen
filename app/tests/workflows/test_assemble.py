@@ -224,6 +224,53 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
     assert "storage_path" not in model.user_prompt
 
 
+def test_assemble_uses_job_template_when_model_returns_a_different_template_id(
+    assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, model, documents, progress, _events = assembled
+    model.result = WorkingDocument(
+        title="Частые вопросы",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                section_id="general_questions",
+                text="Пользователь оплачивает заказ",
+                provenance=[
+                    Provenance(
+                        source_id="text-block",
+                        locator="text:1",
+                        quote="Пользователь оплачивает заказ",
+                    )
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.GAP,
+                section_id="getting_started",
+                flags=["missing-source-data"],
+            ),
+            DocumentNode(
+                kind=NodeKind.GAP,
+                section_id="working_with_system",
+                flags=["missing-source-data"],
+            ),
+            DocumentNode(
+                kind=NodeKind.GAP,
+                section_id="errors_and_limitations",
+                flags=["missing-source-data"],
+            ),
+        ],
+    )
+
+    job = _job(JobKind.ASSEMBLE)
+    job.template_id = "faq"
+
+    document = workflow.run(job, progress)
+
+    assert document.template_id == "faq"
+    assert documents.get_document("p1").template_id == "faq"  # type: ignore[union-attr]
+
+
 def test_assemble_prompt_tells_faq_to_convert_supported_facts_into_answers(
     blocks: list[NormalizedBlock],
 ) -> None:

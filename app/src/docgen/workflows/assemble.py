@@ -25,7 +25,6 @@ from .normalize import NormalizationWorkflow, NormalizedProject
 _ASSEMBLE_KIND_ERROR = "Некорректный тип задания для сборки"
 _PROJECT_NOT_FOUND = "Проект не найден"
 _DOCUMENT_SCHEMA_ERROR = "Модель вернула некорректный документ"
-_DOCUMENT_TEMPLATE_ERROR = "Модель вернула документ для другого шаблона"
 _GROUNDING_ERROR = "Результат не прошёл проверку по источникам"
 
 
@@ -75,8 +74,7 @@ class AssembleWorkflow:
             document = WorkingDocument.model_validate(raw_document)
         except ValidationError as exc:
             raise WorkflowError(_DOCUMENT_SCHEMA_ERROR) from exc
-        if document.template_id != template.id:
-            raise WorkflowError(_DOCUMENT_TEMPLATE_ERROR)
+        document = document.model_copy(update={"template_id": template.id})
 
         _validate_document_structure(document, template)
         grounding_errors = self._grounding.validate(
