@@ -63,9 +63,15 @@ class _OpenAICompatibleModel:
         self._max_request_bytes = max_request_bytes
 
     def _complete(self, messages: list[dict[str, object]], schema: type[T]) -> T:
+        is_qwen = self._model.lower().startswith("qwen")
+        request_messages = messages
+        if is_qwen and messages and isinstance(messages[0].get("content"), str):
+            system_message = dict(messages[0])
+            system_message["content"] = f"{system_message['content']}\n/no_think"
+            request_messages = [system_message, *messages[1:]]
         payload = {
             "model": self._model,
-            "messages": messages,
+            "messages": request_messages,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -75,8 +81,9 @@ class _OpenAICompatibleModel:
                 },
             },
         }
-        if self._model.lower().startswith("qwen"):
+        if is_qwen:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+            payload["max_tokens"] = 8192
         print("=== DOCGEN MODEL REQUEST PAYLOAD ===")
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         response_bytes = self._post(payload)

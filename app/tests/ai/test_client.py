@@ -71,6 +71,8 @@ def test_qwen_text_model_disables_thinking_for_structured_output() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        assert payload["max_tokens"] == 8192
+        assert payload["messages"][0] == {"role": "system", "content": "system\n/no_think"}
         return httpx.Response(
             200,
             json={
