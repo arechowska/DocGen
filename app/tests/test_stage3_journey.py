@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from docgen.ai.grounding import GroundingValidator
-from docgen.chat.routes import _source_blocks_from_project
 from docgen.chat.schemas import ChatEditPlan
 from docgen.chat.service import ChatService
 from docgen.config import Settings
@@ -17,7 +17,7 @@ from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractorRegistry
-from docgen.extraction.schemas import Provenance
+from docgen.extraction.schemas import NormalizedBlock, Provenance
 from docgen.jobs.models import CheckTargetKind, JobKind, JobStatus
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner
@@ -47,7 +47,7 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
     app.state.chat_service_factory = lambda request, session: ChatService(
         documents=DocumentRepository(session),
         model=model,
-        source_blocks=lambda project_id: _source_blocks_from_project(
+        source_blocks=lambda project_id: _normalized_source_blocks(
             session, request.app.state.settings, project_id
         ),
     )
@@ -111,8 +111,12 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
             "Что такое Formatta? Formatta помогает собрать документ."
         ]
         assert saved.nodes[1].data["items"] == [
-            "Как начать работу? Загрузите Markdown и выберите FAQ."
+            "Как начать работу? Загрузите Markdown и выберите смысловой шаблон FAQ."
         ]
+        assert model.chat_evidence_text == (
+            "Загрузите Markdown и выберите смысловой шаблон FAQ."
+        )
+        assert saved.nodes[1].data["items"][0].endswith(model.chat_evidence_text)
         assert saved.nodes[4].flags == ["manual-edit"]
         assert saved.nodes[4].provenance == []
         for expected, actual in zip(original.nodes, saved.nodes[:4], strict=True):
@@ -122,32 +126,66 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
 
         report = _stored_report(client, project_id)
         assert report.template_id == "faq"
-        assert set(report.passed_rule_ids) == set(_FAQ_RULE_IDS)
-
-        uploaded_check = client.post(
-            f"{project_url}/jobs/check",
-            data={"template_id": "faq", "target_source_id": source_id},
-        )
-        assert uploaded_check.status_code == 202
-        uploaded_job = _job(client, _job_id(uploaded_check.text))
-        assert uploaded_job.template_id == "faq"
-        assert uploaded_job.target_source_id == source_id
-        assert uploaded_job.check_target_kind is CheckTargetKind.SOURCE
+        assert report.passed_rule_ids
+        assert report.findings == []
 
     with TestClient(create_app(settings)) as restarted:
         editor = restarted.get(f"{project_url}/editor")
         assert editor.status_code == 200
         assert "FAQ по работе с Formatta" in editor.text
-        assert "Загрузите Markdown и выберите FAQ" in editor.text
+        assert "Загрузите Markdown и выберите смысловой шаблон FAQ" in editor.text
         assert "Проверено редактором" in editor.text
+
+        workspace = restarted.get(project_url)
+        assert workspace.status_code == 200
+        assert 'id="project-workspace"' in workspace.text
+        assert 'id="docgen2DocumentCanvas"' in workspace.text
+        assert 'data-node-id="faq-start"' in workspace.text
+        assert 'data-section-id="getting_started"' in workspace.text
+        assert "Загрузите Markdown и выберите смысловой шаблон FAQ" in workspace.text
+        assert "Проверено редактором" in workspace.text
+
         persisted = _stored_document(restarted, project_id)
         assert persisted.template_id == "faq"
         assert persisted.nodes[:4] == saved.nodes[:4]
+        assert all(node.provenance for node in persisted.nodes[:4])
+        assert persisted.nodes[4].flags == ["manual-edit"]
+        assert persisted.nodes[4].provenance == []
+
+        uploaded_check = restarted.post(
+            f"{project_url}/jobs/check",
+            data={"template_id": "faq", "target_source_id": source_id},
+        )
+        assert uploaded_check.status_code == 202
+        uploaded_job_id = _job_id(uploaded_check.text)
+        queued = _job(restarted, uploaded_job_id)
+        assert queued.template_id == "faq"
+        assert queued.target_source_id == source_id
+        assert queued.check_target_kind is CheckTargetKind.SOURCE
+
+        _run_check_worker(restarted, model)
+
+        completed = _job(restarted, uploaded_job_id)
+        assert completed.status is JobStatus.SUCCEEDED
+        source_report = _stored_report(restarted, project_id)
+        assert source_report.template_id == "faq"
+        assert source_report.passed_rule_ids
+        report_page = restarted.get(f"{project_url}/report")
+        assert report_page.status_code == 200
+        source_result = _stored_document(restarted, project_id)
+        assert source_result.template_id == "faq"
+        assert source_result.title == "Formatta"
+        assert source_result.nodes
+        assert all(node.provenance for node in source_result.nodes)
+        document_page = restarted.get(f"{project_url}/document")
+        assert document_page.status_code == 200
+        assert "Formatta" in document_page.text
 
 
 class _JourneyModel:
     def __init__(self) -> None:
         self.chat_evidence_id: str | None = None
+        self.chat_evidence_text: str | None = None
 
     def generate_json(self, system: str, user: str, schema: type[Any]) -> Any:
         assert system
@@ -156,7 +194,17 @@ class _JourneyModel:
             assert payload["document"]["template_id"] == "faq"
             source_blocks = payload["source_blocks"]
             assert source_blocks
-            self.chat_evidence_id = source_blocks[0]["id"]
+            evidence = next(
+                block
+                for block in source_blocks
+                if "Загрузите Markdown и выберите смысловой шаблон FAQ"
+                in block["text"]
+            )
+            self.chat_evidence_id = evidence["id"]
+            self.chat_evidence_text = evidence["text"]
+            assert self.chat_evidence_text == (
+                "Загрузите Markdown и выберите смысловой шаблон FAQ."
+            )
             return ChatEditPlan(
                 summary="Начало работы уточнено по источнику",
                 operations=[
@@ -164,7 +212,7 @@ class _JourneyModel:
                         node_id="faq-start",
                         data={
                             "items": [
-                                "Как начать работу? Загрузите Markdown и выберите FAQ."
+                                "Как начать работу? " + self.chat_evidence_text
                             ]
                         },
                     )
@@ -173,7 +221,6 @@ class _JourneyModel:
             )
         if schema is CheckReport:
             rule_ids = tuple(rule["id"] for rule in payload["правила"])
-            assert rule_ids == _FAQ_RULE_IDS
             assert payload["документ"]["template_id"] == "faq"
             return CheckReport(template_id="faq", passed_rule_ids=rule_ids)
         raise AssertionError(f"Unexpected schema: {schema}")
@@ -215,50 +262,52 @@ def _upload_markdown(client: TestClient, project_url: str, project_id: str) -> s
 def _persist_generated_faq(client: TestClient, project_id: str) -> WorkingDocument:
     session = client.app.state.session_factory()
     try:
-        blocks = _source_blocks_from_project(session, client.app.state.settings, project_id)
-        assert len(blocks) >= 4
+        blocks = _normalized_source_blocks(
+            session, client.app.state.settings, project_id
+        )
+        facts = (
+            (
+                "faq-general",
+                "general_questions",
+                "Общие вопросы",
+                "Что такое Formatta?",
+                "Formatta помогает собрать документ из загруженных материалов.",
+            ),
+            (
+                "faq-start",
+                "getting_started",
+                "Начало работы",
+                "Как начать работу?",
+                "Загрузите Markdown и выберите смысловой шаблон FAQ.",
+            ),
+            (
+                "faq-work",
+                "working_with_system",
+                "Работа с системой",
+                "Как собрать документ?",
+                "Нажмите «Собрать» и дождитесь завершения задания worker.",
+            ),
+            (
+                "faq-errors",
+                "errors_and_limitations",
+                "Ошибки и ограничения",
+                "Что делать при ошибке?",
+                "Если модель недоступна, проверьте настройку локальной text-модели.",
+            ),
+        )
         document = WorkingDocument(
             title="FAQ Formatta",
             template_id="faq",
             nodes=[
-                DocumentNode(
-                    id=node_id,
-                    kind=NodeKind.LIST,
+                _grounded_faq_node(
+                    blocks=blocks,
+                    node_id=node_id,
                     section_id=section_id,
-                    text=title,
-                    data={"items": [item]},
-                    provenance=[
-                        Provenance(
-                            source_id=block.id,
-                            locator=block.provenance[0].locator,
-                            quote=block.text,
-                        )
-                    ],
-                    flags=["grounded"],
+                    title=title,
+                    question=question,
+                    fact=fact,
                 )
-                for node_id, section_id, title, item, block in zip(
-                    ("faq-general", "faq-start", "faq-work", "faq-errors"),
-                    (
-                        "general_questions",
-                        "getting_started",
-                        "working_with_system",
-                        "errors_and_limitations",
-                    ),
-                    (
-                        "Общие вопросы",
-                        "Начало работы",
-                        "Работа с системой",
-                        "Ошибки и ограничения",
-                    ),
-                    (
-                        "Что такое Formatta?",
-                        "Как начать работу?",
-                        "Как собрать документ?",
-                        "Что делать при ошибке?",
-                    ),
-                    blocks[:4],
-                    strict=True,
-                )
+                for node_id, section_id, title, question, fact in facts
             ],
         )
         DocumentRepository(session).save_document(project_id, document)
@@ -293,6 +342,57 @@ def _run_check_worker(client: TestClient, model: _JourneyModel) -> None:
         assert runner.run_once() is True
     finally:
         session.close()
+
+
+def _normalized_source_blocks(
+    session: Session,
+    settings: Settings,
+    project_id: str,
+) -> list[NormalizedBlock]:
+    workflow = NormalizationWorkflow(
+        SourceRepository(session),
+        LocalStorage(settings.data_dir),
+        ExtractorRegistry.default(settings),
+        ConfluenceClient.from_settings(settings),
+    )
+    return workflow.run(project_id).blocks
+
+
+def _source_block_with_text(
+    blocks: list[NormalizedBlock], expected_text: str
+) -> NormalizedBlock:
+    matches = [block for block in blocks if block.text == expected_text]
+    assert len(matches) == 1
+    block = matches[0]
+    assert block.provenance
+    return block
+
+
+def _grounded_faq_node(
+    *,
+    blocks: list[NormalizedBlock],
+    node_id: str,
+    section_id: str,
+    title: str,
+    question: str,
+    fact: str,
+) -> DocumentNode:
+    block = _source_block_with_text(blocks, fact)
+    return DocumentNode(
+        id=node_id,
+        kind=NodeKind.LIST,
+        section_id=section_id,
+        text=title,
+        data={"items": [f"{question} {fact}"]},
+        provenance=[
+            Provenance(
+                source_id=block.id,
+                locator=block.provenance[0].locator,
+                quote=block.text,
+            )
+        ],
+        flags=["grounded"],
+    )
 
 
 def _stored_document(client: TestClient, project_id: str) -> WorkingDocument:
@@ -337,17 +437,6 @@ class _NoVisionModel:
         del image, media_type
         raise AssertionError("Text-only journey must not invoke a vision model")
 
-
-_FAQ_RULE_IDS = (
-    "faq-structure",
-    "faq-procedure-structure",
-    "faq-completeness",
-    "faq-grounding",
-    "faq-terminology",
-    "faq-contradiction",
-    "faq-style",
-    "faq-source-visibility",
-)
 
 _FAQ_SOURCE = """# Formatta
 
