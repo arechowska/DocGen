@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from docgen.jobs.models import Job
 from docgen.sources.repository import SourceRepository
+
+_NODE = shutil.which("node")
+_requires_node = pytest.mark.skipif(
+    _NODE is None,
+    reason="Node.js is required for browser-script regression tests",
+)
 
 
 def test_ui_uses_local_assets_and_restrictive_csp(client: TestClient) -> None:
@@ -97,13 +106,65 @@ def test_workspace_css_contains_corporate_layout_tokens(client: TestClient) -> N
         ".result-panel",
         ".project-card-link{min-height:76px;display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center",
         ".project-delete-button{position:absolute;top:10px;right:10px",
-        "#60bcff",
-        "#3196df",
-        "#f9f9fc",
-        "#f3f6fa",
+        "#15569b",
+        "#1b5eaa",
+        "#202428",
+        "#5f6873",
+        "#f4f7fa",
+        "#d6e5f8",
         "@media (max-width:1023px)",
     ):
         assert token in css
+
+
+def test_workspace_css_uses_calm_formatta_palette(client: TestClient) -> None:
+    """The served UI must not regress to the previous cyan gradient palette."""
+    css = client.get("/static/css/docgen.css").text.lower()
+
+    for token in (
+        "--formatta-topbar:#15569b",
+        "--formatta-primary:#1b5eaa",
+        "--formatta-ink:#202428",
+        "--formatta-muted:#5f6873",
+        "--formatta-bg:#f4f7fa",
+        "--formatta-border:#d6e5f8",
+    ):
+        assert token in css
+    assert "#60bcff" not in css
+    assert "#3196df" not in css
+
+
+def test_auxiliary_workspace_screens_use_the_formatta_palette(client: TestClient) -> None:
+    """Generated CSS for all reachable fragments must share the workspace theme."""
+    css = client.get("/static/css/docgen.css").text.lower()
+
+    for retired_colour in (
+        "#0071e3",
+        "#0066cc",
+        "#101828",
+        "#667085",
+        "#e3e8ec",
+        "#f9f9fc",
+        "#f5f5f7",
+        "#707070",
+    ):
+        assert retired_colour not in css
+
+
+def test_workspace_topbar_and_document_heading_colours_have_scoped_roles(
+    client: TestClient,
+) -> None:
+    """Blue identifies app actions and document styling, not application headings."""
+    css = client.get("/static/css/docgen.css").text.lower()
+    topbar = css[css.index(".topbar{") : css.index("}", css.index(".topbar{"))]
+
+    assert "background:var(--formatta-topbar)" in topbar
+    assert "linear-gradient" not in topbar
+    assert (
+        ".document-canvas h1,.document-canvas h2,.document-canvas h3,"
+        ".document-canvas h4,.document-canvas h5{color:var(--formatta-primary)"
+    ) in css
+    assert ".panel-heading h1{margin:0;color:var(--lk-ink)" in css
 
 
 def test_heading_select_chevron_is_vertically_aligned_like_docgen2(
@@ -143,6 +204,203 @@ def test_shared_ui_script_confirms_project_delete_forms(client: TestClient) -> N
     assert "form[data-confirm-delete]" in source
     assert "window.confirm(message)" in source
     assert "event.preventDefault()" in source
+
+
+@_requires_node
+def test_template_selector_syncs_every_workspace_form_target(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const listeners = new Map();
+const source = {{
+  value: "use-case",
+  addEventListener(type, listener) {{ listeners.set(type, listener); }},
+}};
+const targets = [{{ value: "use-case" }}, {{ value: "use-case" }}];
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "[data-template-source]") return source;
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === "[data-template-target]") return targets;
+    return [];
+  }},
+  addEventListener() {{}},
+}};
+{script.text}
+source.value = "faq";
+listeners.get("change")();
+if (targets.some((target) => target.value !== "faq")) {{
+  throw new Error(`template targets were not synchronized: ${{targets.map((target) => target.value)}}`);
+}}
+"""
+
+    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
+
+
+@_requires_node
+def test_editor_save_is_initialized_after_htmx_replaces_workspace(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const documentListeners = new Map();
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: '<p data-node-id="n1">Правка</p>', focus() {{}} }});
+const title = element({{ value: "После сборки" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+let currentEditor = null;
+let posted = null;
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#docgen2Editor") return currentEditor;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener(type, listener) {{ documentListeners.set(type, listener); }},
+  execCommand() {{}},
+}};
+globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.fetch = async (url, options) => {{
+  posted = {{ url, payload: JSON.parse(options.body) }};
+  return {{
+    ok: true,
+    async json() {{
+      return {{ revision: 2, html: '<p data-node-id="manual-1">Правка</p>' }};
+    }},
+  }};
+}};
+{script.text}
+currentEditor = editor;
+documentListeners.get("htmx:afterSwap")();
+await saveButton.listeners.get("click")();
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (posted?.url !== "/projects/p1/editor/save") throw new Error("save was not posted");
+if (posted.payload.revision !== 1) throw new Error("revision was not posted");
+if (editor.dataset.revision !== "2") throw new Error("revision was not updated");
+if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
+  throw new Error("normalized html was not applied");
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@_requires_node
+def test_document_update_event_refreshes_revisions_for_followup_actions(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const listeners = new Map();
+const revisions = [{{ value: "1" }}, {{ value: "1" }}];
+globalThis.document = {{
+  querySelector() {{ return null; }},
+  querySelectorAll(selector) {{
+    if (selector === 'input[name="revision"]') return revisions;
+    return [];
+  }},
+  addEventListener(type, listener) {{ listeners.set(type, listener); }},
+}};
+{script.text}
+listeners.get("docgen:document-updated")({{ detail: {{ revision: 2 }} }});
+if (revisions.some((input) => input.value !== "2")) {{
+  throw new Error(`stale follow-up revisions: ${{revisions.map((input) => input.value)}}`);
+}}
+"""
+
+    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
+
+
+@_requires_node
+def test_stale_editor_save_tells_user_to_refresh(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: '<p data-node-id="n1">Правка</p>', focus() {{}} }});
+const title = element({{ value: "Документ" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#docgen2Editor") return editor;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.fetch = async () => ({{
+  ok: false,
+  status: 409,
+  async json() {{ return {{ detail: "Документ уже изменён" }}; }},
+}});
+{script.text}
+await saveButton.listeners.get("click")();
+if (!saveStatus.textContent.includes("Документ уже изменён")) {{
+  throw new Error(`missing conflict detail: ${{saveStatus.textContent}}`);
+}}
+if (!saveStatus.textContent.includes("Обнови")) {{
+  throw new Error(`missing refresh action: ${{saveStatus.textContent}}`);
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(

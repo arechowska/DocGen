@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -33,7 +34,10 @@ def project_with_table(client: TestClient) -> Project:
         DocumentNode(
             id="table-1",
             kind=NodeKind.TABLE,
-            data={"rows": [["A", "B"], ["C", "D"]]},
+            data={
+                "headers": ["Код", "Значение"],
+                "rows": [["A", "B"], ["C", "D"]],
+            },
         ),
     )
 
@@ -61,6 +65,36 @@ def test_table_rejects_ragged_rows(
 
     assert response.status_code == 422
     assert "Все строки таблицы должны иметь одинаковое число ячеек" in response.text
+
+
+def test_structured_table_editor_renders_and_preserves_headers(
+    client: TestClient, project_with_table: Project
+) -> None:
+    page = BeautifulSoup(
+        client.get(f"/projects/{project_with_table.id}/editor").text,
+        "html.parser",
+    )
+    table = page.find("table")
+    assert table is not None
+    assert [cell.get_text(strip=True) for cell in table.select("thead th")] == [
+        "Код",
+        "Значение",
+    ]
+    assert len(table.select("tbody tr")) == 2
+
+    response = client.patch(
+        f"/projects/{project_with_table.id}/editor/nodes/table-1/table",
+        json={"revision": 1, "rows": [["X", "1"], ["Y", "2"]]},
+    )
+
+    assert response.status_code == 200
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_table.id)
+        assert document is not None
+        assert document.nodes[0].data == {
+            "headers": ["Код", "Значение"],
+            "rows": [["X", "1"], ["Y", "2"]],
+        }
 
 
 def test_image_alignment_is_limited(

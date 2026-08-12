@@ -293,6 +293,7 @@ def test_check_uses_the_only_uploaded_document_without_reselecting_it(
     assert response.status_code == 202
     job = _jobs_for_project(client, project_with_source.id)[0]
     assert job.target_source_id == target_source_id
+    assert job.template_id == "use-case"
 
 
 def test_check_rejects_target_source_from_another_project(
@@ -548,6 +549,15 @@ def test_full_page_generation_error_keeps_workspace_context(
     client: TestClient, project_with_source: Project
 ) -> None:
     _save_document(client, project_with_source.id, _document())
+    saved = client.post(
+        f"/projects/{project_with_source.id}/editor/save",
+        json={
+            "title": "Оплата заказа",
+            "html": '<p data-node-id="node-1"><em>Rich workspace</em></p>',
+            "revision": 1,
+        },
+    )
+    assert saved.status_code == 200
 
     response = client.post(
         f"/projects/{project_with_source.id}/jobs/assemble",
@@ -560,6 +570,7 @@ def test_full_page_generation_error_keeps_workspace_context(
     assert 'id="docgen2Editor"' in response.text
     assert 'id="docgen2DocumentCanvas"' in response.text
     assert 'data-state="ready"' in response.text
+    assert "<em>Rich workspace</em>" in response.text
     assert "Шаблон не найден" in response.text
 
 

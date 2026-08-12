@@ -8,7 +8,7 @@
   class="max-w-2xl"
 >
   <label class="text-sm font-medium text-white/80" for="project-name">Название проекта</label>
-  <input id="project-name" name="name" value="{{ name | default(project.name) }}" class="mt-3 w-full rounded-2xl bg-white/95 px-5 py-3 text-2xl font-semibold tracking-tight text-[#101828] outline-none ring-white/60 focus:ring-2" type="text">
+  <input id="project-name" name="name" value="{{ name | default(project.name) }}" class="mt-3 w-full rounded-2xl bg-white/95 px-5 py-3 text-2xl font-semibold tracking-tight text-[#202428] outline-none ring-white/60 focus:ring-2" type="text">
   {% if error %}
     <p class="mt-3 text-sm text-white" role="alert">{{ error }}</p>
   {% else %}

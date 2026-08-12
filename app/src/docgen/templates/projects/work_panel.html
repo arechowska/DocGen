@@ -35,6 +35,12 @@
   class="panel editor-card"
   aria-labelledby="docgen2EditorTitle"
   data-save-url="/projects/{{ project_id }}/editor/save"
+  hx-get="/projects/{{ project_id }}"
+  hx-trigger="docgen:document-updated from:body"
+  hx-target="this"
+  hx-select="#docgen2Editor"
+  hx-swap="outerHTML"
+  {% if revision is not none %}data-revision="{{ revision }}"{% endif %}
   {% if editor_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
 >
   <div class="editor-topline">
@@ -42,7 +48,7 @@
       <input
         id="docgen2EditorTitle"
         class="document-title"
-        value="{{ project.name }}"
+        value="{{ document.title if document else project.name }}"
         aria-label="Название документа"
       >
     </div>
@@ -133,6 +139,9 @@
   </div>
 
   <div class="editor-scroll">
+    {% if document and document.title != project.name %}
+      <h1 class="document-workspace-title">{{ document.title }}</h1>
+    {% endif %}
     <div
       id="docgen2DocumentCanvas"
       class="document-canvas"
@@ -142,26 +151,32 @@
       aria-label="Содержимое документа"
     >
       {% if document %}
-        {% set workspace_node = document.nodes | selectattr("data.html", "defined") | first %}
-        {% if workspace_node %}
-          {{ workspace_node.data.html | safe }}
+        {% if workspace_html is defined and workspace_html is not none %}
+          {{ workspace_html | safe }}
         {% else %}
-          <h1>{{ document.title }}</h1>
           {% for node in document.nodes %}
             {% if node.kind.value == "heading" %}
-              <h2>{{ node.text }}</h2>
+              <h2 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{{ node.text }}</h2>
             {% elif node.kind.value == "paragraph" %}
-              <p>{{ node.text }}</p>
+              <p data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{{ node.text }}</p>
             {% elif node.kind.value == "list" %}
-              <ul>{% for item in node.data.get("items", []) %}<li>{{ item }}</li>{% endfor %}</ul>
+              <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{% for item in node.data.get("items", []) %}<li>{{ item }}</li>{% endfor %}</ul>
             {% elif node.kind.value == "table" %}
-              <table>
-                {% for row in node.data.get("rows", []) %}
-                  <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
-                {% endfor %}
+              <table data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>
+                {% set headers = node.data.get("headers", []) %}
+                {% if headers %}
+                  <thead><tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+                {% endif %}
+                <tbody>
+                  {% for row in node.data.get("rows", []) %}
+                    <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+                  {% endfor %}
+                </tbody>
               </table>
+            {% elif node.kind.value == "image" %}
+              <img data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{% if node.data.get("src") %} src="{{ node.data.get('src') }}"{% endif %} alt="{{ node.data.get('alt', node.text or 'Изображение') }}">
             {% elif node.kind.value == "gap" %}
-              <p>Нет подтверждённых данных для этого блока.</p>
+              <hr data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>
             {% endif %}
           {% endfor %}
         {% endif %}

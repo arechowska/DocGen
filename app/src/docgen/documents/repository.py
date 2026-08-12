@@ -13,6 +13,7 @@ class DocumentRepository:
         artifact = self._get_or_create(project_id)
         artifact.document_revision = (artifact.document_revision or 0) + 1
         artifact.document_json = document.model_dump_json()
+        artifact.workspace_html = None
         artifact.report_json = None
         artifact.report_revision = None
         self._session.flush()
@@ -23,6 +24,12 @@ class DocumentRepository:
         if artifact is None or artifact.document_json is None:
             return None
         return WorkingDocument.model_validate_json(artifact.document_json)
+
+    def get_workspace_html(self, project_id: str) -> str | None:
+        artifact = self._session.get(ProjectArtifact, project_id)
+        if artifact is None:
+            return None
+        return artifact.workspace_html
 
     def get_document_with_revision(
         self, project_id: str
@@ -50,6 +57,36 @@ class DocumentRepository:
             )
             .values(
                 document_json=document.model_dump_json(),
+                workspace_html=None,
+                document_revision=ProjectArtifact.document_revision + 1,
+                report_json=None,
+                report_revision=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self._session.expire_all()
+            return None
+        self._session.flush()
+        return expected_revision + 1
+
+    def save_workspace(
+        self,
+        project_id: str,
+        expected_revision: int,
+        document: WorkingDocument,
+        html: str,
+    ) -> int | None:
+        result = self._session.execute(
+            update(ProjectArtifact)
+            .where(
+                ProjectArtifact.project_id == project_id,
+                ProjectArtifact.document_json.is_not(None),
+                ProjectArtifact.document_revision == expected_revision,
+            )
+            .values(
+                document_json=document.model_dump_json(),
+                workspace_html=html,
                 document_revision=ProjectArtifact.document_revision + 1,
                 report_json=None,
                 report_revision=None,
@@ -104,6 +141,7 @@ class DocumentRepository:
         artifact = self._get_or_create(project_id)
         artifact.document_revision = (artifact.document_revision or 0) + 1
         artifact.document_json = document.model_dump_json()
+        artifact.workspace_html = None
         artifact.report_json = report.model_dump_json()
         artifact.report_revision = artifact.document_revision
         artifact.report_generation = (artifact.report_generation or 0) + 1

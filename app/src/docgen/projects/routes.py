@@ -131,6 +131,7 @@ def project_detail_response(
             "setup_fragment": False,
             "document": document,
             "revision": revision,
+            "workspace_html": documents.get_workspace_html(project_id),
             "has_document": document is not None,
             "has_report": documents.get_report(project_id) is not None,
             "source_error": source_error,

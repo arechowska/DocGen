@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import uuid4
 
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, ValidationError
@@ -34,6 +34,7 @@ SessionDependency = Annotated[Session, Depends(get_session)]
 class Docgen2SavePayload(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     html: str = Field(max_length=500_000)
+    revision: int = Field(ge=1)
 
 
 @router.get("/{project_id}/editor")
@@ -46,6 +47,7 @@ def editor_view(request: Request, project_id: str, session: SessionDependency) -
             detail="Документ не найден",
         )
     document, revision = stored
+    workspace_html = DocumentRepository(session).get_workspace_html(project_id)
     return templates.TemplateResponse(
         request=request,
         name=(
@@ -57,6 +59,7 @@ def editor_view(request: Request, project_id: str, session: SessionDependency) -
             "project_id": project_id,
             "document": document,
             "revision": revision,
+            "workspace_html": workspace_html,
         },
     )
 
@@ -67,30 +70,49 @@ def save_docgen2_workspace(
     payload: Docgen2SavePayload,
     session: SessionDependency,
 ) -> Response:
-    project = _project_or_404(session, project_id)
+    _project_or_404(session, project_id)
     title = payload.title.strip()
     if not title:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Название проекта обязательно",
+            detail="Название документа обязательно",
         )
-    project.name = title
     html = _sanitize_workspace_html(payload.html)
-    document = WorkingDocument(
-        title=title,
-        template_id="use-case",
-        nodes=[
-            DocumentNode(
-                id="docgen2-workspace",
-                kind=NodeKind.PARAGRAPH,
-                text=_workspace_text(html),
-                data={"html": html},
-            )
-        ],
+    repository = DocumentRepository(session)
+    stored = repository.get_document_with_revision(project_id)
+    if stored is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Документ не найден",
+        )
+    current, current_revision = stored
+    if current_revision != payload.revision:
+        session.rollback()
+        return JSONResponse(
+            {"detail": "Документ уже изменён"},
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    try:
+        document, html = _workspace_document_and_html(current, title, html)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+    revision = repository.save_workspace(
+        project_id,
+        payload.revision,
+        document,
+        html,
     )
-    revision = DocumentRepository(session).save_document(project_id, document)
+    if revision is None:
+        session.rollback()
+        return JSONResponse(
+            {"detail": "Документ уже изменён"},
+            status_code=status.HTTP_409_CONFLICT,
+        )
     session.commit()
-    return JSONResponse({"revision": revision, "title": title})
+    return JSONResponse({"revision": revision, "title": title, "html": html})
 
 
 @router.patch("/{project_id}/editor/nodes/{node_id}/text")
@@ -241,15 +263,17 @@ async def update_table_node(
     session: SessionDependency,
 ) -> Response:
     _project_or_404(session, project_id)
-    _ensure_node_kind(session, project_id, node_id, NodeKind.TABLE)
+    table = _ensure_node_kind(session, project_id, node_id, NodeKind.TABLE)
     payload = await _table_payload(request)
+    data = dict(table.data)
+    data["rows"] = payload.rows
     return _apply_and_render_node(
         request,
         session,
         project_id,
         node_id,
         payload.revision,
-        [UpdateData(node_id=node_id, data={"rows": payload.rows})],
+        [UpdateData(node_id=node_id, data=data)],
     )
 
 
@@ -381,7 +405,7 @@ def _ensure_node_kind(
     project_id: str,
     node_id: str,
     expected_kind: NodeKind,
-) -> None:
+) -> DocumentNode:
     document = DocumentRepository(session).get_document(project_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
@@ -393,6 +417,7 @@ def _ensure_node_kind(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Тип блока не соответствует операции",
         )
+    return node
 
 
 async def _list_payload(request: Request) -> ListPayload:
@@ -495,6 +520,24 @@ ALLOWED_WORKSPACE_ATTRIBUTES = {
     "td": {"colspan", "rowspan"},
     "th": {"colspan", "rowspan"},
 }
+WORKSPACE_NODE_ATTRIBUTES = {"data-node-id", "data-kind", "data-section-id"}
+WORKSPACE_BLOCK_TAGS = {
+    "blockquote",
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "img",
+    "ol",
+    "p",
+    "pre",
+    "table",
+    "ul",
+}
 
 
 def _sanitize_workspace_html(html: str) -> str:
@@ -508,7 +551,10 @@ def _sanitize_workspace_html(html: str) -> str:
         if tag.name not in ALLOWED_WORKSPACE_TAGS:
             tag.unwrap()
             continue
-        allowed_attributes = ALLOWED_WORKSPACE_ATTRIBUTES.get(tag.name, set())
+        allowed_attributes = (
+            ALLOWED_WORKSPACE_ATTRIBUTES.get(tag.name, set())
+            | WORKSPACE_NODE_ATTRIBUTES
+        )
         for attribute in list(tag.attrs):
             if attribute not in allowed_attributes:
                 del tag.attrs[attribute]
@@ -528,8 +574,157 @@ def _is_safe_workspace_url(value) -> bool:
     )
 
 
-def _workspace_text(html: str) -> str:
-    return BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+def workspace_document(
+    current: WorkingDocument,
+    title: str,
+    html: str,
+) -> WorkingDocument:
+    document, _ = _workspace_document_and_html(current, title, html)
+    return document
+
+
+def _workspace_document_and_html(
+    current: WorkingDocument,
+    title: str,
+    html: str,
+) -> tuple[WorkingDocument, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    elements = _workspace_elements(soup)
+    current_nodes = {node.id: node for node in current.nodes}
+    claimed_ids = [
+        str(element.get("data-node-id"))
+        for element in soup.find_all(attrs={"data-node-id": True})
+    ]
+    if len(claimed_ids) != len(set(claimed_ids)):
+        raise ValueError("Идентификатор блока повторяется")
+    if any(node_id not in current_nodes for node_id in claimed_ids):
+        raise ValueError("Документ содержит неизвестный блок")
+    if any(element.parent is not soup for element in soup.find_all(attrs={"data-node-id": True})):
+        raise ValueError("Идентификатор блока должен быть на верхнем уровне")
+
+    nodes: list[DocumentNode] = []
+    for element in elements:
+        claimed_id = element.get("data-node-id")
+        existing = current_nodes.get(str(claimed_id)) if claimed_id else None
+        node = _workspace_node(element, existing)
+        _set_workspace_node_attributes(element, node)
+        nodes.append(node)
+    document = current.model_copy(update={"title": title, "nodes": nodes})
+    normalized_html = "".join(str(item) for item in soup.contents).strip()
+    return document, normalized_html
+
+
+def _workspace_elements(soup: BeautifulSoup) -> list[Tag]:
+    elements: list[Tag] = []
+    for item in list(soup.contents):
+        if isinstance(item, Comment):
+            continue
+        if isinstance(item, NavigableString):
+            if not str(item).strip():
+                continue
+            wrapper = soup.new_tag("p")
+            item.replace_with(wrapper)
+            wrapper.append(item)
+            elements.append(wrapper)
+            continue
+        if not isinstance(item, Tag):
+            continue
+        if item.name in WORKSPACE_BLOCK_TAGS:
+            elements.append(item)
+            continue
+        if item.get_text(" ", strip=True):
+            wrapper = soup.new_tag("p")
+            item.replace_with(wrapper)
+            wrapper.append(item)
+            elements.append(wrapper)
+    return elements
+
+
+def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode:
+    kind = _workspace_node_kind(element)
+    data = dict(existing.data) if existing is not None and existing.kind is kind else {}
+    text: str | None = None
+    if kind in {NodeKind.HEADING, NodeKind.PARAGRAPH}:
+        text = element.get_text(" ", strip=True)
+    elif kind is NodeKind.LIST:
+        data["items"] = [item.get_text(" ", strip=True) for item in element.find_all("li")]
+    elif kind is NodeKind.TABLE:
+        headers, rows = _workspace_table_data(element)
+        if headers:
+            data["headers"] = headers
+        else:
+            data.pop("headers", None)
+        data["rows"] = rows
+    elif kind is NodeKind.IMAGE:
+        for attribute in ("alt", "src", "title"):
+            if value := element.get(attribute):
+                data[attribute] = str(value)
+            else:
+                data.pop(attribute, None)
+        text = str(element.get("alt") or "") or None
+
+    if existing is None:
+        return DocumentNode(
+            kind=kind,
+            text=text,
+            data=data,
+            flags=["manual-edit"],
+        )
+    updates: dict = {"kind": kind, "data": data}
+    if kind in {NodeKind.HEADING, NodeKind.PARAGRAPH, NodeKind.IMAGE}:
+        updates["text"] = text
+    elif existing.kind in {NodeKind.HEADING, NodeKind.PARAGRAPH, NodeKind.IMAGE}:
+        updates["text"] = None
+    return existing.model_copy(update=updates)
+
+
+def _workspace_table_data(element: Tag) -> tuple[list[str], list[list[str]]]:
+    table_rows = element.find_all("tr")
+    header_rows = element.select("thead tr")
+    headers: list[str] = []
+    if header_rows:
+        headers = [
+            cell.get_text(" ", strip=True)
+            for cell in header_rows[0].find_all(["th", "td"], recursive=False)
+        ]
+    elif table_rows:
+        first_cells = table_rows[0].find_all(["th", "td"], recursive=False)
+        if first_cells and all(cell.name == "th" for cell in first_cells):
+            headers = [cell.get_text(" ", strip=True) for cell in first_cells]
+            header_rows = [table_rows[0]]
+
+    rows = [
+        [
+            cell.get_text(" ", strip=True)
+            for cell in row.find_all(["th", "td"], recursive=False)
+        ]
+        for row in table_rows
+        if row not in header_rows
+    ]
+    return headers, rows
+
+
+def _workspace_node_kind(element: Tag) -> NodeKind:
+    if element.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return NodeKind.HEADING
+    if element.name in {"ul", "ol"}:
+        return NodeKind.LIST
+    if element.name == "table":
+        return NodeKind.TABLE
+    if element.name == "img":
+        return NodeKind.IMAGE
+    if element.name == "hr":
+        return NodeKind.GAP
+    return NodeKind.PARAGRAPH
+
+
+def _set_workspace_node_attributes(element: Tag, node: DocumentNode) -> None:
+    element["data-node-id"] = node.id
+    element["data-kind"] = node.kind.value
+    if node.section_id is not None:
+        element["data-section-id"] = node.section_id
+    else:
+        element.attrs.pop("data-section-id", None)
 
 
 def _new_node(kind: str) -> DocumentNode:
@@ -607,4 +802,4 @@ def _locate_node(
     return None
 
 
-__all__ = ["router"]
+__all__ = ["router", "workspace_document"]

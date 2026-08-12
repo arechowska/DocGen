@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
+import re
+import unicodedata
+from collections import Counter
 from collections.abc import Callable
+from typing import Any
 
 from docgen.ai.client import TextModel
-from docgen.chat.schemas import ChatEditPlan, ChatEditRequest, ChatEditResult
+from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest, ChatEditResult
 from docgen.documents.edit_service import DocumentEditService
 from docgen.documents.operations import (
     DeleteNode,
@@ -16,14 +21,15 @@ from docgen.documents.operations import (
     find_node,
 )
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import WorkingDocument
+from docgen.documents.schemas import DocumentNode, WorkingDocument
 from docgen.extraction.schemas import NormalizedBlock
 
 CHAT_SYSTEM_PROMPT = """
 Вы редактируете DocGen-документ на русском языке.
 Верните только структурированный план правок.
 Используйте операции только против существующих node_id, кроме явной вставки нового блока.
-Каждое фактическое добавление должно иметь evidence_block_ids из источников проекта.
+Каждую операцию верните в объекте с полями operation и evidence_block_ids.
+Каждое фактическое добавление должно иметь в своём объекте evidence_block_ids из источников проекта.
 Если подтверждения в источниках нет, верните пустой список operations.
 Не удаляйте содержимое сверх прямого запроса пользователя.
 """.strip()
@@ -68,7 +74,7 @@ class ChatService:
         result = DocumentEditService(self._documents).apply(
             project_id,
             request.expected_revision,
-            plan.operations,
+            [item.operation for item in plan.operations],
         )
         return ChatEditResult(
             summary=plan.summary,
@@ -107,15 +113,247 @@ def _validate_plan(
     source_blocks: list[NormalizedBlock],
     plan: ChatEditPlan,
 ) -> None:
-    known_evidence = {block.id for block in source_blocks}
-    if any(block_id not in known_evidence for block_id in plan.evidence_block_ids):
-        raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
-    if plan.operations and not plan.evidence_block_ids:
+    evidence_by_id = {block.id: block for block in source_blocks}
+    inserted_ids: set[str] = set()
+    for item in plan.operations:
+        _validate_operation(document, item.operation, inserted_ids)
+        _validate_operation_evidence(document, evidence_by_id, item)
+
+
+def _validate_operation_evidence(
+    document: WorkingDocument,
+    evidence_by_id: dict[str, NormalizedBlock],
+    item: ChatEditOperation,
+) -> None:
+    try:
+        cited_blocks = [evidence_by_id[block_id] for block_id in item.evidence_block_ids]
+    except KeyError as error:
+        raise ChatGroundingError(
+            "Для этой правки нет подтверждения в источниках"
+        ) from error
+
+    changed_tokens = _factual_changed_tokens(document, item.operation)
+    if not changed_tokens:
+        return
+    if not cited_blocks or not _tokens_supported(
+        changed_tokens,
+        _tokens(" ".join(block.text for block in cited_blocks)),
+    ):
         raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
 
-    inserted_ids: set[str] = set()
-    for operation in plan.operations:
-        _validate_operation(document, operation, inserted_ids)
+
+_WORD_PATTERN = re.compile(r"[^\W\d_]+", re.UNICODE)
+_NUMBER_BODY = r"[+\-−]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?"
+_CURRENCY_UNIT = r"(?:[$€₽£¥₸]|rub|rur|usd|eur|kzt|gbp|jpy|руб(?:лей|ля|\.)?|р\.)"
+_NUMERIC_LITERAL_PATTERN = re.compile(
+    rf"""
+    (?<!\d)
+    (?P<prefix>[$€₽£¥₸])?\s*
+    (?P<first>{_NUMBER_BODY})
+    (?:\s*(?P<range>\.\.|[-–—])\s*(?P<second>{_NUMBER_BODY}))?
+    \s*(?P<unit>%|{_CURRENCY_UNIT}(?!\w))?
+    (?!\d)
+    """,
+    re.IGNORECASE | re.UNICODE | re.VERBOSE,
+)
+_NUMERIC_TOKEN_PREFIX = "num:"
+_CURRENCY_ALIASES = {
+    "$": "usd",
+    "€": "eur",
+    "₽": "rub",
+    "£": "gbp",
+    "¥": "jpy",
+    "₸": "kzt",
+    "rur": "rub",
+    "руб": "rub",
+    "руб.": "rub",
+    "рубля": "rub",
+    "рублей": "rub",
+    "р.": "rub",
+}
+_STOP_WORDS = {
+    "без",
+    "был",
+    "была",
+    "были",
+    "быть",
+    "вас",
+    "все",
+    "вы",
+    "до",
+    "для",
+    "его",
+    "если",
+    "есть",
+    "еще",
+    "из",
+    "или",
+    "как",
+    "который",
+    "над",
+    "нет",
+    "но",
+    "он",
+    "она",
+    "оно",
+    "они",
+    "при",
+    "по",
+    "под",
+    "от",
+    "мы",
+    "со",
+    "так",
+    "то",
+    "что",
+    "это",
+    "этот",
+}
+_NON_FACTUAL_DATA_KEYS = {
+    "alignment",
+    "class",
+    "color",
+    "height",
+    "src",
+    "style",
+    "table_style",
+    "uri",
+    "url",
+    "width",
+}
+
+
+def _factual_changed_tokens(
+    document: WorkingDocument,
+    operation: DocumentOperation,
+) -> list[str]:
+    before = ""
+    after = ""
+    if isinstance(operation, UpdateText):
+        node = find_node(document, operation.node_id)
+        before = node.text or "" if node is not None else ""
+        after = operation.text
+    elif isinstance(operation, UpdateData):
+        node = find_node(document, operation.node_id)
+        before = _factual_data_text(node.data if node is not None else {})
+        after = _factual_data_text(operation.data)
+    elif isinstance(operation, InsertNode):
+        after = _node_factual_text(operation.node)
+    else:
+        return []
+
+    before_counts = Counter(_tokens(before))
+    changed: list[str] = []
+    for token in _tokens(after):
+        if before_counts[token]:
+            before_counts[token] -= 1
+        else:
+            changed.append(token)
+    return changed
+
+
+def _node_factual_text(node: DocumentNode) -> str:
+    parts = [node.text or "", _factual_data_text(node.data)]
+    parts.extend(_node_factual_text(child) for child in node.children)
+    return " ".join(parts)
+
+
+def _factual_data_text(value: Any, *, key: str | None = None) -> str:
+    if key is not None and key.casefold() in _NON_FACTUAL_DATA_KEYS:
+        return ""
+    if isinstance(value, dict):
+        return " ".join(
+            _factual_data_text(item, key=str(item_key))
+            for item_key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return " ".join(_factual_data_text(item, key=key) for item in value)
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        return str(value)
+    return ""
+
+
+def _tokens(text: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("ё", "е")
+    numeric: list[str] = []
+    word_text = list(normalized)
+    for match in _NUMERIC_LITERAL_PATTERN.finditer(normalized):
+        numeric.append(_normalized_numeric_literal(match))
+        word_text[match.start() : match.end()] = " " * (match.end() - match.start())
+    words = [
+        token
+        for token in _WORD_PATTERN.findall("".join(word_text))
+        if len(token) >= 2 and token not in _STOP_WORDS
+    ]
+    return [*numeric, *words]
+
+
+def _normalized_numeric_literal(match: re.Match[str]) -> str:
+    first = _normalized_number(match.group("first"))
+    second = match.group("second")
+    value = first if second is None else f"{first}..{_normalized_number(second)}"
+    units = [
+        _normalized_numeric_unit(unit)
+        for unit in (match.group("prefix"), match.group("unit"))
+        if unit
+    ]
+    unique_units = list(dict.fromkeys(units))
+    suffix = f":{':'.join(unique_units)}" if unique_units else ""
+    return f"{_NUMERIC_TOKEN_PREFIX}{value}{suffix}"
+
+
+def _normalized_number(value: str) -> str:
+    return (
+        value.replace("−", "-")
+        .replace(" ", "")
+        .replace("\u00a0", "")
+        .replace("\u202f", "")
+        .replace(",", ".")
+    )
+
+
+def _normalized_numeric_unit(value: str) -> str:
+    normalized = value.casefold()
+    return _CURRENCY_ALIASES.get(normalized, normalized)
+
+
+def _tokens_supported(changed: list[str], evidence: list[str]) -> bool:
+    # MVP policy: every complete numeric fact must occur in the cited operation-level
+    # evidence with the same multiplicity. Remaining words use conservative lexical
+    # support so grounded Russian inflections/paraphrases are not forced to be exact.
+    numeric = Counter(token for token in changed if _is_numeric_token(token))
+    evidence_numbers = Counter(token for token in evidence if _is_numeric_token(token))
+    if numeric - evidence_numbers:
+        return False
+
+    words = [token for token in changed if not _is_numeric_token(token)]
+    evidence_words = [token for token in evidence if not _is_numeric_token(token)]
+    if not words:
+        return True
+    matched = sum(
+        1
+        for token in words
+        if any(_tokens_match(token, evidence_token) for evidence_token in evidence_words)
+    )
+    required = 1 if len(words) == 1 else max(2, math.ceil(len(words) * 0.6))
+    return matched >= required
+
+
+def _tokens_match(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if _is_numeric_token(left) or _is_numeric_token(right):
+        return False
+    common = 0
+    for left_character, right_character in zip(left, right, strict=False):
+        if left_character != right_character:
+            break
+        common += 1
+    return common >= 5 and common / max(len(left), len(right)) >= 0.6
+
+
+def _is_numeric_token(token: str) -> bool:
+    return token.startswith(_NUMERIC_TOKEN_PREFIX)
 
 
 def _validate_operation(

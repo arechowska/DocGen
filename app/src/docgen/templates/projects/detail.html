@@ -1,9 +1,13 @@
 {% extends "base.html" %}
 
 {% block content %}
+  {% set selected_template = namespace(id=templates[0].id if templates else '') %}
+  {% for semantic_template in templates %}
+    {% if semantic_template.id == "use-case" %}{% set selected_template.id = semantic_template.id %}{% endif %}
+  {% endfor %}
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand" aria-label="Colvir Formatta">
+      <div class="brand" aria-label="Formatta">
         <span class="brand-mark" aria-hidden="true">F</span>
         <span class="brand-copy">
           <strong>Formatta</strong>
@@ -12,9 +16,9 @@
 
       <label class="control template-control">
         <span>Шаблон</span>
-        <select id="templateSelect" name="template_id" form="assembleForm">
+        <select id="templateSelect" data-template-source>
           {% for semantic_template in templates %}
-            <option value="{{ semantic_template.id }}" {% if semantic_template.id == "use-case" %}selected{% endif %}>{{ semantic_template.name }}{% if semantic_template.id == "use-case" %} (Use Case){% endif %}</option>
+            <option value="{{ semantic_template.id }}" {% if semantic_template.id == selected_template.id %}selected{% endif %}>{{ semantic_template.name }}{% if semantic_template.id == "use-case" %} (Use Case){% endif %}</option>
           {% endfor %}
         </select>
       </label>
@@ -29,10 +33,7 @@
       </label>
 
       <div class="topbar-actions">
-        <button id="reviewButton" class="button secondary" type="submit" form="checkForm" {% if not has_document %}disabled{% endif %}>
-          <span class="button-icon shield-icon" aria-hidden="true"></span>
-          <span>Проверить по шаблону</span>
-        </button>
+        {% include "projects/review_button.html" %}
         {% include "projects/build_button.html" %}
       </div>
     </header>
