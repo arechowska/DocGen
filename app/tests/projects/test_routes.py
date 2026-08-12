@@ -32,6 +32,8 @@ def test_projects_page_lists_projects_and_create_button(
     assert existing_project.name in response.text
     assert "Создать проект" in response.text
     soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find(class_="brand")["aria-label"] == "Formatta"
+    assert "DocGen" not in soup.get_text(" ")
     assert soup.find(class_="app-shell") is not None
     topbar = soup.find(class_="topbar")
     assert topbar is not None

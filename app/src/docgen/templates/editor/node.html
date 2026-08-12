@@ -45,7 +45,7 @@
 
   {% if node.kind.value in ["heading", "paragraph"] %}
     <textarea
-      class="min-h-16 w-full rounded-2xl border border-[#d8e1e8] px-3 py-2 text-sm text-[#101828] focus:outline-none focus:ring-2 focus:ring-[#60bcff]"
+      class="min-h-16 w-full rounded-2xl border border-[#d6e5f8] px-3 py-2 text-sm text-[#202428] focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
       name="text"
       hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/text"
       hx-trigger="change delay:700ms"
@@ -56,7 +56,7 @@
     <input type="hidden" name="revision" value="{{ revision }}">
   {% elif node.kind.value == "list" %}
     <textarea
-      class="min-h-20 w-full rounded-2xl border border-[#d8e1e8] px-3 py-2 text-sm text-[#101828] focus:outline-none focus:ring-2 focus:ring-[#60bcff]"
+      class="min-h-20 w-full rounded-2xl border border-[#d6e5f8] px-3 py-2 text-sm text-[#202428] focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
       name="items_text"
       hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/list"
       hx-trigger="change delay:700ms"
@@ -80,7 +80,7 @@
       </table>
     </div>
     <textarea
-      class="mt-3 min-h-24 w-full rounded-2xl border border-[#d8e1e8] px-3 py-2 text-sm text-[#101828] focus:outline-none focus:ring-2 focus:ring-[#60bcff]"
+      class="mt-3 min-h-24 w-full rounded-2xl border border-[#d6e5f8] px-3 py-2 text-sm text-[#202428] focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
       name="rows_text"
       hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/table"
       hx-trigger="change delay:700ms"
@@ -92,13 +92,13 @@
     <input type="hidden" name="revision" value="{{ revision }}">
   {% elif node.kind.value == "image" %}
     <figure class="text-sm text-slate-700">
-      <div class="rounded-2xl border border-dashed border-[#d8e1e8] bg-[#f3f6fa] px-3 py-6 text-center">
+      <div class="rounded-2xl border border-dashed border-[#d6e5f8] bg-[#f4f7fa] px-3 py-6 text-center">
         {{ node.text or node.data.get("alt", "Изображение") }}
       </div>
     </figure>
     <div class="mt-3 grid gap-2 sm:grid-cols-3">
       <select
-        class="rounded-2xl border border-[#d8e1e8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#60bcff]"
+        class="rounded-2xl border border-[#d6e5f8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
         name="alignment"
         hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/image"
         hx-trigger="change"
@@ -111,7 +111,7 @@
         {% endfor %}
       </select>
       <input
-        class="rounded-2xl border border-[#d8e1e8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#60bcff]"
+        class="rounded-2xl border border-[#d6e5f8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
         name="width"
         type="number"
         min="10"
@@ -124,7 +124,7 @@
         hx-swap="outerHTML"
       >
       <input
-        class="rounded-2xl border border-[#d8e1e8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#60bcff]"
+        class="rounded-2xl border border-[#d6e5f8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
         name="alt"
         value="{{ node.data.get('alt', node.text or 'Изображение') }}"
         hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/image"

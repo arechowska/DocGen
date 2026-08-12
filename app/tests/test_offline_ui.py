@@ -98,13 +98,32 @@ def test_workspace_css_contains_corporate_layout_tokens(client: TestClient) -> N
         ".result-panel",
         ".project-card-link{min-height:76px;display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center",
         ".project-delete-button{position:absolute;top:10px;right:10px",
-        "#60bcff",
-        "#3196df",
-        "#f9f9fc",
-        "#f3f6fa",
+        "#15569b",
+        "#1b5eaa",
+        "#202428",
+        "#5f6873",
+        "#f4f7fa",
+        "#d6e5f8",
         "@media (max-width:1023px)",
     ):
         assert token in css
+
+
+def test_workspace_css_uses_calm_formatta_palette(client: TestClient) -> None:
+    """The served UI must not regress to the previous cyan gradient palette."""
+    css = client.get("/static/css/docgen.css").text.lower()
+
+    for token in (
+        "--formatta-topbar:#15569b",
+        "--formatta-primary:#1b5eaa",
+        "--formatta-ink:#202428",
+        "--formatta-muted:#5f6873",
+        "--formatta-bg:#f4f7fa",
+        "--formatta-border:#d6e5f8",
+    ):
+        assert token in css
+    assert "#60bcff" not in css
+    assert "#3196df" not in css
 
 
 def test_heading_select_chevron_is_vertically_aligned_like_docgen2(
