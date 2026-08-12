@@ -126,6 +126,39 @@ def test_workspace_css_uses_calm_formatta_palette(client: TestClient) -> None:
     assert "#3196df" not in css
 
 
+def test_auxiliary_workspace_screens_use_the_formatta_palette(client: TestClient) -> None:
+    """Generated CSS for all reachable fragments must share the workspace theme."""
+    css = client.get("/static/css/docgen.css").text.lower()
+
+    for retired_colour in (
+        "#0071e3",
+        "#0066cc",
+        "#101828",
+        "#667085",
+        "#e3e8ec",
+        "#f9f9fc",
+        "#f5f5f7",
+        "#707070",
+    ):
+        assert retired_colour not in css
+
+
+def test_workspace_topbar_and_document_heading_colours_have_scoped_roles(
+    client: TestClient,
+) -> None:
+    """Blue identifies app actions and document styling, not application headings."""
+    css = client.get("/static/css/docgen.css").text.lower()
+    topbar = css[css.index(".topbar{") : css.index("}", css.index(".topbar{"))]
+
+    assert "background:var(--formatta-topbar)" in topbar
+    assert "linear-gradient" not in topbar
+    assert (
+        ".document-canvas h1,.document-canvas h2,.document-canvas h3,"
+        ".document-canvas h4,.document-canvas h5{color:var(--formatta-primary)"
+    ) in css
+    assert ".panel-heading h1{margin:0;color:var(--lk-ink)" in css
+
+
 def test_heading_select_chevron_is_vertically_aligned_like_docgen2(
     client: TestClient,
 ) -> None:

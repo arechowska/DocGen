@@ -24,7 +24,7 @@
   }
 
   .docgen-eyebrow {
-    @apply text-xs font-semibold uppercase tracking-normal text-[#667085];
+    @apply text-xs font-semibold uppercase tracking-normal text-[#5f6873];
   }
 
   .docgen-primary-button {

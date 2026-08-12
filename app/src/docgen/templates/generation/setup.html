@@ -26,10 +26,10 @@
       hx-post="/projects/{{ project.id }}/jobs/assemble"
       hx-target="#generation-status"
       hx-swap="outerHTML"
-      class="rounded-2xl border border-[#e3e8ec] bg-[#f9f9fc] p-4"
+      class="rounded-2xl border border-[#d6e5f8] bg-[#f4f7fa] p-4"
     >
       <label class="block text-sm font-medium" for="assemble-template-{{ project.id }}">Шаблон документа</label>
-      <select id="assemble-template-{{ project.id }}" name="template_id" class="mt-3 w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2" required>
+      <select id="assemble-template-{{ project.id }}" name="template_id" class="mt-3 w-full rounded-xl border border-[#d6e5f8] bg-white px-3 py-2" required>
         {% for semantic_template in templates %}
           <option value="{{ semantic_template.id }}">{{ semantic_template.name }}</option>
         {% endfor %}
@@ -43,21 +43,21 @@
       hx-post="/projects/{{ project.id }}/jobs/check"
       hx-target="#generation-status"
       hx-swap="outerHTML"
-      class="rounded-2xl border border-[#e3e8ec] bg-[#f9f9fc] p-4"
+      class="rounded-2xl border border-[#d6e5f8] bg-[#f4f7fa] p-4"
     >
       {% if not has_document and check_targets | length == 1 %}
         <input type="hidden" name="target_source_id" value="{{ check_targets[0].id }}">
         <p class="text-sm font-medium">Проверяемый документ</p>
-        <p class="mt-3 rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-sm">{{ check_targets[0].display_name }}</p>
+        <p class="mt-3 rounded-xl border border-[#d6e5f8] bg-white px-3 py-2 text-sm">{{ check_targets[0].display_name }}</p>
       {% else %}
         <label class="block text-sm font-medium" for="check-target-{{ project.id }}">Документ для проверки</label>
-        <select id="check-target-{{ project.id }}" name="target_source_id" class="mt-3 w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2" {% if not has_document %}required{% endif %}>
+        <select id="check-target-{{ project.id }}" name="target_source_id" class="mt-3 w-full rounded-xl border border-[#d6e5f8] bg-white px-3 py-2" {% if not has_document %}required{% endif %}>
           {% if has_document %}<option value="">Текущий документ</option>{% else %}<option value="" selected disabled>Выберите документ</option>{% endif %}
           {% for source in check_targets %}<option value="{{ source.id }}">{{ source.display_name }}</option>{% endfor %}
         </select>
       {% endif %}
       <label class="block text-sm font-medium" for="check-template-{{ project.id }}">Шаблон проверки</label>
-      <select id="check-template-{{ project.id }}" name="template_id" class="mt-3 w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2" required>
+      <select id="check-template-{{ project.id }}" name="template_id" class="mt-3 w-full rounded-xl border border-[#d6e5f8] bg-white px-3 py-2" required>
         {% for semantic_template in templates %}
           <option value="{{ semantic_template.id }}">{{ semantic_template.name }}</option>
         {% endfor %}

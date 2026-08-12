@@ -1,5 +1,5 @@
 {% macro render_node(node) %}
-  <article id="node-{{ node.id }}" class="scroll-mt-6 rounded-2xl border border-[#e5e5e7] p-5">
+  <article id="node-{{ node.id }}" class="scroll-mt-6 rounded-2xl border border-[#d6e5f8] p-5">
     {% if node.kind.value == "heading" %}
       <h3 class="text-xl font-semibold">{{ node.text or "" }}</h3>
     {% elif node.kind.value == "paragraph" %}
@@ -20,27 +20,27 @@
         <div class="overflow-x-auto">
           <table class="w-full border-collapse text-left text-sm">
             {% if headers is sequence and headers is not string %}
-              <thead><tr>{% for header in headers %}<th class="border border-[#d2d2d7] px-3 py-2">{{ header }}</th>{% endfor %}</tr></thead>
+              <thead><tr>{% for header in headers %}<th class="border border-[#d6e5f8] px-3 py-2">{{ header }}</th>{% endfor %}</tr></thead>
             {% endif %}
             <tbody>
               {% for row in rows %}
-                {% if row is sequence and row is not string %}<tr>{% for cell in row %}<td class="border border-[#d2d2d7] px-3 py-2">{{ cell }}</td>{% endfor %}</tr>{% endif %}
+                {% if row is sequence and row is not string %}<tr>{% for cell in row %}<td class="border border-[#d6e5f8] px-3 py-2">{{ cell }}</td>{% endfor %}</tr>{% endif %}
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% endif %}
     {% elif node.kind.value == "image" %}
-      <div class="rounded-xl bg-[#f5f5f7] p-4">
-        <p class="text-sm font-medium text-[#707070]">Изображение или схема</p>
+      <div class="rounded-xl bg-[#f4f7fa] p-4">
+        <p class="text-sm font-medium text-[#5f6873]">Изображение или схема</p>
         {% if node.text %}<p class="mt-2">{{ node.text }}</p>{% endif %}
       </div>
     {% elif node.kind.value == "gap" %}
-      <div class="rounded-xl border border-dashed border-[#d2d2d7] bg-[#fff8e6] p-4 font-medium">Нет данных в источниках</div>
+      <div class="rounded-xl border border-dashed border-[#d6e5f8] bg-[#fff8e6] p-4 font-medium">Нет данных в источниках</div>
     {% endif %}
 
     {% if node.children %}
-      <div class="mt-4 space-y-4 border-l-2 border-[#e5e5e7] pl-4">
+      <div class="mt-4 space-y-4 border-l-2 border-[#d6e5f8] pl-4">
         {% for child in node.children %}{{ render_node(child) }}{% endfor %}
       </div>
     {% endif %}
@@ -56,10 +56,10 @@
     <title>{{ document.title }} — Formatta</title>
     <link rel="stylesheet" href="/static/css/docgen.css">
   </head>
-  <body class="bg-[#f5f5f7] font-[Inter,system-ui] text-[#1d1d1f]">
+  <body class="bg-[#f4f7fa] font-[Inter,system-ui] text-[#202428]">
 {% endif %}
 <main id="{% if standalone %}document-start{% else %}generation-status{% endif %}" class="mx-auto max-w-4xl scroll-mt-6 px-6 py-12 sm:px-10">
-  <a href="/projects/{{ project_id }}" class="text-sm font-medium text-[#0066cc]">К проекту</a>
+  <a href="/projects/{{ project_id }}" class="text-sm font-medium text-[#1b5eaa]">К проекту</a>
   {% if warnings %}
     <section class="mt-6 rounded-2xl bg-[#fff8e6] p-5" aria-label="Предупреждения">
       <h2 class="font-semibold">Предупреждения</h2>
@@ -69,7 +69,7 @@
     </section>
   {% endif %}
   <section class="mt-6 rounded-[28px] bg-white p-7 sm:p-10">
-    <p class="text-sm font-medium text-[#707070]">Собранный документ</p>
+    <p class="text-sm font-medium text-[#5f6873]">Собранный документ</p>
     <h1 class="mt-2 text-3xl font-semibold tracking-tight">{{ document.title }}</h1>
     <div class="mt-8 space-y-4">
       {% for node in document.nodes %}{{ render_node(node) }}{% endfor %}
