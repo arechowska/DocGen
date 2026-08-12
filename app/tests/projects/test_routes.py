@@ -84,6 +84,80 @@ def test_create_project_redirects_to_detail(client: TestClient) -> None:
     assert title_input.get("value") == "Новый Use Case"
 
 
+def _project_with_markdown_source(client: TestClient) -> str:
+    created = client.post("/projects", data={"name": "Проверка источника"}, follow_redirects=False)
+    project_url = created.headers["location"]
+    response = client.post(
+        f"{project_url}/sources/files",
+        files={"file": ("case.md", b"# Case", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    return project_url
+
+
+def test_workspace_check_is_available_for_one_uploaded_document(client: TestClient) -> None:
+    project_url = _project_with_markdown_source(client)
+    page = BeautifulSoup(client.get(project_url).text, "html.parser")
+    review = page.find("button", id="reviewButton")
+    check_form = page.find("form", id="checkForm")
+    template_select = page.find("select", id="templateSelect")
+
+    assert review is not None
+    assert review.has_attr("disabled") is False
+    assert check_form is not None
+    assert template_select is not None
+    selected_template = template_select.find("option", selected=True)
+    assert selected_template is not None
+    assert selected_template["value"] == "use-case"
+    assert check_form.find("input", attrs={"name": "template_id"})["value"] == selected_template["value"]
+
+
+def test_workspace_forms_share_selected_template_contract(client: TestClient) -> None:
+    project_url = _project_with_markdown_source(client)
+    page = BeautifulSoup(client.get(project_url).text, "html.parser")
+
+    template_select = page.find("select", id="templateSelect")
+    assert template_select is not None
+    assert template_select["data-template-source"] == ""
+    selected_template = template_select.find("option", selected=True)
+    assert selected_template is not None
+    for form_id in ("assembleForm", "checkForm"):
+        field = page.find("form", id=form_id).find("input", attrs={"name": "template_id"})
+        assert field["data-template-target"] == ""
+        assert field["value"] == selected_template["value"]
+
+
+def test_workspace_source_update_swaps_review_button_state(client: TestClient) -> None:
+    created = client.post("/projects", data={"name": "Обновление источников"}, follow_redirects=False)
+    project_url = created.headers["location"]
+
+    response = client.post(
+        f"{project_url}/sources/files",
+        files={"file": ("case.md", b"# Case", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    fragment = BeautifulSoup(response.text, "html.parser")
+    review = fragment.find("button", id="reviewButton")
+    assert review is not None
+    assert review["hx-swap-oob"] == "outerHTML"
+    assert review.has_attr("disabled") is False
+
+    target = fragment.find("select", id="checkTargetSelect").find("option")
+    response = client.delete(
+        f"{project_url}/sources/{target['value']}", headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 200
+    fragment = BeautifulSoup(response.text, "html.parser")
+    review = fragment.find("button", id="reviewButton")
+    assert review is not None
+    assert review["hx-swap-oob"] == "outerHTML"
+    assert review.has_attr("disabled") is True
+
+
 def test_project_detail_renders_layout_agent_workspace_without_document(
     client: TestClient,
 ) -> None:

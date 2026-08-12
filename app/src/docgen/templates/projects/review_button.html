@@ -1,0 +1,11 @@
+<button
+  id="reviewButton"
+  class="button secondary"
+  type="submit"
+  form="checkForm"
+  {% if not has_document and not check_targets %}disabled{% endif %}
+  {% if review_button_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <span class="button-icon shield-icon" aria-hidden="true"></span>
+  <span>Проверить по шаблону</span>
+</button>

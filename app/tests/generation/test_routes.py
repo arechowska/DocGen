@@ -293,6 +293,7 @@ def test_check_uses_the_only_uploaded_document_without_reselecting_it(
     assert response.status_code == 202
     job = _jobs_for_project(client, project_with_source.id)[0]
     assert job.target_source_id == target_source_id
+    assert job.template_id == "use-case"
 
 
 def test_check_rejects_target_source_from_another_project(

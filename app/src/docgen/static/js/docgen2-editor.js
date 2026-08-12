@@ -17,6 +17,19 @@
     });
   });
 
+  const templateSource = document.querySelector("[data-template-source]");
+  const synchronizeTemplate = () => {
+    document.querySelectorAll("[data-template-target]").forEach((target) => {
+      target.value = templateSource?.value || "";
+    });
+  };
+
+  if (templateSource) {
+    synchronizeTemplate();
+    templateSource.addEventListener("change", synchronizeTemplate);
+  }
+  document.addEventListener("htmx:afterSwap", synchronizeTemplate);
+
   const editor = document.querySelector("#docgen2Editor");
   if (!editor) return;
 
