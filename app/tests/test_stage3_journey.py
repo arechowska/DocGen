@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from docgen.ai.grounding import GroundingValidator
-from docgen.chat.schemas import ChatEditPlan
+from docgen.chat.schemas import ChatEditOperation, ChatEditPlan
 from docgen.chat.service import ChatService
 from docgen.config import Settings
 from docgen.documents.operations import UpdateData
@@ -208,16 +208,18 @@ class _JourneyModel:
             return ChatEditPlan(
                 summary="Начало работы уточнено по источнику",
                 operations=[
-                    UpdateData(
-                        node_id="faq-start",
-                        data={
-                            "items": [
-                                "Как начать работу? " + self.chat_evidence_text
-                            ]
-                        },
+                    ChatEditOperation(
+                        operation=UpdateData(
+                            node_id="faq-start",
+                            data={
+                                "items": [
+                                    "Как начать работу? " + self.chat_evidence_text
+                                ]
+                            },
+                        ),
+                        evidence_block_ids=[self.chat_evidence_id],
                     )
                 ],
-                evidence_block_ids=[self.chat_evidence_id],
             )
         if schema is CheckReport:
             rule_ids = tuple(rule["id"] for rule in payload["правила"])

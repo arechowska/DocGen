@@ -264,15 +264,17 @@ async def update_table_node(
     session: SessionDependency,
 ) -> Response:
     _project_or_404(session, project_id)
-    _ensure_node_kind(session, project_id, node_id, NodeKind.TABLE)
+    table = _ensure_node_kind(session, project_id, node_id, NodeKind.TABLE)
     payload = await _table_payload(request)
+    data = dict(table.data)
+    data["rows"] = payload.rows
     return _apply_and_render_node(
         request,
         session,
         project_id,
         node_id,
         payload.revision,
-        [UpdateData(node_id=node_id, data={"rows": payload.rows})],
+        [UpdateData(node_id=node_id, data=data)],
     )
 
 
@@ -404,7 +406,7 @@ def _ensure_node_kind(
     project_id: str,
     node_id: str,
     expected_kind: NodeKind,
-) -> None:
+) -> DocumentNode:
     document = DocumentRepository(session).get_document(project_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
@@ -416,6 +418,7 @@ def _ensure_node_kind(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Тип блока не соответствует операции",
         )
+    return node
 
 
 async def _list_payload(request: Request) -> ListPayload:
@@ -640,17 +643,19 @@ def _workspace_elements(soup: BeautifulSoup) -> list[Tag]:
 
 def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode:
     kind = _workspace_node_kind(element)
-    data = dict(existing.data) if existing is not None else {}
+    data = dict(existing.data) if existing is not None and existing.kind is kind else {}
     text: str | None = None
     if kind in {NodeKind.HEADING, NodeKind.PARAGRAPH}:
         text = element.get_text(" ", strip=True)
     elif kind is NodeKind.LIST:
         data["items"] = [item.get_text(" ", strip=True) for item in element.find_all("li")]
     elif kind is NodeKind.TABLE:
-        data["rows"] = [
-            [cell.get_text(" ", strip=True) for cell in row.find_all(["th", "td"])]
-            for row in element.find_all("tr")
-        ]
+        headers, rows = _workspace_table_data(element)
+        if headers:
+            data["headers"] = headers
+        else:
+            data.pop("headers", None)
+        data["rows"] = rows
     elif kind is NodeKind.IMAGE:
         for attribute in ("alt", "src", "title"):
             if value := element.get(attribute):
@@ -672,6 +677,32 @@ def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode
     elif existing.kind in {NodeKind.HEADING, NodeKind.PARAGRAPH, NodeKind.IMAGE}:
         updates["text"] = None
     return existing.model_copy(update=updates)
+
+
+def _workspace_table_data(element: Tag) -> tuple[list[str], list[list[str]]]:
+    table_rows = element.find_all("tr")
+    header_rows = element.select("thead tr")
+    headers: list[str] = []
+    if header_rows:
+        headers = [
+            cell.get_text(" ", strip=True)
+            for cell in header_rows[0].find_all(["th", "td"], recursive=False)
+        ]
+    elif table_rows:
+        first_cells = table_rows[0].find_all(["th", "td"], recursive=False)
+        if first_cells and all(cell.name == "th" for cell in first_cells):
+            headers = [cell.get_text(" ", strip=True) for cell in first_cells]
+            header_rows = [table_rows[0]]
+
+    rows = [
+        [
+            cell.get_text(" ", strip=True)
+            for cell in row.find_all(["th", "td"], recursive=False)
+        ]
+        for row in table_rows
+        if row not in header_rows
+    ]
+    return headers, rows
 
 
 def _workspace_node_kind(element: Tag) -> NodeKind:

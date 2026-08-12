@@ -11,10 +11,14 @@ class ChatEditRequest(BaseModel):
     expected_revision: int
 
 
+class ChatEditOperation(BaseModel):
+    operation: DocumentOperation
+    evidence_block_ids: list[str] = Field(default_factory=list)
+
+
 class ChatEditPlan(BaseModel):
     summary: str
-    operations: list[DocumentOperation] = Field(default_factory=list)
-    evidence_block_ids: list[str] = Field(default_factory=list)
+    operations: list[ChatEditOperation] = Field(default_factory=list)
 
 
 class ChatEditResult(BaseModel):

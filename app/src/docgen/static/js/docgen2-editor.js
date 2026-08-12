@@ -90,8 +90,14 @@
           revision: Number.parseInt(editor.dataset.revision, 10),
         }),
       });
-      if (!response.ok) throw new Error("save failed");
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail = typeof result.detail === "string" ? result.detail : "Не удалось сохранить";
+        if (response.status === 409) {
+          throw new Error(`${detail}. Обнови страницу и повтори сохранение.`);
+        }
+        throw new Error(detail);
+      }
       editor.dataset.revision = String(result.revision);
       canvas.innerHTML = result.html;
       document.querySelectorAll('input[name="revision"]').forEach((input) => {
@@ -99,8 +105,9 @@
       });
       markDocumentReady();
       setSaveStatus("Сохранено", "saved");
-    } catch {
-      setSaveStatus("Не удалось сохранить", "error");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Не удалось сохранить";
+      setSaveStatus(message, "error");
     } finally {
       saveButton.disabled = false;
     }

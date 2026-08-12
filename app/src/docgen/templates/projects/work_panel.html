@@ -48,7 +48,7 @@
       <input
         id="docgen2EditorTitle"
         class="document-title"
-        value="{{ project.name }}"
+        value="{{ document.title if document else project.name }}"
         aria-label="Название документа"
       >
     </div>
@@ -163,9 +163,15 @@
               <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{% for item in node.data.get("items", []) %}<li>{{ item }}</li>{% endfor %}</ul>
             {% elif node.kind.value == "table" %}
               <table data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>
-                {% for row in node.data.get("rows", []) %}
-                  <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
-                {% endfor %}
+                {% set headers = node.data.get("headers", []) %}
+                {% if headers %}
+                  <thead><tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+                {% endif %}
+                <tbody>
+                  {% for row in node.data.get("rows", []) %}
+                    <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+                  {% endfor %}
+                </tbody>
               </table>
             {% elif node.kind.value == "image" %}
               <img data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{% if node.data.get("src") %} src="{{ node.data.get('src') }}"{% endif %} alt="{{ node.data.get('alt', node.text or 'Изображение') }}">

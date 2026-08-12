@@ -242,7 +242,7 @@ def test_project_detail_embeds_editor_when_document_exists(client: TestClient) -
     assert editor_panel.get("hx-swap") == "outerHTML"
     title_input = editor_panel.find("input", id="docgen2EditorTitle")
     assert title_input is not None
-    assert title_input.get("value") == "Редактор"
+    assert title_input.get("value") == "Техническое задание"
     assert "Техническое задание" in editor_panel.get_text(" ")
     assert "Введение" in editor_panel.get_text(" ")
     assert editor_panel.find("button", attrs={"aria-label": "Полужирный"}) is not None

@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from docgen.jobs.models import Job
 from docgen.sources.repository import SourceRepository
+
+_NODE = shutil.which("node")
+_requires_node = pytest.mark.skipif(
+    _NODE is None,
+    reason="Node.js is required for browser-script regression tests",
+)
 
 
 def test_ui_uses_local_assets_and_restrictive_csp(client: TestClient) -> None:
@@ -198,6 +206,7 @@ def test_shared_ui_script_confirms_project_delete_forms(client: TestClient) -> N
     assert "event.preventDefault()" in source
 
 
+@_requires_node
 def test_template_selector_syncs_every_workspace_form_target(client: TestClient) -> None:
     script = client.get("/static/js/docgen2-editor.js")
 
@@ -228,9 +237,10 @@ if (targets.some((target) => target.value !== "faq")) {{
 }}
 """
 
-    subprocess.run(["node", "-e", harness], check=True, capture_output=True, text=True)
+    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
 
 
+@_requires_node
 def test_editor_save_is_initialized_after_htmx_replaces_workspace(
     client: TestClient,
 ) -> None:
@@ -297,13 +307,14 @@ if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
 """
 
     subprocess.run(
-        ["node", "--input-type=module", "-e", harness],
+        [_NODE or "node", "--input-type=module", "-e", harness],
         check=True,
         capture_output=True,
         text=True,
     )
 
 
+@_requires_node
 def test_document_update_event_refreshes_revisions_for_followup_actions(
     client: TestClient,
 ) -> None:
@@ -328,7 +339,68 @@ if (revisions.some((input) => input.value !== "2")) {{
 }}
 """
 
-    subprocess.run(["node", "-e", harness], check=True, capture_output=True, text=True)
+    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
+
+
+@_requires_node
+def test_stale_editor_save_tells_user_to_refresh(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: '<p data-node-id="n1">Правка</p>', focus() {{}} }});
+const title = element({{ value: "Документ" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#docgen2Editor") return editor;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.fetch = async () => ({{
+  ok: false,
+  status: 409,
+  async json() {{ return {{ detail: "Документ уже изменён" }}; }},
+}});
+{script.text}
+await saveButton.listeners.get("click")();
+if (!saveStatus.textContent.includes("Документ уже изменён")) {{
+  throw new Error(`missing conflict detail: ${{saveStatus.textContent}}`);
+}}
+if (!saveStatus.textContent.includes("Обнови")) {{
+  throw new Error(`missing refresh action: ${{saveStatus.textContent}}`);
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(

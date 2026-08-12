@@ -167,7 +167,7 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
         )
 
     assert project_page.status_code == 200
-    assert "Синтетический перевод между счетами" in project_page.text
+    assert "Перевод между своими счетами" in project_page.text
     assert "synthetic-case.md" in project_page.text
     assert saved_document.status_code == 200
     assert "Перевод между своими счетами" in saved_document.text

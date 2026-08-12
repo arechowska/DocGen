@@ -68,6 +68,16 @@
   {% elif node.kind.value == "table" %}
     <div class="overflow-x-auto">
       <table class="w-full border-collapse text-sm">
+        {% set headers = node.data.get("headers", []) %}
+        {% if headers %}
+          <thead>
+            <tr>
+              {% for header in headers %}
+                <th class="border border-slate-200 px-2 py-1">{{ header }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+        {% endif %}
         <tbody>
           {% for row in node.data.get("rows", []) %}
             <tr>
