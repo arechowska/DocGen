@@ -176,6 +176,71 @@ def test_chat_accepts_relevant_operation_evidence(
     assert find_node(result.document, "limit").text == "Лимит 10 000 рублей"
 
 
+@pytest.mark.parametrize(
+    ("text", "evidence_block_id"),
+    [
+        ("Температура -5 °C", "s1:b4"),
+        ("Коэффициент 2,5", "s1:b5"),
+        ("Лимит 5%", "s1:b7"),
+        ("Порог 5 и резерв 5", "s1:b8"),
+    ],
+)
+def test_chat_rejects_inexact_or_insufficient_numeric_evidence(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    text: str,
+    evidence_block_id: str,
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Изменено числовое значение",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateText(node_id="limit", text=text),
+                evidence_block_ids=[evidence_block_id],
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ChatGroundingError,
+        match="Для этой правки нет подтверждения в источниках",
+    ):
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(message="Измени значение", expected_revision=2),
+        )
+
+
+def test_chat_accepts_equivalent_signed_decimal_range_and_currency_literals(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Добавлены точные значения",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateText(
+                    node_id="limit",
+                    text=(
+                        "Комиссия -2.5%. Диапазон -5-10 %. "
+                        "Сумма 2,5 ₽."
+                    ),
+                ),
+                evidence_block_ids=["s1:b6"],
+            )
+        ],
+    )
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="Добавь значения", expected_revision=2),
+    )
+
+    assert find_node(result.document, "limit").text == (
+        "Комиссия -2.5%. Диапазон -5-10 %. Сумма 2,5 ₽."
+    )
+
+
 def test_chat_allows_non_factual_structural_operation_without_evidence(
     chat_service: ChatService,
     fake_model: FakeModel,
@@ -238,5 +303,38 @@ def _source_blocks(project_id: str) -> list[NormalizedBlock]:
             kind=BlockKind.TEXT,
             text="Максимальный лимит составляет 10 000 рублей",
             confidence=1,
-        )
+        ),
+        NormalizedBlock(
+            id="s1:b4",
+            kind=BlockKind.TEXT,
+            text="Температура составляет 5 °C",
+            confidence=1,
+        ),
+        NormalizedBlock(
+            id="s1:b5",
+            kind=BlockKind.TEXT,
+            text="Коэффициент включает значения 2 и 5",
+            confidence=1,
+        ),
+        NormalizedBlock(
+            id="s1:b6",
+            kind=BlockKind.TEXT,
+            text=(
+                "Комиссия −2,5 %. Диапазон −5–10%. "
+                "Сумма 2.5₽."
+            ),
+            confidence=1,
+        ),
+        NormalizedBlock(
+            id="s1:b7",
+            kind=BlockKind.TEXT,
+            text="Лимит составляет 5",
+            confidence=1,
+        ),
+        NormalizedBlock(
+            id="s1:b8",
+            kind=BlockKind.TEXT,
+            text="Порог и резерв равны 5",
+            confidence=1,
+        ),
     ]

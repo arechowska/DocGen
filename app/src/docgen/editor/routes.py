@@ -70,12 +70,12 @@ def save_docgen2_workspace(
     payload: Docgen2SavePayload,
     session: SessionDependency,
 ) -> Response:
-    project = _project_or_404(session, project_id)
+    _project_or_404(session, project_id)
     title = payload.title.strip()
     if not title:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Название проекта обязательно",
+            detail="Название документа обязательно",
         )
     html = _sanitize_workspace_html(payload.html)
     repository = DocumentRepository(session)
@@ -111,7 +111,6 @@ def save_docgen2_workspace(
             {"detail": "Документ уже изменён"},
             status_code=status.HTTP_409_CONFLICT,
         )
-    project.name = title
     session.commit()
     return JSONResponse({"revision": revision, "title": title, "html": html})
 

@@ -142,7 +142,35 @@ def _validate_operation_evidence(
         raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
 
 
-_TOKEN_PATTERN = re.compile(r"[0-9]+|[^\W_]+", re.UNICODE)
+_WORD_PATTERN = re.compile(r"[^\W\d_]+", re.UNICODE)
+_NUMBER_BODY = r"[+\-−]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?"
+_CURRENCY_UNIT = r"(?:[$€₽£¥₸]|rub|rur|usd|eur|kzt|gbp|jpy|руб(?:лей|ля|\.)?|р\.)"
+_NUMERIC_LITERAL_PATTERN = re.compile(
+    rf"""
+    (?<!\d)
+    (?P<prefix>[$€₽£¥₸])?\s*
+    (?P<first>{_NUMBER_BODY})
+    (?:\s*(?P<range>\.\.|[-–—])\s*(?P<second>{_NUMBER_BODY}))?
+    \s*(?P<unit>%|{_CURRENCY_UNIT}(?!\w))?
+    (?!\d)
+    """,
+    re.IGNORECASE | re.UNICODE | re.VERBOSE,
+)
+_NUMERIC_TOKEN_PREFIX = "num:"
+_CURRENCY_ALIASES = {
+    "$": "usd",
+    "€": "eur",
+    "₽": "rub",
+    "£": "gbp",
+    "¥": "jpy",
+    "₸": "kzt",
+    "rur": "rub",
+    "руб": "rub",
+    "руб.": "rub",
+    "рубля": "rub",
+    "рублей": "rub",
+    "р.": "rub",
+}
 _STOP_WORDS = {
     "без",
     "был",
@@ -247,26 +275,65 @@ def _factual_data_text(value: Any, *, key: str | None = None) -> str:
 
 def _tokens(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text).casefold().replace("ё", "е")
-    return [
+    numeric: list[str] = []
+    word_text = list(normalized)
+    for match in _NUMERIC_LITERAL_PATTERN.finditer(normalized):
+        numeric.append(_normalized_numeric_literal(match))
+        word_text[match.start() : match.end()] = " " * (match.end() - match.start())
+    words = [
         token
-        for token in _TOKEN_PATTERN.findall(normalized)
-        if token.isdigit() or (len(token) >= 2 and token not in _STOP_WORDS)
+        for token in _WORD_PATTERN.findall("".join(word_text))
+        if len(token) >= 2 and token not in _STOP_WORDS
     ]
+    return [*numeric, *words]
+
+
+def _normalized_numeric_literal(match: re.Match[str]) -> str:
+    first = _normalized_number(match.group("first"))
+    second = match.group("second")
+    value = first if second is None else f"{first}..{_normalized_number(second)}"
+    units = [
+        _normalized_numeric_unit(unit)
+        for unit in (match.group("prefix"), match.group("unit"))
+        if unit
+    ]
+    unique_units = list(dict.fromkeys(units))
+    suffix = f":{':'.join(unique_units)}" if unique_units else ""
+    return f"{_NUMERIC_TOKEN_PREFIX}{value}{suffix}"
+
+
+def _normalized_number(value: str) -> str:
+    return (
+        value.replace("−", "-")
+        .replace(" ", "")
+        .replace("\u00a0", "")
+        .replace("\u202f", "")
+        .replace(",", ".")
+    )
+
+
+def _normalized_numeric_unit(value: str) -> str:
+    normalized = value.casefold()
+    return _CURRENCY_ALIASES.get(normalized, normalized)
 
 
 def _tokens_supported(changed: list[str], evidence: list[str]) -> bool:
-    numeric = [token for token in changed if token.isdigit()]
-    evidence_numbers = {token for token in evidence if token.isdigit()}
-    if any(token not in evidence_numbers for token in numeric):
+    # MVP policy: every complete numeric fact must occur in the cited operation-level
+    # evidence with the same multiplicity. Remaining words use conservative lexical
+    # support so grounded Russian inflections/paraphrases are not forced to be exact.
+    numeric = Counter(token for token in changed if _is_numeric_token(token))
+    evidence_numbers = Counter(token for token in evidence if _is_numeric_token(token))
+    if numeric - evidence_numbers:
         return False
 
-    words = [token for token in changed if not token.isdigit()]
+    words = [token for token in changed if not _is_numeric_token(token)]
+    evidence_words = [token for token in evidence if not _is_numeric_token(token)]
     if not words:
         return True
     matched = sum(
         1
         for token in words
-        if any(_tokens_match(token, evidence_token) for evidence_token in evidence)
+        if any(_tokens_match(token, evidence_token) for evidence_token in evidence_words)
     )
     required = 1 if len(words) == 1 else max(2, math.ceil(len(words) * 0.6))
     return matched >= required
@@ -275,7 +342,7 @@ def _tokens_supported(changed: list[str], evidence: list[str]) -> bool:
 def _tokens_match(left: str, right: str) -> bool:
     if left == right:
         return True
-    if left.isdigit() or right.isdigit():
+    if _is_numeric_token(left) or _is_numeric_token(right):
         return False
     common = 0
     for left_character, right_character in zip(left, right, strict=False):
@@ -283,6 +350,10 @@ def _tokens_match(left: str, right: str) -> bool:
             break
         common += 1
     return common >= 5 and common / max(len(left), len(right)) >= 0.6
+
+
+def _is_numeric_token(token: str) -> bool:
+    return token.startswith(_NUMERIC_TOKEN_PREFIX)
 
 
 def _validate_operation(

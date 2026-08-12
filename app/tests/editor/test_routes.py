@@ -506,6 +506,66 @@ def test_no_op_workspace_save_preserves_generated_document_title(
     assert _stored_document(client, project_with_document.id).title == "Рабочий документ"
 
 
+def test_workspace_save_keeps_project_identity_separate_from_document_title(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Project identity")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="Generated title",
+            template_id="use-case",
+            nodes=[DocumentNode(id="n1", kind=NodeKind.PARAGRAPH, text="Body")],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    title = page.find(id="docgen2EditorTitle")
+    canvas = page.find(id="docgen2DocumentCanvas")
+    assert title is not None
+    assert title.get("value") == "Generated title"
+    assert canvas is not None
+
+    no_op = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "Generated title",
+            "html": canvas.decode_contents(),
+            "revision": 1,
+        },
+    )
+
+    assert no_op.status_code == 200
+    with _session(client) as session:
+        project = session.get(Project, project_id)
+        stored = DocumentRepository(session).get_document(project_id)
+        assert project is not None
+        assert stored is not None
+        assert project.name == "Project identity"
+        assert stored.title == "Generated title"
+
+    edited = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "Edited document title",
+            "html": no_op.json()["html"],
+            "revision": no_op.json()["revision"],
+        },
+    )
+
+    assert edited.status_code == 200
+    with _session(client) as session:
+        project = session.get(Project, project_id)
+        stored = DocumentRepository(session).get_document(project_id)
+        assert project is not None
+        assert stored is not None
+        assert project.name == "Project identity"
+        assert stored.title == "Edited document title"
+
+
 def _save_workspace(client: TestClient, project_id: str, revision: int):
     return client.post(
         f"/projects/{project_id}/editor/save",
