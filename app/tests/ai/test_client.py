@@ -67,12 +67,15 @@ def test_text_model_parses_structured_response(mock_transport: httpx.MockTranspo
     assert result.template_id == "use-case"
 
 
-def test_qwen_text_model_disables_thinking_for_structured_output() -> None:
+def test_qwen_text_model_uses_prompt_json_mode_without_schema_constraint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
         assert payload["max_tokens"] == 8192
-        assert payload["messages"][0] == {"role": "system", "content": "system\n/no_think"}
+        assert "response_format" not in payload
+        assert payload["messages"] == [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "user"},
+        ]
         return httpx.Response(
             200,
             json={
