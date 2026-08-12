@@ -113,7 +113,7 @@ def save_docgen2_workspace(
         )
     project.name = title
     session.commit()
-    return JSONResponse({"revision": revision, "title": title})
+    return JSONResponse({"revision": revision, "title": title, "html": html})
 
 
 @router.patch("/{project_id}/editor/nodes/{node_id}/text")

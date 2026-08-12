@@ -234,6 +234,10 @@ def test_project_detail_embeds_editor_when_document_exists(client: TestClient) -
     soup = BeautifulSoup(response.text, "html.parser")
     editor_panel = soup.find(id="docgen2Editor")
     assert editor_panel is not None
+    assert editor_panel.get("hx-get") == project_url
+    assert editor_panel.get("hx-trigger") == "docgen:document-updated from:body"
+    assert editor_panel.get("hx-select") == "#docgen2Editor"
+    assert editor_panel.get("hx-swap") == "outerHTML"
     title_input = editor_panel.find("input", id="docgen2EditorTitle")
     assert title_input is not None
     assert title_input.get("value") == "Редактор"

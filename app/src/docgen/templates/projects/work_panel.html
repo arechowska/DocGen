@@ -35,6 +35,11 @@
   class="panel editor-card"
   aria-labelledby="docgen2EditorTitle"
   data-save-url="/projects/{{ project_id }}/editor/save"
+  hx-get="/projects/{{ project_id }}"
+  hx-trigger="docgen:document-updated from:body"
+  hx-target="this"
+  hx-select="#docgen2Editor"
+  hx-swap="outerHTML"
   {% if revision is not none %}data-revision="{{ revision }}"{% endif %}
   {% if editor_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
 >

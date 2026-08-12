@@ -251,6 +251,36 @@ def test_workspace_save_updates_order_lists_tables_and_new_manual_nodes(
     assert saved.nodes[2].provenance == []
 
 
+def test_repeated_workspace_save_preserves_server_assigned_manual_node_id(
+    client: TestClient, project_with_document: Project
+) -> None:
+    first = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Ручная правка",
+            "html": "<p>Новый блок</p>",
+            "revision": 1,
+        },
+    )
+
+    assert first.status_code == 200
+    normalized_html = first.json()["html"]
+    first_id = _stored_document(client, project_with_document.id).nodes[0].id
+    assert f'data-node-id="{first_id}"' in normalized_html
+
+    second = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Ручная правка",
+            "html": normalized_html,
+            "revision": first.json()["revision"],
+        },
+    )
+
+    assert second.status_code == 200
+    assert _stored_document(client, project_with_document.id).nodes[0].id == first_id
+
+
 @pytest.mark.parametrize(
     "html",
     [

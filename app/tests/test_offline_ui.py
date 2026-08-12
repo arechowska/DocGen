@@ -224,7 +224,12 @@ globalThis.document = {{
 globalThis.window = {{ getSelection() {{ return null; }} }};
 globalThis.fetch = async (url, options) => {{
   posted = {{ url, payload: JSON.parse(options.body) }};
-  return {{ ok: true, async json() {{ return {{ revision: 2 }}; }} }};
+  return {{
+    ok: true,
+    async json() {{
+      return {{ revision: 2, html: '<p data-node-id="manual-1">Правка</p>' }};
+    }},
+  }};
 }};
 {script.text}
 currentEditor = editor;
@@ -234,6 +239,9 @@ await new Promise((resolve) => setTimeout(resolve, 0));
 if (posted?.url !== "/projects/p1/editor/save") throw new Error("save was not posted");
 if (posted.payload.revision !== 1) throw new Error("revision was not posted");
 if (editor.dataset.revision !== "2") throw new Error("revision was not updated");
+if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
+  throw new Error("normalized html was not applied");
+}}
 """
 
     subprocess.run(
@@ -242,6 +250,33 @@ if (editor.dataset.revision !== "2") throw new Error("revision was not updated")
         capture_output=True,
         text=True,
     )
+
+
+def test_document_update_event_refreshes_revisions_for_followup_actions(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const listeners = new Map();
+const revisions = [{{ value: "1" }}, {{ value: "1" }}];
+globalThis.document = {{
+  querySelector() {{ return null; }},
+  querySelectorAll(selector) {{
+    if (selector === 'input[name="revision"]') return revisions;
+    return [];
+  }},
+  addEventListener(type, listener) {{ listeners.set(type, listener); }},
+}};
+{script.text}
+listeners.get("docgen:document-updated")({{ detail: {{ revision: 2 }} }});
+if (revisions.some((input) => input.value !== "2")) {{
+  throw new Error(`stale follow-up revisions: ${{revisions.map((input) => input.value)}}`);
+}}
+"""
+
+    subprocess.run(["node", "-e", harness], check=True, capture_output=True, text=True)
 
 
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(

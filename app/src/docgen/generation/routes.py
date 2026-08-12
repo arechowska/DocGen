@@ -301,6 +301,7 @@ def _setup_error(
                 "setup_fragment": False,
                 "document": document,
                 "revision": revision,
+                "workspace_html": documents.get_workspace_html(project.id),
                 "has_document": document is not None,
                 "has_report": documents.get_report(project.id) is not None,
                 "source_error": None,

@@ -93,6 +93,7 @@
       if (!response.ok) throw new Error("save failed");
       const result = await response.json();
       editor.dataset.revision = String(result.revision);
+      canvas.innerHTML = result.html;
       document.querySelectorAll('input[name="revision"]').forEach((input) => {
         input.value = String(result.revision);
       });
@@ -295,6 +296,13 @@
   document.addEventListener("htmx:afterSwap", () => {
     synchronizeTemplate();
     initializeEditor();
+  });
+  document.addEventListener("docgen:document-updated", (event) => {
+    const revision = event.detail?.revision;
+    if (!Number.isInteger(revision)) return;
+    document.querySelectorAll('input[name="revision"]').forEach((input) => {
+      input.value = String(revision);
+    });
   });
   initializeEditor();
 })();

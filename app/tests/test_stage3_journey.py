@@ -81,12 +81,35 @@ def test_edit_chat_save_restart_and_recheck() -> None:
         finally:
             session.close()
 
+        second_chat = client.post(
+            chat_url,
+            data={
+                "message": "Ещё раз уточни результат",
+                "revision": "3",
+            },
+        )
+        assert second_chat.status_code == 200
+
+        second_visual_save = client.post(
+            f"/projects/{project_id}/editor/save",
+            json={
+                "title": "Документ Stage 3",
+                "html": (
+                    '<p data-node-id="manual">Ручная правка после чата</p>'
+                    '<p data-node-id="result">Уточнённый результат</p>'
+                ),
+                "revision": 4,
+            },
+        )
+        assert second_visual_save.status_code == 200
+        assert second_visual_save.json()["revision"] == 5
+
     restarted_app = create_app(settings)
     restarted_app.state.chat_service_factory = lambda request, session: JourneyChat(session)
     with TestClient(restarted_app) as restarted:
         editor = restarted.get(f"/projects/{project_id}/editor")
         assert editor.status_code == 200
-        assert "Ручная правка" in editor.text
+        assert "Ручная правка после чата" in editor.text
         assert "Уточнённый результат" in editor.text
 
         project_page = restarted.get(f"/projects/{project_id}")
@@ -94,7 +117,7 @@ def test_edit_chat_save_restart_and_recheck() -> None:
         assert 'id="project-workspace"' in project_page.text
         assert 'id="docgen2Editor"' in project_page.text
         assert 'id="docgen2DocumentCanvas"' in project_page.text
-        assert "Ручная правка" in project_page.text
+        assert "Ручная правка после чата" in project_page.text
         assert "Уточнённый результат" in project_page.text
 
         response = restarted.post(
