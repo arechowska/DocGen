@@ -481,6 +481,109 @@ def test_project_detail_renders_semantic_node_identifiers(
     assert soup.find(id="docgen2Editor").get("data-revision") == "1"
 
 
+def test_project_detail_renders_semantic_node_formatting(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        nodes = [
+            node.model_copy(
+                update={
+                    "data": {
+                        "style": {
+                            "color": "blue",
+                            "font-weight": "700",
+                            "margin-left": "24px",
+                        }
+                    }
+                }
+            )
+            if node.id == "p1"
+            else node
+            for node in document.nodes
+        ]
+        DocumentRepository(session).save_document(
+            project_with_document.id,
+            document.model_copy(update={"nodes": nodes}),
+        )
+        session.commit()
+
+    response = client.get(f"/projects/{project_with_document.id}")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    paragraph = soup.find("p", attrs={"data-node-id": "p1"})
+    assert paragraph is not None
+    assert paragraph.get("style") == "color:blue;font-weight:700;margin-left:24px"
+
+
+def test_standalone_editor_renders_semantic_node_formatting(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        nodes = [
+            node.model_copy(
+                update={
+                    "data": {
+                        "style": {
+                            "color": "blue",
+                            "font-weight": "700",
+                        }
+                    }
+                }
+            )
+            if node.id == "p1"
+            else node
+            for node in document.nodes
+        ]
+        DocumentRepository(session).save_document(
+            project_with_document.id,
+            document.model_copy(update={"nodes": nodes}),
+        )
+        session.commit()
+
+    response = client.get(f"/projects/{project_with_document.id}/editor")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    textarea = soup.select_one('#node-p1 textarea[name="text"]')
+    assert textarea is not None
+    assert textarea.get("style") == "color:blue;font-weight:700"
+
+
+def test_workspace_save_preserves_allowed_inline_formatting(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Styled document",
+            "html": (
+                '<p data-node-id="p1" style="color:blue;font-weight:700;'
+                'margin-left:24px;position:absolute">Styled paragraph</p>'
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["html"] == (
+        '<p data-kind="paragraph" data-node-id="p1" '
+        'style="color:blue;font-weight:700;margin-left:24px">Styled paragraph</p>'
+    )
+    saved = _stored_document(client, project_with_document.id).nodes[0]
+    assert saved.data == {
+        "style": {
+            "color": "blue",
+            "font-weight": "700",
+            "margin-left": "24px",
+        }
+    }
+
+
 def test_no_op_workspace_save_preserves_generated_document_title(
     client: TestClient, project_with_document: Project
 ) -> None:

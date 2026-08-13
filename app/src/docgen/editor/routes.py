@@ -21,6 +21,7 @@ from docgen.documents.operations import (
 )
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.style import normalized_style, normalized_style_attribute
 from docgen.editor.validation import ImagePayload, ListPayload, TablePayload
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
@@ -554,12 +555,20 @@ def _sanitize_workspace_html(html: str) -> str:
         allowed_attributes = (
             ALLOWED_WORKSPACE_ATTRIBUTES.get(tag.name, set())
             | WORKSPACE_NODE_ATTRIBUTES
+            | {"style"}
         )
         for attribute in list(tag.attrs):
             if attribute not in allowed_attributes:
                 del tag.attrs[attribute]
                 continue
             value = tag.attrs.get(attribute)
+            if attribute == "style":
+                sanitized_style = normalized_style_attribute(str(value))
+                if sanitized_style:
+                    tag.attrs[attribute] = sanitized_style
+                else:
+                    del tag.attrs[attribute]
+                continue
             if attribute in {"href", "src"} and not _is_safe_workspace_url(value):
                 del tag.attrs[attribute]
     return "".join(str(item) for item in soup.contents).strip()
@@ -646,8 +655,10 @@ def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode
     text: str | None = None
     if kind in {NodeKind.HEADING, NodeKind.PARAGRAPH}:
         text = element.get_text(" ", strip=True)
+        _update_workspace_style_data(data, element)
     elif kind is NodeKind.LIST:
         data["items"] = [item.get_text(" ", strip=True) for item in element.find_all("li")]
+        _update_workspace_style_data(data, element)
     elif kind is NodeKind.TABLE:
         headers, rows = _workspace_table_data(element)
         if headers:
@@ -655,6 +666,7 @@ def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode
         else:
             data.pop("headers", None)
         data["rows"] = rows
+        _update_workspace_style_data(data, element)
     elif kind is NodeKind.IMAGE:
         for attribute in ("alt", "src", "title"):
             if value := element.get(attribute):
@@ -702,6 +714,24 @@ def _workspace_table_data(element: Tag) -> tuple[list[str], list[list[str]]]:
         if row not in header_rows
     ]
     return headers, rows
+
+
+def _update_workspace_style_data(data: dict, element: Tag) -> None:
+    style = normalized_style(
+        {"style": dict(_style_declarations(str(element.get("style", ""))))}
+    )
+    if style:
+        data["style"] = style
+    else:
+        data.pop("style", None)
+
+
+def _style_declarations(value: str):
+    for declaration in value.split(";"):
+        if ":" not in declaration:
+            continue
+        property_name, property_value = declaration.split(":", 1)
+        yield property_name.strip(), property_value.strip()
 
 
 def _workspace_node_kind(element: Tag) -> NodeKind:

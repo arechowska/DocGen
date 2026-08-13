@@ -96,6 +96,51 @@ def test_chat_applies_grounded_plan(chat_service: ChatService, fake_model: FakeM
     assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
 
 
+def test_chat_noop_plan_preserves_document_revision(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="как дела", expected_revision=2),
+    )
+
+    assert result.summary == "Нет правок"
+    assert result.revision == 2
+    assert find_node(result.document, "actor").text == "Оператор"
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None
+    _, persisted_revision = stored
+    assert persisted_revision == 2
+
+
+def test_chat_applies_formatting_command_when_model_returns_noop(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(
+            message="первый абзац сделай жирный шрифт синий цвет",
+            expected_revision=2,
+        ),
+    )
+
+    assert result.summary == "Применено форматирование"
+    assert result.revision == 3
+    assert find_node(result.document, "actor").data == {
+        "style": {
+            "color": "blue",
+            "font-weight": "700",
+        }
+    }
+
+
 def test_chat_rejects_unknown_evidence(
     chat_service: ChatService, fake_model: FakeModel
 ) -> None:
@@ -287,6 +332,99 @@ def test_chat_allows_style_only_data_operation_without_evidence(
         "alignment": "center",
         "width": 80,
     }
+
+
+def test_chat_allows_text_formatting_data_operation_without_evidence(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Formatted first paragraph",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateData(
+                    node_id="actor",
+                    data={
+                        "style": {
+                            "color": "blue",
+                            "font-weight": "700",
+                            "margin-left": "24px",
+                        }
+                    },
+                ),
+            )
+        ],
+    )
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="make first paragraph bold blue and indented", expected_revision=2),
+    )
+
+    assert find_node(result.document, "actor").data == {
+        "style": {
+            "color": "blue",
+            "font-weight": "700",
+            "margin-left": "24px",
+        }
+    }
+
+
+def test_chat_merges_partial_formatting_data_with_existing_node_data(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    repository = DocumentRepository(session)
+    document = repository.get_document("p1")
+    assert document is not None
+    nodes = [
+        node.model_copy(update={"data": {"items": ["Existing item"]}})
+        if node.id == "actor"
+        else node
+        for node in document.nodes
+    ]
+    repository.save_document("p1", document.model_copy(update={"nodes": nodes}))
+    session.commit()
+    fake_model.result = ChatEditPlan.model_validate(
+        {
+            "summary": "Formatted first paragraph",
+            "operations": [
+                {
+                    "operation": {
+                        "kind": "update_data",
+                        "node_id": "actor",
+                        "data.style": {
+                            "color": "blue",
+                            "font-weight": "700",
+                        },
+                    },
+                    "evidence_block_ids": [],
+                }
+            ],
+        }
+    )
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="make first paragraph bold blue", expected_revision=3),
+    )
+
+    assert find_node(result.document, "actor").data == {
+        "items": ["Existing item"],
+        "style": {
+            "color": "blue",
+            "font-weight": "700",
+        },
+    }
+
+
+def test_chat_prompt_documents_formatting_operations() -> None:
+    from docgen.chat.service import CHAT_SYSTEM_PROMPT
+
+    assert "update_data" in CHAT_SYSTEM_PROMPT
+    assert "font-weight" in CHAT_SYSTEM_PROMPT
+    assert "margin-left" in CHAT_SYSTEM_PROMPT
 
 
 def _source_blocks(project_id: str) -> list[NormalizedBlock]:

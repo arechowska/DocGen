@@ -156,13 +156,13 @@
         {% else %}
           {% for node in document.nodes %}
             {% if node.kind.value == "heading" %}
-              <h2 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{{ node.text }}</h2>
+              <h2 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ node.text }}</h2>
             {% elif node.kind.value == "paragraph" %}
-              <p data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{{ node.text }}</p>
+              <p data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ node.text }}</p>
             {% elif node.kind.value == "list" %}
-              <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>{% for item in node.data.get("items", []) %}<li>{{ item }}</li>{% endfor %}</ul>
+              <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% for item in node.data.get("items", []) %}<li>{{ item }}</li>{% endfor %}</ul>
             {% elif node.kind.value == "table" %}
-              <table data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}>
+              <table data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>
                 {% set headers = node.data.get("headers", []) %}
                 {% if headers %}
                   <thead><tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>

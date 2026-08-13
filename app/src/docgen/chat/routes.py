@@ -15,6 +15,7 @@ from docgen.documents.repository import DocumentRepository
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractorRegistry
 from docgen.extraction.schemas import NormalizedBlock
+from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
 from docgen.sources.repository import SourceRepository
 from docgen.sources.storage import LocalStorage
@@ -48,7 +49,7 @@ def post_chat(
             context={"message": str(error)},
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
-    except (ModelConfigurationError, ModelError):
+    except ModelConfigurationError:
         session.rollback()
         return templates.TemplateResponse(
             request=request,
@@ -56,12 +57,28 @@ def post_chat(
             context={"message": "Локальная модель недоступна"},
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    except ModelError as error:
+        session.rollback()
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": str(error)},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     session.commit()
     response = templates.TemplateResponse(
         request=request,
         name="chat/message.html",
-        context={"summary": result.summary, "revision": result.revision},
+        context={
+            "summary": result.summary,
+            "revision": result.revision,
+            "project": ProjectRepository(session).get(project_id),
+            "project_id": project_id,
+            "document": result.document,
+            "workspace_html": DocumentRepository(session).get_workspace_html(project_id),
+            "editor_oob": True,
+        },
     )
     response.headers["HX-Trigger"] = json.dumps(
         {"docgen:document-updated": {"revision": result.revision}},

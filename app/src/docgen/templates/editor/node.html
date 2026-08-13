@@ -46,6 +46,7 @@
   {% if node.kind.value in ["heading", "paragraph"] %}
     <textarea
       class="min-h-16 w-full rounded-2xl border border-[#d6e5f8] px-3 py-2 text-sm text-[#202428] focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
+      {{ node_style_attribute(node) }}
       name="text"
       hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/text"
       hx-trigger="change delay:700ms"
@@ -57,6 +58,7 @@
   {% elif node.kind.value == "list" %}
     <textarea
       class="min-h-20 w-full rounded-2xl border border-[#d6e5f8] px-3 py-2 text-sm text-[#202428] focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
+      {{ node_style_attribute(node) }}
       name="items_text"
       hx-patch="/projects/{{ project_id }}/editor/nodes/{{ node.id }}/list"
       hx-trigger="change delay:700ms"

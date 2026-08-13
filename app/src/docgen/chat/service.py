@@ -21,7 +21,7 @@ from docgen.documents.operations import (
     find_node,
 )
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, WorkingDocument
+from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import NormalizedBlock
 
 CHAT_SYSTEM_PROMPT = """
@@ -30,7 +30,12 @@ CHAT_SYSTEM_PROMPT = """
 Используйте операции только против существующих node_id, кроме явной вставки нового блока.
 Каждую операцию верните в объекте с полями operation и evidence_block_ids.
 Каждое фактическое добавление должно иметь в своём объекте evidence_block_ids из источников проекта.
+Нефактические правки форматирования, шрифта, цвета, выравнивания и отступов не требуют evidence_block_ids.
+Для таких команд используйте operation.kind="update_data" по существующему node_id и сохраняйте прежние data-поля узла.
+Форматирование задавайте внутри поля operation.data.style только безопасными CSS-ключами: color, background-color, font-family, font-size, font-style, font-weight, line-height, margin-left, margin-right, margin-top, margin-bottom, text-align, text-decoration, text-indent.
+Пример operation: {"kind":"update_data","node_id":"...","data":{"style":{"color":"blue","font-weight":"700","margin-left":"24px"}}}. Не используйте отдельное поле "data.style".
 Если подтверждения в источниках нет, верните пустой список operations.
+Если правок нет, верните JSON-объект {"summary":"Нет правок","operations":[]}, а не отдельный список.
 Не удаляйте содержимое сверх прямого запроса пользователя.
 """.strip()
 
@@ -71,13 +76,23 @@ class ChatService:
             schema=ChatEditPlan,
         )
         _validate_plan(document, source_blocks, plan)
+        fallback_operations: list[DocumentOperation] = []
+        if not plan.operations:
+            fallback_operations = _fallback_formatting_operations(document, message)
+        if not plan.operations and not fallback_operations:
+            return ChatEditResult(
+                summary=plan.summary,
+                document=document,
+                revision=current_revision,
+            )
+        operations = fallback_operations or _operations_for_application(document, plan)
         result = DocumentEditService(self._documents).apply(
             project_id,
             request.expected_revision,
-            [item.operation for item in plan.operations],
+            operations,
         )
         return ChatEditResult(
-            summary=plan.summary,
+            summary="Применено форматирование" if fallback_operations else plan.summary,
             document=result.document,
             revision=result.revision,
         )
@@ -118,6 +133,90 @@ def _validate_plan(
     for item in plan.operations:
         _validate_operation(document, item.operation, inserted_ids)
         _validate_operation_evidence(document, evidence_by_id, item)
+
+
+def _operations_for_application(
+    document: WorkingDocument,
+    plan: ChatEditPlan,
+) -> list[DocumentOperation]:
+    operations: list[DocumentOperation] = []
+    for item in plan.operations:
+        operation = item.operation
+        if isinstance(operation, UpdateData):
+            node = find_node(document, operation.node_id)
+            if node is not None:
+                operation = operation.model_copy(
+                    update={"data": _merged_data(node.data, operation.data)}
+                )
+        operations.append(operation)
+    return operations
+
+
+def _fallback_formatting_operations(
+    document: WorkingDocument,
+    message: str,
+) -> list[DocumentOperation]:
+    style = _style_from_message(message)
+    if not style:
+        return []
+    node = _first_visible_node(document)
+    if node is None:
+        return []
+    return [UpdateData(node_id=node.id, data=_merged_data(node.data, {"style": style}))]
+
+
+def _style_from_message(message: str) -> dict[str, str]:
+    normalized = message.casefold().replace("ё", "е")
+    style: dict[str, str] = {}
+    if any(token in normalized for token in ("жирн", "полужирн", "bold")):
+        style["font-weight"] = "700"
+    if any(token in normalized for token in ("синий", "синим", "blue")):
+        style["color"] = "blue"
+    if any(token in normalized for token in ("красн", "red")):
+        style["color"] = "red"
+    if any(token in normalized for token in ("зелен", "green")):
+        style["color"] = "green"
+    if any(token in normalized for token in ("курсив", "italic")):
+        style["font-style"] = "italic"
+    if any(token in normalized for token in ("подчерк", "underline")):
+        style["text-decoration"] = "underline"
+    if "отступ" in normalized:
+        style["margin-left"] = "24px"
+    if not style:
+        return {}
+    if not any(token in normalized for token in ("абзац", "узел", "блок", "текст", "шрифт", "цвет", "формат")):
+        return {}
+    return style
+
+
+def _first_visible_node(document: WorkingDocument) -> DocumentNode | None:
+    preferred = (NodeKind.PARAGRAPH, NodeKind.LIST, NodeKind.HEADING, NodeKind.TABLE)
+    for kind in preferred:
+        node = _first_node_of_kind(document.nodes, kind)
+        if node is not None:
+            return node
+    return None
+
+
+def _first_node_of_kind(nodes: list[DocumentNode], kind: NodeKind) -> DocumentNode | None:
+    for node in nodes:
+        if node.kind is kind:
+            return node
+        child = _first_node_of_kind(node.children, kind)
+        if child is not None:
+            return child
+    return None
+
+
+def _merged_data(existing: dict, update: dict) -> dict:
+    merged = dict(existing)
+    for key, value in update.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _merged_data(current, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _validate_operation_evidence(
