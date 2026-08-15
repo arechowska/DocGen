@@ -921,6 +921,11 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     assert saved_document.template_id == "use-case"
     assert saved_document.nodes[0].kind is NodeKind.HEADING
     assert saved_document.nodes[0].text == "Case"
+
+    detail_response = client.get(f"/projects/{project_with_source.id}")
+    assert detail_response.status_code == 200
+    assert 'id="checkTargetSelect"' not in detail_response.text
+
     response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
     assert response.status_code == 200
     assert "Результат проверки" in response.text

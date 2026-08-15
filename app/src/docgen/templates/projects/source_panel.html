@@ -90,13 +90,12 @@
     {% endfor %}
   </ul>
 
-  {% if check_targets|length + (1 if has_document else 0) > 1 %}
+  {% if not has_document and check_targets|length > 1 %}
     <label class="check-target-control" for="checkTargetSelect">
       <span>Документ для проверки</span>
-      <select id="checkTargetSelect" name="target_source_id" form="checkForm" {% if not has_document %}required{% endif %}>
-        {% if has_document %}<option value="">Текущий документ</option>{% endif %}
+      <select id="checkTargetSelect" name="target_source_id" form="checkForm" required>
         {% for source in check_targets %}
-          <option value="{{ source.id }}">{{ source.display_name }}</option>
+          <option value="{{ source.id }}">Файл: {{ source.display_name }} (исходник как есть)</option>
         {% endfor %}
       </select>
     </label>
@@ -109,6 +108,7 @@
     hx-post="/projects/{{ project.id }}/jobs/assemble"
     hx-target="#generation-status"
     hx-swap="outerHTML"
+    {% if has_document %}hx-confirm="Пересобрать документ? Текущее содержимое и правки через чат будут заменены новым результатом."{% endif %}
   >
     <input type="hidden" name="template_id" value="{{ selected_template.id }}" data-template-target>
   </form>
