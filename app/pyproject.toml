@@ -35,6 +35,13 @@ build-backend = "setuptools.build_meta"
   "static/vendor/*",
 ]
 "docgen.templates_catalog" = ["semantic/*.yaml"]
+"docgen.formatting" = [
+  "templates/*.yaml",
+  "templates/*.css",
+  "templates/*.html.j2",
+  "templates/*.docx",
+  "templates/*.dotx",
+]
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

@@ -1,0 +1,7 @@
+id: colvir
+name: "Фирменный стиль Colvir"
+format: docx
+renderer: docx
+assets:
+  - colvir.docx
+options: {}
