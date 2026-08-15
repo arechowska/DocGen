@@ -1,0 +1,6 @@
+id: docgen-light-markdown
+name: Облегченный Markdown
+format: markdown
+renderer: markdown
+assets: []
+options: {}
