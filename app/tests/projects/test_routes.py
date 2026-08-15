@@ -38,10 +38,7 @@ def test_projects_page_lists_projects_and_create_button(
     topbar = soup.find(class_="topbar")
     assert topbar is not None
     assert topbar.find(class_="brand-mark").get_text(strip=True) == "F"
-    hero = topbar.find(class_="projects-hero")
-    assert hero is not None
-    assert hero.find("h1").get_text(strip=True) == "Корпоративный кабинет подготовки документов"
-    assert "Проекты" not in hero.get_text(" ")
+    assert topbar.find(class_="projects-hero") is None
     projects_panel = soup.find(class_="projects-panel")
     assert projects_panel is not None
     assert "создайте новый документ" not in projects_panel.get_text(" ").lower()
@@ -147,9 +144,10 @@ def test_workspace_source_update_swaps_review_button_state(client: TestClient) -
     assert review["hx-swap-oob"] == "outerHTML"
     assert review.has_attr("disabled") is False
 
-    target = fragment.find("select", id="checkTargetSelect").find("option")
+    delete_form = fragment.find("form", attrs={"hx-delete": True})
+    source_id = delete_form["hx-delete"].rsplit("/", 1)[-1]
     response = client.delete(
-        f"{project_url}/sources/{target['value']}", headers={"HX-Request": "true"}
+        f"{project_url}/sources/{source_id}", headers={"HX-Request": "true"}
     )
 
     assert response.status_code == 200

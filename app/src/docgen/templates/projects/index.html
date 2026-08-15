@@ -9,10 +9,6 @@
           <strong>Formatta</strong>
         </span>
       </div>
-
-      <div class="projects-hero">
-        <h1>Корпоративный кабинет подготовки документов</h1>
-      </div>
     </header>
 
     <main class="projects-main" aria-labelledby="projectsTitle">
@@ -42,8 +38,11 @@
                 <a href="/projects/{{ project.id }}" class="project-card-link">
                   <span class="project-card-icon" aria-hidden="true">F</span>
                   <span>
-                    <small>Проект</small>
                     <strong>{{ project.name }}</strong>
+                    <small>
+                      Изменено {{ project.updated_at.strftime('%d.%m.%Y %H:%M') }}
+                      {%- if project.sources %} · Источников: {{ project.sources|length }}{% endif -%}
+                    </small>
                   </span>
                 </a>
                 <form

@@ -344,6 +344,12 @@ def test_check_rejects_raster_source_as_target(
 def test_setup_lists_supported_file_targets_but_excludes_raster_and_confluence(
     client: TestClient, project_with_source: Project
 ) -> None:
+    text_response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("notes.txt", b"Notes", "text/plain")},
+        headers={"HX-Request": "true"},
+    )
+    assert text_response.status_code == 200
     image_response = client.post(
         f"/projects/{project_with_source.id}/sources/files",
         files={"file": ("diagram.png", b"not-used", "image/png")},

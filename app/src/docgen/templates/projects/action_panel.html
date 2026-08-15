@@ -41,4 +41,34 @@
     </button>
   </form>
   <p class="chat-help">Редактор и файл обновляются после каждой правки.</p>
+
+  <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle">
+    <div class="result-heading">
+      <h2 id="resultTitle">Результат</h2>
+      <span id="resultStatus" class="ready-label {% if has_document %}done{% endif %}">{% if has_document %}Готово{% else %}Не собран{% endif %}</span>
+    </div>
+    {% if has_document %}
+      <div id="resultReady" class="result-ready">
+        <div class="result-file">
+          <span id="resultFileIcon" class="result-file-icon">D</span>
+          <div>
+            <strong id="resultFilename">{{ document.title }}</strong>
+            <span id="resultMeta">DOCX · текущий документ</span>
+          </div>
+        </div>
+        <div class="result-actions">
+          <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
+            <span>Открыть</span>
+            <span class="external-icon" aria-hidden="true"></span>
+          </a>
+          <a id="downloadButton" class="button primary" href="/projects/{{ project.id }}/document">
+            <span class="download-icon" aria-hidden="true"></span>
+            <span>Скачать</span>
+          </a>
+        </div>
+      </div>
+    {% else %}
+      <div id="resultEmpty" class="result-empty">Готовый файл появится после сборки.</div>
+    {% endif %}
+  </section>
 </section>

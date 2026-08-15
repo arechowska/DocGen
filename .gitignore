@@ -15,6 +15,7 @@ app/.tmp*/
 
 # Local DocGen runtime data
 app/var/
+/var/
 
 # Secrets
 .env

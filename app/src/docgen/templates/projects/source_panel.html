@@ -90,7 +90,7 @@
     {% endfor %}
   </ul>
 
-  {% if check_targets %}
+  {% if check_targets|length + (1 if has_document else 0) > 1 %}
     <label class="check-target-control" for="checkTargetSelect">
       <span>Документ для проверки</span>
       <select id="checkTargetSelect" name="target_source_id" form="checkForm" {% if not has_document %}required{% endif %}>
@@ -101,41 +101,6 @@
       </select>
     </label>
   {% endif %}
-
-  <div class="source-note">
-    <span class="info-icon" aria-hidden="true">i</span>
-    <span>Источники используются для генерации. Правки вносятся через чат.</span>
-  </div>
-
-  <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle">
-    <div class="result-heading">
-      <h2 id="resultTitle">Результат</h2>
-      <span id="resultStatus" class="ready-label {% if has_document %}done{% endif %}">{% if has_document %}Готово{% else %}Не собран{% endif %}</span>
-    </div>
-    {% if has_document %}
-      <div id="resultReady" class="result-ready">
-        <div class="result-file">
-          <span id="resultFileIcon" class="result-file-icon">D</span>
-          <div>
-            <strong id="resultFilename">{{ document.title }}</strong>
-            <span id="resultMeta">DOCX · текущий документ</span>
-          </div>
-        </div>
-        <div class="result-actions">
-          <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
-            <span>Открыть</span>
-            <span class="external-icon" aria-hidden="true"></span>
-          </a>
-          <a id="downloadButton" class="button primary" href="/projects/{{ project.id }}/document">
-            <span class="download-icon" aria-hidden="true"></span>
-            <span>Скачать</span>
-          </a>
-        </div>
-      </div>
-    {% else %}
-      <div id="resultEmpty" class="result-empty">Готовый файл появится после сборки.</div>
-    {% endif %}
-  </section>
 
   <form
     id="assembleForm"
