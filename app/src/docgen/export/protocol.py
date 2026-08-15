@@ -15,7 +15,11 @@ class RenderedFile(BaseModel):
     """Filesystem-safe filename for the rendered content."""
 
     media_type: str
-    """MIME type of the rendered content (e.g., 'text/markdown', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')."""
+    """MIME type of the rendered content.
+
+    Examples: 'text/markdown',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'.
+    """
 
     content: bytes
     """Raw bytes of the rendered content, encoded according to the format."""

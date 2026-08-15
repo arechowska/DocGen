@@ -1,7 +1,6 @@
 """Markdown exporter for rendering WorkingDocuments as Markdown text."""
 
 import re
-from pathlib import Path
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.protocol import RenderedFile
@@ -18,7 +17,8 @@ class MarkdownExporter:
 
         Args:
             document: The WorkingDocument to render.
-            template: The FormattingTemplate (currently unused but included for protocol compatibility).
+            template: The FormattingTemplate (currently unused but included for
+                protocol compatibility).
 
         Returns:
             RenderedFile with Markdown content.
