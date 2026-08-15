@@ -289,3 +289,46 @@ def test_template_id_pattern_validation(tmp_path: Path) -> None:
     write_yaml(tmp_path / "bad.yaml", bad_template)
     with pytest.raises(FormattingTemplateError, match="String should match pattern"):
         FormattingCatalog(tmp_path).list()
+
+
+def test_template_rejects_english_name(tmp_path: Path) -> None:
+    """Fails if non-Russian names are accepted."""
+    bad_template = {
+        "id": "bad",
+        "name": "English Template",
+        "format": "docx",
+        "renderer": "docx",
+        "assets": [],
+    }
+    write_yaml(tmp_path / "bad.yaml", bad_template)
+    with pytest.raises(FormattingTemplateError, match="кириллицу"):
+        FormattingCatalog(tmp_path).list()
+
+
+def test_template_rejects_name_with_placeholder_markers(tmp_path: Path) -> None:
+    """Fails if placeholder markers in names are accepted."""
+    bad_template = {
+        "id": "bad",
+        "name": "TBD",
+        "format": "docx",
+        "renderer": "docx",
+        "assets": [],
+    }
+    write_yaml(tmp_path / "bad.yaml", bad_template)
+    with pytest.raises(FormattingTemplateError, match="заполнитель"):
+        FormattingCatalog(tmp_path).list()
+
+
+def test_template_accepts_valid_russian_name(tmp_path: Path) -> None:
+    """Fails if valid Russian names are rejected."""
+    good_template = {
+        "id": "good",
+        "name": "Корпоративный темный стиль",
+        "format": "docx",
+        "renderer": "docx",
+        "assets": [],
+    }
+    write_yaml(tmp_path / "good.yaml", good_template)
+    templates = FormattingCatalog(tmp_path).list()
+    assert len(templates) == 1
+    assert templates[0].name == "Корпоративный темный стиль"

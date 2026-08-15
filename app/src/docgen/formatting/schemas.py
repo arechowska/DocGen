@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import re
 from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+_PLACEHOLDER_MARKERS = (
+    "tbd",
+    "todo",
+    "fixme",
+    "placeholder",
+    "to be determined",
+    "заполнить",
+    "заполните",
+    "заполнитель",
+    "заглушка",
+    "не определено",
+    "lorem ipsum",
+)
 
 
 class OutputFormat(str, Enum):
@@ -30,10 +46,29 @@ class FormattingTemplate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        """Ensure name is not empty."""
-        if not value.strip():
-            raise ValueError("Название шаблона не может быть пустым")
-        return value
+        """Validate name is Russian text without placeholders."""
+        normalized_value = " ".join(value.split())
+        normalized_casefold = normalized_value.casefold()
+
+        # Check for placeholder markers
+        marker = next(
+            (marker for marker in _PLACEHOLDER_MARKERS if marker in normalized_casefold), None
+        )
+        if marker:
+            raise ValueError(f"Текст не должен содержать заполнитель: {marker}")
+
+        # Check for Cyrillic content (at least 50% of alphabetic characters)
+        alphabetic_characters = [character for character in normalized_value if character.isalpha()]
+        cyrillic_count = sum(
+            _CYRILLIC_RE.fullmatch(character) is not None for character in alphabetic_characters
+        )
+        if not alphabetic_characters or cyrillic_count * 2 < len(alphabetic_characters):
+            raise ValueError(
+                "Текст должен содержать кириллицу: не менее 50% алфавитных символов должны быть "
+                "кириллическими"
+            )
+
+        return normalized_value
 
     @model_validator(mode="after")
     def validate_renderer_matches_format(self) -> FormattingTemplate:
