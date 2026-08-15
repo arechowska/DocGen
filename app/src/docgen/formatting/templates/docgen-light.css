@@ -1,0 +1,177 @@
+/* DocGen Light -- standalone HTML export theme.
+   Colors, font stack and layout constraints follow DESIGN.md / the stage-4
+   export plan's Global Constraints exactly: white and #f5f5f7 surfaces,
+   primary text #1d1d1f, secondary text #707070, accent #0071e3, system font
+   with an Inter fallback, 960px content width, 28px card radius, no
+   shadows, responsive tables, print-safe margins. */
+
+:root {
+  --dg-bg: #ffffff;
+  --dg-surface: #f5f5f7;
+  --dg-text: #1d1d1f;
+  --dg-text-secondary: #707070;
+  --dg-accent: #0071e3;
+  --dg-border: #d2d2d7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--dg-surface);
+  color: var(--dg-text);
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.6;
+}
+
+.dg-document {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 32px;
+}
+
+.dg-title {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--dg-text);
+  margin: 0 0 1.5rem;
+}
+
+.dg-node {
+  background: var(--dg-bg);
+  border: 1px solid var(--dg-border);
+  border-radius: 28px;
+  box-shadow: none;
+  padding: 24px 28px;
+  margin-bottom: 20px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--dg-text);
+  font-weight: 600;
+  margin-top: 0;
+}
+
+p {
+  color: var(--dg-text);
+  white-space: pre-wrap;
+}
+
+.dg-caption {
+  color: var(--dg-text-secondary);
+  font-weight: 500;
+}
+
+ul,
+ol {
+  padding-left: 1.5rem;
+}
+
+.dg-table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  border: 1px solid var(--dg-border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--dg-surface);
+  color: var(--dg-text);
+}
+
+.dg-image {
+  margin: 0;
+}
+
+.dg-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 16px;
+  display: block;
+}
+
+.dg-image-placeholder {
+  background: var(--dg-surface);
+  color: var(--dg-text-secondary);
+  border-radius: 16px;
+  padding: 24px;
+  text-align: center;
+  font-weight: 500;
+}
+
+figcaption {
+  color: var(--dg-text-secondary);
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+
+.dg-gap {
+  display: block;
+  background: var(--dg-surface);
+  border: 1px dashed var(--dg-border);
+  border-radius: 16px;
+  padding: 16px;
+  color: var(--dg-text);
+}
+
+.dg-children {
+  margin-top: 16px;
+  padding-left: 16px;
+  border-left: 2px solid var(--dg-border);
+}
+
+a {
+  color: var(--dg-accent);
+}
+
+@media (max-width: 640px) {
+  .dg-document {
+    padding: 24px 16px;
+  }
+
+  .dg-node {
+    padding: 16px 18px;
+  }
+}
+
+@media print {
+  body {
+    background: #ffffff;
+  }
+
+  .dg-document {
+    max-width: 100%;
+    margin: 20mm;
+    padding: 0;
+  }
+
+  .dg-node {
+    border: none;
+    box-shadow: none;
+    break-inside: avoid;
+    padding: 0 0 16px;
+  }
+}
