@@ -72,6 +72,28 @@ class MarkdownExporter:
         else:
             return ""
 
+    def _render_children(self, node: DocumentNode) -> str:
+        """Render all children of a node and format them appropriately.
+
+        Args:
+            node: The DocumentNode whose children to render.
+
+        Returns:
+            Formatted child content, or empty string if no children.
+        """
+        if not node.children:
+            return ""
+
+        child_content = []
+        for child in node.children:
+            rendered = self._render_node(child)
+            if rendered:
+                child_content.append(rendered)
+
+        if child_content:
+            return "\n\n" + "\n\n".join(child_content)
+        return ""
+
     def _render_heading(self, node: DocumentNode) -> str:
         """Render a heading node."""
         level = node.data.get("level", 1)
@@ -81,16 +103,7 @@ class MarkdownExporter:
         text = node.text or ""
 
         result = f"{prefix} {text}"
-
-        # Render children if present
-        if node.children:
-            child_content = []
-            for child in node.children:
-                rendered = self._render_node(child)
-                if rendered:
-                    child_content.append(rendered)
-            if child_content:
-                result += "\n\n" + "\n\n".join(child_content)
+        result += self._render_children(node)
 
         return result
 
@@ -99,16 +112,7 @@ class MarkdownExporter:
         text = node.text or ""
 
         result = text
-
-        # Render children if present
-        if node.children:
-            child_content = []
-            for child in node.children:
-                rendered = self._render_node(child)
-                if rendered:
-                    child_content.append(rendered)
-            if child_content:
-                result += "\n\n" + "\n\n".join(child_content)
+        result += self._render_children(node)
 
         return result
 
@@ -125,60 +129,90 @@ class MarkdownExporter:
                 prefix = "-"
             lines.append(f"{prefix} {item}")
 
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        result += self._render_children(node)
+
+        return result
 
     def _render_table(self, node: DocumentNode) -> str:
         """Render a table node as GFM table."""
         headers = node.data.get("headers", [])
         rows = node.data.get("rows", [])
 
-        if not headers:
-            return ""
+        # If no rows at all, nothing to render
+        if not rows:
+            result = ""
+        else:
+            # Escape pipes and newlines in content
+            def escape_table_content(content: str) -> str:
+                """Escape pipes and newlines in table content."""
+                if not isinstance(content, str):
+                    content = str(content)
+                # Replace pipes with escaped pipes
+                content = content.replace("|", "\\|")
+                # Replace newlines with spaces
+                content = content.replace("\n", " ")
+                return content
 
-        # Escape pipes and newlines in content
-        def escape_table_content(content: str) -> str:
-            """Escape pipes and newlines in table content."""
-            if not isinstance(content, str):
-                content = str(content)
-            # Replace pipes with escaped pipes
-            content = content.replace("|", "\\|")
-            # Replace newlines with spaces
-            content = content.replace("\n", " ")
-            return content
+            # Determine column count from headers or first row
+            if headers:
+                col_count = len(headers)
+            elif rows and rows[0]:
+                col_count = len(rows[0])
+            else:
+                col_count = 1
 
-        # Build header row
-        header_cells = [escape_table_content(h) for h in headers]
-        header_row = "| " + " | ".join(header_cells) + " |"
+            lines = []
 
-        # Build separator row
-        separator_row = "| " + " | ".join(["---"] * len(headers)) + " |"
+            # Build header row (use headers if present, otherwise empty row)
+            if headers:
+                header_cells = [escape_table_content(h) for h in headers]
+            else:
+                # No headers: create empty header row with correct column count
+                header_cells = [""] * col_count
+            header_row = "| " + " | ".join(header_cells) + " |"
+            lines.append(header_row)
 
-        # Build data rows
-        data_rows = []
-        for row in rows:
-            # Pad row with empty cells if needed
-            padded_row = list(row) + [""] * (len(headers) - len(row))
-            # Take only the first len(headers) cells
-            padded_row = padded_row[:len(headers)]
-            cells = [escape_table_content(cell) for cell in padded_row]
-            data_rows.append("| " + " | ".join(cells) + " |")
+            # Build separator row
+            separator_row = "| " + " | ".join(["---"] * col_count) + " |"
+            lines.append(separator_row)
 
-        # Combine all parts
-        lines = [header_row, separator_row] + data_rows
-        return "\n".join(lines)
+            # Build data rows
+            for row in rows:
+                # Pad row with empty cells if needed
+                padded_row = list(row) + [""] * (col_count - len(row))
+                # Take only the first col_count cells
+                padded_row = padded_row[:col_count]
+                cells = [escape_table_content(cell) for cell in padded_row]
+                lines.append("| " + " | ".join(cells) + " |")
+
+            result = "\n".join(lines)
+
+        result += self._render_children(node)
+        return result
 
     def _render_image(self, node: DocumentNode) -> str:
         """Render an image node."""
         src = node.data.get("src", "")
         alt = node.data.get("alt", "")
 
-        return f"![{alt}]({src})"
+        result = f"![{alt}]({src})"
+        result += self._render_children(node)
+
+        return result
 
     def _render_gap(self, node: DocumentNode) -> str:
-        """Render a gap node as a blockquote."""
-        text = node.text or ""
-        # Render as bold text in blockquote
-        return f"> **{text}**"
+        """Render a gap node as a blockquote.
+
+        Gap nodes represent missing content sections. Following the
+        application's HTML template convention, always render the fixed
+        message "Нет данных в источниках" regardless of node.text.
+        """
+        # Use fixed message per app's HTML rendering convention
+        result = "> **Нет данных в источниках**"
+        result += self._render_children(node)
+
+        return result
 
     def _make_safe_filename(self, title: str) -> str:
         """Create a filesystem-safe filename from a document title.

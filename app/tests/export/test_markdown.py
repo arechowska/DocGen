@@ -40,7 +40,6 @@ def document_all_kinds() -> WorkingDocument:
             ),
             DocumentNode(
                 kind=NodeKind.GAP,
-                text="Нет данных в источниках:",
             ),
             DocumentNode(
                 kind=NodeKind.IMAGE,
@@ -85,8 +84,8 @@ def test_markdown_renders_supported_nodes(
     # Check table
     assert "| Колонка 1 | Колонка 2 |" in text
 
-    # Check gap (as blockquote)
-    assert "> **Нет данных в источниках:**" in text
+    # Check gap (as blockquote with fixed message)
+    assert "> **Нет данных в источниках**" in text
 
     # Check image
     assert "![Описание изображения]" in text
@@ -256,3 +255,179 @@ def test_markdown_separates_top_level_nodes(
 
     # Check that paragraphs are separated by blank line
     assert "Первый абзац\n\nВторой абзац" in content
+
+
+def test_markdown_renders_table_without_headers(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that tables without headers key render correctly.
+
+    Production DOCX extraction creates tables with only 'rows' key,
+    no 'headers' key at all. Should render with empty header row.
+    """
+    document = WorkingDocument(
+        title="Таблица без заголовков",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.TABLE,
+                data={
+                    "rows": [
+                        ["Значение 1", "Значение 2"],
+                        ["Значение 3", "Значение 4"],
+                    ],
+                },
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Should render as GFM table with empty header row
+    assert "|" in text
+    assert "---" in text
+    assert "Значение 1" in text
+    assert "Значение 3" in text
+
+
+def test_markdown_renders_textless_gap_node(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that gap nodes without text render the fixed message.
+
+    Production gap nodes created during assembly have no text attribute.
+    Should always render "Нет данных в источниках" regardless of text.
+    """
+    document = WorkingDocument(
+        title="Документ с пробелом",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.GAP,
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Should render fixed message
+    assert "> **Нет данных в источниках**" in text
+
+
+def test_markdown_renders_list_with_children(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that children of list nodes are rendered."""
+    document = WorkingDocument(
+        title="Список с детьми",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.LIST,
+                data={
+                    "items": ["Пункт 1", "Пункт 2"],
+                    "ordered": False,
+                },
+                children=[
+                    DocumentNode(kind=NodeKind.PARAGRAPH, text="Пояснение"),
+                ],
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Both list items and child should be present
+    assert "- Пункт 1" in text
+    assert "- Пункт 2" in text
+    assert "Пояснение" in text
+
+
+def test_markdown_renders_table_with_children(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that children of table nodes are rendered."""
+    document = WorkingDocument(
+        title="Таблица с детьми",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.TABLE,
+                data={
+                    "headers": ["A", "B"],
+                    "rows": [["1", "2"]],
+                },
+                children=[
+                    DocumentNode(kind=NodeKind.PARAGRAPH, text="Комментарий"),
+                ],
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Both table and child should be present
+    assert "| A | B |" in text
+    assert "Комментарий" in text
+
+
+def test_markdown_renders_image_with_children(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that children of image nodes are rendered."""
+    document = WorkingDocument(
+        title="Изображение с детьми",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.IMAGE,
+                data={
+                    "src": "pic.jpg",
+                    "alt": "Картинка",
+                },
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.PARAGRAPH, text="Подпись к изображению"
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Both image and child should be present
+    assert "![Картинка](pic.jpg)" in text
+    assert "Подпись к изображению" in text
+
+
+def test_markdown_renders_gap_with_children(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that children of gap nodes are rendered."""
+    document = WorkingDocument(
+        title="Пробел с детьми",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.GAP,
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.PARAGRAPH, text="Информация о пробеле"
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Both gap message and child should be present
+    assert "> **Нет данных в источниках**" in text
+    assert "Информация о пробеле" in text
