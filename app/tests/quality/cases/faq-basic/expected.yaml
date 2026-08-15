@@ -1,0 +1,27 @@
+template_id: faq
+applicable_rule_ids:
+  - faq-structure
+  - faq-procedure-structure
+  - faq-completeness
+  - faq-grounding
+  - faq-terminology
+  - faq-contradiction
+  - faq-style
+  - faq-source-visibility
+required_nodes:
+  - kind: heading
+    title: Общие вопросы
+  - kind: heading
+    title: Начало работы
+  - kind: heading
+    title: Работа с системой
+  - kind: heading
+    title: Ошибки и ограничения
+expected_gaps:
+  - id: gap-push-channel-disabled
+    reason: Источник не уточняет, как уведомляется клиент при отключённом push-канале
+forbidden_claims:
+  - Уведомления отправляет Банк России
+  - Комиссия за настройку уведомлений составляет 50 рублей
+  - Клиент получает уведомление в течение 1 секунды
+max_processing_seconds: 5.0

@@ -28,23 +28,34 @@ class QualityArtifact:
     checked_rule_ids: frozenset[str]
 
 
+_GAP_TRIGGERS = (
+    ("канал отдельного уведомления", "gap-notification-channel"),
+    ("уведомляется клиент при отключённом push-канале", "gap-push-channel-disabled"),
+)
+
+
 class DeterministicFakeModel:
     """A frozen local model double; it performs no I/O and has no random state."""
 
     def generate(self, blocks: list[NormalizedBlock], template_id: str) -> QualityArtifact:
         nodes = [_node_from_block(block) for block in blocks]
-        if any("канал отдельного уведомления" in block.text.lower() for block in blocks):
-            nodes.append(
-                DocumentNode(
-                    id="gap-notification-channel",
-                    kind=NodeKind.GAP,
-                    flags=["missing-source-data"],
+        for phrase, gap_id in _GAP_TRIGGERS:
+            if any(phrase in block.text.lower() for block in blocks):
+                nodes.append(
+                    DocumentNode(
+                        id=gap_id,
+                        kind=NodeKind.GAP,
+                        flags=["missing-source-data"],
+                    )
                 )
-            )
         template = TemplateCatalog().get(template_id)
+        title = next(
+            (block.text for block in blocks if block.kind is BlockKind.HEADING and block.text),
+            "Сгенерированный документ",
+        )
         return QualityArtifact(
             document=WorkingDocument(
-                title="Перевод между своими счетами",
+                title=title,
                 template_id=template_id,
                 nodes=nodes,
             ),
