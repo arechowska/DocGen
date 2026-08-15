@@ -139,8 +139,8 @@ class MarkdownExporter:
         headers = node.data.get("headers", [])
         rows = node.data.get("rows", [])
 
-        # If no rows at all, nothing to render
-        if not rows:
+        # Only skip rendering if both headers and rows are empty
+        if not headers and not rows:
             result = ""
         else:
             # Escape pipes and newlines in content

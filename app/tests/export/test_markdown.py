@@ -257,6 +257,66 @@ def test_markdown_separates_top_level_nodes(
     assert "Первый абзац\n\nВторой абзац" in content
 
 
+def test_markdown_renders_table_with_headers_no_rows(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that tables with headers but no rows render the header row.
+
+    Production case: user creates/edits a table down to just header row.
+    Should render header + separator, not silently drop headers.
+    """
+    document = WorkingDocument(
+        title="Таблица только с заголовками",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.TABLE,
+                data={
+                    "headers": ["Колонка А", "Колонка Б", "Колонка В"],
+                    "rows": [],
+                },
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Should render header row and separator
+    assert "| Колонка А | Колонка Б | Колонка В |" in text
+    assert "| --- | --- | --- |" in text
+    # Should not be empty
+    assert len(text.strip()) > 0
+
+
+def test_markdown_skips_empty_table(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Test that tables with no headers and no rows are not rendered.
+
+    Only skip rendering when table has truly nothing to show.
+    """
+    document = WorkingDocument(
+        title="Пустая таблица",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.TABLE,
+                data={
+                    "rows": [],
+                },
+            ),
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    # Should result in just newline (empty document after rendering the table)
+    # The table itself contributes nothing
+    assert text.strip() == ""
+
+
 def test_markdown_renders_table_without_headers(
     markdown_template: FormattingTemplate,
 ) -> None:
