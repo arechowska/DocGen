@@ -5,12 +5,21 @@
     {% elif node.kind.value == "paragraph" %}
       <p class="whitespace-pre-wrap leading-7">{{ node.text or "" }}</p>
     {% elif node.kind.value == "list" %}
-      {% if node.text %}<p class="font-medium">{{ node.text }}</p>{% endif %}
+      {% if node.text %}<h3 class="text-lg font-semibold">{{ node.text }}</h3>{% endif %}
       {% set items = node.data.get("items", []) %}
       {% if items is sequence and items is not string %}
-        <ul class="mt-2 list-disc space-y-1 pl-6">
-          {% for item in items %}<li>{{ item }}</li>{% endfor %}
-        </ul>
+        {% if document.template_id == "faq" %}
+          <ol class="mt-2 list-decimal space-y-3 pl-6">
+            {% for item in items %}
+              {% set parts = item.split("Ответ:", 1) %}
+              <li><strong>{{ parts[0].strip() }}</strong>{% if parts|length > 1 %}<br><strong>Ответ:{{ parts[1] }}</strong>{% endif %}</li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <ul class="mt-2 list-disc space-y-1 pl-6">
+            {% for item in items %}<li>{{ item }}</li>{% endfor %}
+          </ul>
+        {% endif %}
       {% endif %}
     {% elif node.kind.value == "table" %}
       {% if node.text %}<p class="mb-3 font-medium">{{ node.text }}</p>{% endif %}

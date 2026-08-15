@@ -1312,6 +1312,23 @@
   font-size: 16px;
 }
 
+.faq-question-list {
+  margin-top: 32px;
+}
+
+.faq-question-list[data-section-title]::before {
+  content: attr(data-section-title);
+  display: block;
+  margin-bottom: 12px;
+  color: var(--formatta-primary);
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.faq-question-list li {
+  margin-bottom: 16px;
+}
+
 .document-canvas a {
   color: #1264a3;
   text-decoration: underline;
