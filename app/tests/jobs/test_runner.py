@@ -16,6 +16,7 @@ from docgen.config import Settings
 from docgen.db import Base
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
+from docgen.export.protocol import ExportError
 from docgen.jobs import worker as worker_module
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.repository import JobRepository
@@ -314,6 +315,25 @@ def test_runner_preserves_explicitly_user_safe_error(
     failed = persisted(session_factory, job.id)
     assert failed.status is JobStatus.FAILED
     assert failed.error_message == "Не удалось проверить документ"
+
+
+def test_runner_preserves_export_engine_error(
+    session_factory: sessionmaker[Session],
+) -> None:
+    job = enqueue(session_factory, JobKind.EXPORT)
+
+    def workflow(claimed: Job, progress: Any) -> None:
+        raise ExportError("Документ изменён; запустите экспорт повторно")
+
+    with session_factory() as session:
+        JobRunner(
+            JobRepository(session, worker_id="worker"),
+            {JobKind.EXPORT: workflow},
+        ).run_once()
+
+    failed = persisted(session_factory, job.id)
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_message == "Документ изменён; запустите экспорт повторно"
 
 
 def test_runner_does_not_persist_internal_exception_details(

@@ -135,8 +135,8 @@ class JobRepository:
         template_id: str,
         target_source_id: str | None,
     ) -> Job:
-        if kind is JobKind.ASSEMBLE and target_source_id is not None:
-            raise ValueError("Для задания сборки нельзя указывать документ проверки")
+        if kind in (JobKind.ASSEMBLE, JobKind.EXPORT) and target_source_id is not None:
+            raise ValueError("Для задания сборки или экспорта нельзя указывать документ проверки")
         return Job(
             project_id=project_id,
             kind=kind,
@@ -144,7 +144,7 @@ class JobRepository:
             target_source_id=target_source_id,
             check_target_kind=(
                 None
-                if kind is JobKind.ASSEMBLE
+                if kind in (JobKind.ASSEMBLE, JobKind.EXPORT)
                 else (
                     CheckTargetKind.SOURCE
                     if target_source_id is not None

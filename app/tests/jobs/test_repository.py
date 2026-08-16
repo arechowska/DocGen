@@ -102,6 +102,25 @@ def test_assemble_enqueue_rejects_target_source(job_repository: JobRepository) -
         )
 
 
+def test_export_enqueue_has_no_check_target(job_repository: JobRepository) -> None:
+    job = job_repository.enqueue("p1", JobKind.EXPORT, "docgen-light")
+
+    assert job.kind is JobKind.EXPORT
+    assert job.target_source_id is None
+    assert job.check_target_kind is None
+    assert job.status is JobStatus.QUEUED
+
+
+def test_export_enqueue_rejects_target_source(job_repository: JobRepository) -> None:
+    with pytest.raises(ValueError, match="экспорта"):
+        job_repository.enqueue(
+            "p1",
+            JobKind.EXPORT,
+            "docgen-light",
+            target_source_id="source-1",
+        )
+
+
 def test_claim_next_is_fifo_and_marks_running(job_repository: JobRepository) -> None:
     first = job_repository.enqueue("p1", JobKind.ASSEMBLE, "use-case")
     job_repository.enqueue("p2", JobKind.CHECK, "use-case")

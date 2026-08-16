@@ -20,6 +20,7 @@ from docgen.ai.client import (
 from docgen.ai.grounding import GroundingValidator
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
+from docgen.export.protocol import ExportError
 from docgen.extraction.registry import ExtractionError
 from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import TemplateCatalog
@@ -181,6 +182,7 @@ class JobRunner:
             ModelConfigurationError,
             ExtractionError,
             PageLimitExceeded,
+            ExportError,
         )
         if isinstance(exc, safe_errors) and str(exc):
             return str(exc)

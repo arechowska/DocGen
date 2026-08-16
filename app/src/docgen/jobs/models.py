@@ -16,6 +16,7 @@ from docgen.models import Project, UTCDateTime, utc_now
 class JobKind(str, Enum):
     ASSEMBLE = "assemble"
     CHECK = "check"
+    EXPORT = "export"
 
 
 class JobStatus(str, Enum):
@@ -36,7 +37,7 @@ class Job(Base):
     __table_args__ = (
         CheckConstraint("progress BETWEEN 0 AND 100", name="job_progress_range"),
         CheckConstraint(
-            "(kind = 'assemble' AND target_source_id IS NULL "
+            "(kind IN ('assemble', 'export') AND target_source_id IS NULL "
             "AND check_target_kind IS NULL) OR "
             "(kind = 'check' AND check_target_kind IN ('current', 'source'))",
             name="job_target_kind_matches_operation",
