@@ -130,12 +130,6 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
         assert report.findings == []
 
     with TestClient(create_app(settings)) as restarted:
-        editor = restarted.get(f"{project_url}/editor")
-        assert editor.status_code == 200
-        assert "FAQ по работе с Formatta" in editor.text
-        assert "Загрузите Markdown и выберите смысловой шаблон FAQ" in editor.text
-        assert "Проверено редактором" in editor.text
-
         workspace = restarted.get(project_url)
         assert workspace.status_code == 200
         assert 'id="project-workspace"' in workspace.text

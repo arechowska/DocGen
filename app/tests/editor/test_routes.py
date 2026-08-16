@@ -64,10 +64,10 @@ def project_with_document(client: TestClient) -> Project:
         return project
 
 
-def test_editor_renders_all_node_kinds(
+def test_project_detail_renders_all_node_kinds(
     client: TestClient, project_with_document: Project
 ) -> None:
-    response = client.get(f"/projects/{project_with_document.id}/editor")
+    response = client.get(f"/projects/{project_with_document.id}")
 
     assert response.status_code == 200
     for marker in [
@@ -79,34 +79,6 @@ def test_editor_renders_all_node_kinds(
         'data-kind="gap"',
     ]:
         assert marker in response.text
-
-
-def test_standalone_editor_uses_shared_surface(
-    client: TestClient, project_with_document: Project
-) -> None:
-    response = client.get(f"/projects/{project_with_document.id}/editor")
-
-    assert response.status_code == 200
-    assert 'id="editor-page"' in response.text
-    assert 'id="editor-shell"' in response.text
-    assert 'data-state="ready"' in response.text
-    assert 'hx-target="#editor-shell"' in response.text
-    assert 'id="chat-panel"' in response.text
-
-
-def test_htmx_editor_refresh_returns_shared_surface_only(
-    client: TestClient, project_with_document: Project
-) -> None:
-    response = client.get(
-        f"/projects/{project_with_document.id}/editor",
-        headers={"HX-Request": "true"},
-    )
-
-    assert response.status_code == 200
-    assert "<!doctype html>" not in response.text.lower()
-    assert 'id="editor-page"' not in response.text
-    assert 'id="editor-shell"' in response.text
-    assert 'data-state="ready"' in response.text
 
 
 def test_text_autosave_returns_new_revision(
@@ -516,42 +488,6 @@ def test_project_detail_renders_semantic_node_formatting(
     paragraph = soup.find("p", attrs={"data-node-id": "p1"})
     assert paragraph is not None
     assert paragraph.get("style") == "color:blue;font-weight:700;margin-left:24px"
-
-
-def test_standalone_editor_renders_semantic_node_formatting(
-    client: TestClient, project_with_document: Project
-) -> None:
-    with _session(client) as session:
-        document = DocumentRepository(session).get_document(project_with_document.id)
-        assert document is not None
-        nodes = [
-            node.model_copy(
-                update={
-                    "data": {
-                        "style": {
-                            "color": "blue",
-                            "font-weight": "700",
-                        }
-                    }
-                }
-            )
-            if node.id == "p1"
-            else node
-            for node in document.nodes
-        ]
-        DocumentRepository(session).save_document(
-            project_with_document.id,
-            document.model_copy(update={"nodes": nodes}),
-        )
-        session.commit()
-
-    response = client.get(f"/projects/{project_with_document.id}/editor")
-
-    assert response.status_code == 200
-    soup = BeautifulSoup(response.text, "html.parser")
-    textarea = soup.select_one('#node-p1 textarea[name="text"]')
-    assert textarea is not None
-    assert textarea.get("style") == "color:blue;font-weight:700"
 
 
 def test_workspace_save_preserves_allowed_inline_formatting(

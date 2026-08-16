@@ -39,33 +39,6 @@ class Docgen2SavePayload(BaseModel):
     revision: int = Field(ge=1)
 
 
-@router.get("/{project_id}/editor")
-def editor_view(request: Request, project_id: str, session: SessionDependency) -> Response:
-    _project_or_404(session, project_id)
-    stored = DocumentRepository(session).get_document_with_revision(project_id)
-    if stored is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Документ не найден",
-        )
-    document, revision = stored
-    workspace_html = DocumentRepository(session).get_workspace_html(project_id)
-    return templates.TemplateResponse(
-        request=request,
-        name=(
-            "editor/document.html"
-            if request.headers.get("HX-Request") != "true"
-            else "editor/surface.html"
-        ),
-        context={
-            "project_id": project_id,
-            "document": document,
-            "revision": revision,
-            "workspace_html": workspace_html,
-        },
-    )
-
-
 @router.post("/{project_id}/editor/save")
 def save_docgen2_workspace(
     project_id: str,

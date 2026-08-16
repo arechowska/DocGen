@@ -71,7 +71,7 @@ def test_structured_table_editor_renders_and_preserves_headers(
     client: TestClient, project_with_table: Project
 ) -> None:
     page = BeautifulSoup(
-        client.get(f"/projects/{project_with_table.id}/editor").text,
+        client.get(f"/projects/{project_with_table.id}").text,
         "html.parser",
     )
     table = page.find("table")
