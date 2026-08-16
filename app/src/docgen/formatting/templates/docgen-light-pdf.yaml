@@ -1,0 +1,8 @@
+id: docgen-light
+name: Облегченный PDF
+format: pdf
+renderer: pdf
+assets:
+  - docgen-light-pdf.html.j2
+  - docgen-light-pdf.css
+options: {}

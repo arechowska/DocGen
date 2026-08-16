@@ -17,6 +17,7 @@ dependencies = [
   "beautifulsoup4>=4.12,<5",
   "httpx>=0.28,<1",
   "pyyaml>=6,<7",
+  "weasyprint>=65,<66",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,177 @@
+/* DocGen Light -- PDF print theme (docgen-light-pdf).
+   Same design constraints as docgen-light.css (DESIGN.md docgen-light
+   style): white and #f5f5f7 surfaces, primary text #1d1d1f, secondary text
+   #707070, accent #0071e3, system font with Inter fallback -- laid out for
+   paged A4 media instead of a scrolling viewport. Shares dg-* class names
+   with docgen-light.html.j2/css because docgen-light-pdf.html.j2 renders
+   through the very same render_node Jinja macro (imported, not copied). */
+
+:root {
+  --dg-bg: #ffffff;
+  --dg-surface: #f5f5f7;
+  --dg-text: #1d1d1f;
+  --dg-text-secondary: #707070;
+  --dg-accent: #0071e3;
+  --dg-border: #d2d2d7;
+}
+
+@page {
+  size: A4;
+  margin: 20mm;
+
+  @top-center {
+    content: "DocGen";
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 9pt;
+    color: #707070;
+  }
+
+  @bottom-center {
+    content: counter(page) " / " counter(pages);
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 9pt;
+    color: #707070;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--dg-bg);
+  color: var(--dg-text);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.5;
+}
+
+.dg-document {
+  padding: 0;
+}
+
+.dg-title {
+  font-size: 22pt;
+  font-weight: 700;
+  color: var(--dg-text);
+  margin: 0 0 16pt;
+}
+
+.dg-node {
+  background: var(--dg-bg);
+  border: none;
+  border-bottom: 1px solid var(--dg-border);
+  border-radius: 0;
+  padding: 0 0 12pt;
+  margin-bottom: 12pt;
+  break-inside: avoid;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--dg-text);
+  font-weight: 600;
+  margin-top: 0;
+  break-after: avoid;
+}
+
+p {
+  color: var(--dg-text);
+  white-space: pre-wrap;
+}
+
+.dg-caption {
+  color: var(--dg-text-secondary);
+  font-weight: 500;
+}
+
+ul,
+ol {
+  padding-left: 1.2cm;
+}
+
+.dg-table-wrap {
+  break-inside: avoid;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.5pt;
+  break-inside: avoid;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tr {
+  break-inside: avoid;
+}
+
+th,
+td {
+  border: 1px solid var(--dg-border);
+  padding: 4pt 6pt;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--dg-surface);
+  color: var(--dg-text);
+}
+
+.dg-image {
+  margin: 0;
+  break-inside: avoid;
+}
+
+.dg-image img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.dg-image-placeholder {
+  background: var(--dg-surface);
+  color: var(--dg-text-secondary);
+  padding: 12pt;
+  text-align: center;
+  font-weight: 500;
+}
+
+figcaption {
+  color: var(--dg-text-secondary);
+  font-size: 8.5pt;
+  margin-top: 4pt;
+}
+
+.dg-gap {
+  display: block;
+  background: var(--dg-surface);
+  border: 1px dashed var(--dg-border);
+  padding: 8pt;
+  color: var(--dg-text);
+  break-inside: avoid;
+}
+
+.dg-children {
+  margin-top: 8pt;
+  padding-left: 8pt;
+  border-left: 2px solid var(--dg-border);
+}
+
+a {
+  color: var(--dg-accent);
+}
