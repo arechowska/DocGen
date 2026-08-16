@@ -31,8 +31,14 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
-_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "src" / "docgen" / "formatting" / "templates"
-_SOURCE_DOTX = _TEMPLATES_DIR / "colvir_v3.dotx"
+_TOOLS_DIR = Path(__file__).resolve().parent
+_TEMPLATES_DIR = _TOOLS_DIR.parent / "src" / "docgen" / "formatting" / "templates"
+# The .dotx source is a build-time-only input -- unlike the derived
+# colvir.docx it produces, it is never read at runtime (DocxExporter only
+# ever opens colvir.docx) and does not belong in the runtime catalog
+# directory or the packaged wheel, so it lives alongside this script
+# instead of under formatting/templates.
+_SOURCE_DOTX = _TOOLS_DIR / "colvir_v3.dotx"
 _OUTPUT_DOCX = _TEMPLATES_DIR / "colvir.docx"
 
 _CONTENT_TYPES_PART = "[Content_Types].xml"

@@ -51,6 +51,13 @@ def test_wheel_clean_install_renders_pages_outside_source_tree(tmp_path: Path) -
     assert "docgen/static/css/docgen.css" in members
     assert "docgen/static/js/docgen2-editor.js" in members
 
+    # colvir.docx is the runtime asset DocxExporter actually loads; the
+    # 236KB colvir_v3.dotx it was built from (tools/build_default_docx_
+    # template.py) is a build-time-only input and must not bloat the
+    # shipped wheel.
+    assert "docgen/formatting/templates/colvir.docx" in members
+    assert not any(name.endswith(".dotx") for name in members)
+
     subprocess.run(
         [
             sys.executable,
