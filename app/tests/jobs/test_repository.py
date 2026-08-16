@@ -12,6 +12,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from docgen.db import Base
+from docgen.export.service import ExportResult
+from docgen.formatting.schemas import OutputFormat
 from docgen.jobs.models import CheckTargetKind, Job, JobKind, JobStatus
 from docgen.jobs.repository import InvalidJobTransition, JobRepository
 from docgen.projects.models import Project
@@ -103,11 +105,14 @@ def test_assemble_enqueue_rejects_target_source(job_repository: JobRepository) -
 
 
 def test_export_enqueue_has_no_check_target(job_repository: JobRepository) -> None:
-    job = job_repository.enqueue("p1", JobKind.EXPORT, "docgen-light")
+    job = job_repository.enqueue(
+        "p1", JobKind.EXPORT, "docgen-light", export_format=OutputFormat.HTML
+    )
 
     assert job.kind is JobKind.EXPORT
     assert job.target_source_id is None
     assert job.check_target_kind is None
+    assert job.export_format is OutputFormat.HTML
     assert job.status is JobStatus.QUEUED
 
 
@@ -118,7 +123,61 @@ def test_export_enqueue_rejects_target_source(job_repository: JobRepository) -> 
             JobKind.EXPORT,
             "docgen-light",
             target_source_id="source-1",
+            export_format=OutputFormat.HTML,
         )
+
+
+def test_export_enqueue_requires_format(job_repository: JobRepository) -> None:
+    with pytest.raises(ValueError, match="формат"):
+        job_repository.enqueue("p1", JobKind.EXPORT, "docgen-light")
+
+
+def test_assemble_enqueue_rejects_export_format(job_repository: JobRepository) -> None:
+    with pytest.raises(ValueError, match="экспорта"):
+        job_repository.enqueue(
+            "p1", JobKind.ASSEMBLE, "use-case", export_format=OutputFormat.HTML
+        )
+
+
+def test_check_enqueue_rejects_export_format(job_repository: JobRepository) -> None:
+    with pytest.raises(ValueError, match="экспорта"):
+        job_repository.enqueue(
+            "p1", JobKind.CHECK, "use-case", export_format=OutputFormat.HTML
+        )
+
+
+def test_record_export_result_persists_fields_while_job_stays_running(
+    job_repository: JobRepository,
+) -> None:
+    job_repository.enqueue("p1", JobKind.EXPORT, "docgen-light", export_format=OutputFormat.HTML)
+    claimed = job_repository.claim_next()
+    assert claimed is not None
+
+    result = ExportResult(
+        relative_path="projects/p1/exports/document-docgen-light.html",
+        filename="document-docgen-light.html",
+        media_type="text/html",
+        size_bytes=42,
+        document_revision=4,
+    )
+    updated = job_repository.record_export_result(claimed.id, result)
+
+    assert updated.status is JobStatus.RUNNING
+    assert updated.export_relative_path == "projects/p1/exports/document-docgen-light.html"
+    assert updated.export_filename == "document-docgen-light.html"
+    assert updated.export_media_type == "text/html"
+    assert updated.export_size_bytes == 42
+    assert updated.export_document_revision == 4
+
+    # the terminal mark_succeeded() JobRunner always calls afterward does not
+    # know about export fields and must not clobber them
+    succeeded = job_repository.mark_succeeded(claimed.id)
+    assert succeeded.status is JobStatus.SUCCEEDED
+    assert succeeded.export_relative_path == "projects/p1/exports/document-docgen-light.html"
+    assert succeeded.export_filename == "document-docgen-light.html"
+    assert succeeded.export_media_type == "text/html"
+    assert succeeded.export_size_bytes == 42
+    assert succeeded.export_document_revision == 4
 
 
 def test_claim_next_is_fifo_and_marks_running(job_repository: JobRepository) -> None:

@@ -10,6 +10,7 @@ from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from docgen.db import Base
+from docgen.formatting.schemas import OutputFormat
 from docgen.models import Project, UTCDateTime, utc_now
 
 
@@ -37,9 +38,12 @@ class Job(Base):
     __table_args__ = (
         CheckConstraint("progress BETWEEN 0 AND 100", name="job_progress_range"),
         CheckConstraint(
-            "(kind IN ('assemble', 'export') AND target_source_id IS NULL "
-            "AND check_target_kind IS NULL) OR "
-            "(kind = 'check' AND check_target_kind IN ('current', 'source'))",
+            "(kind = 'assemble' AND target_source_id IS NULL "
+            "AND check_target_kind IS NULL AND export_format IS NULL) OR "
+            "(kind = 'check' AND check_target_kind IN ('current', 'source') "
+            "AND export_format IS NULL) OR "
+            "(kind = 'export' AND target_source_id IS NULL "
+            "AND check_target_kind IS NULL AND export_format IS NOT NULL)",
             name="job_target_kind_matches_operation",
         ),
     )
@@ -67,6 +71,13 @@ class Job(Base):
             values_callable=lambda kinds: [kind.value for kind in kinds],
         )
     )
+    export_format: Mapped[OutputFormat | None] = mapped_column(
+        SqlEnum(
+            OutputFormat,
+            native_enum=False,
+            values_callable=lambda formats: [output_format.value for output_format in formats],
+        )
+    )
     status: Mapped[JobStatus] = mapped_column(
         SqlEnum(
             JobStatus,
@@ -90,6 +101,17 @@ class Job(Base):
     result_document_revision: Mapped[int | None] = mapped_column(Integer)
     result_report_revision: Mapped[int | None] = mapped_column(Integer)
     result_report_generation: Mapped[int | None] = mapped_column(Integer)
+    # Populated by JobRepository.record_export_result while an EXPORT job is
+    # still RUNNING, straight from the ExportResult the export actually
+    # produced. Unlike result_document_revision (which mark_succeeded fills
+    # in generically from whatever ProjectArtifact.document_revision happens
+    # to be *after* the job finishes), export_document_revision is the exact
+    # revision that was rendered -- read this one for export jobs.
+    export_relative_path: Mapped[str | None] = mapped_column(String(1024))
+    export_filename: Mapped[str | None] = mapped_column(String(255))
+    export_media_type: Mapped[str | None] = mapped_column(String(255))
+    export_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    export_document_revision: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now

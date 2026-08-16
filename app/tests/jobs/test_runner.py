@@ -17,6 +17,7 @@ from docgen.db import Base
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.export.protocol import ExportError
+from docgen.formatting.schemas import OutputFormat
 from docgen.jobs import worker as worker_module
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.repository import JobRepository
@@ -44,8 +45,11 @@ def session_factory(tmp_path: Path) -> sessionmaker[Session]:
 def enqueue(
     session_factory: sessionmaker[Session], kind: JobKind = JobKind.ASSEMBLE
 ) -> Job:
+    export_format = OutputFormat.HTML if kind is JobKind.EXPORT else None
     with session_factory() as session:
-        return JobRepository(session, worker_id="producer").enqueue("p1", kind, "use-case")
+        return JobRepository(session, worker_id="producer").enqueue(
+            "p1", kind, "use-case", export_format=export_format
+        )
 
 
 def persisted(session_factory: sessionmaker[Session], job_id: str) -> Job:

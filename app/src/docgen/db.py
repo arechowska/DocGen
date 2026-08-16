@@ -144,6 +144,12 @@ def _migrate_jobs(connection: Connection) -> None:
         "result_document_revision": "INTEGER",
         "result_report_revision": "INTEGER",
         "result_report_generation": "INTEGER",
+        "export_format": "VARCHAR(20)",
+        "export_relative_path": "VARCHAR(1024)",
+        "export_filename": "VARCHAR(255)",
+        "export_media_type": "VARCHAR(255)",
+        "export_size_bytes": "INTEGER",
+        "export_document_revision": "INTEGER",
     }
     for column, definition in additions.items():
         if column not in original_columns:

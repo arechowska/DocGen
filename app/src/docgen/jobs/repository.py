@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from docgen.db import begin_sqlite_writer_transaction
 from docgen.documents.models import ProjectArtifact
+from docgen.export.service import ExportResult
+from docgen.formatting.schemas import OutputFormat
 from docgen.models import Project, Source, utc_now
 
 from .models import CheckTargetKind, Job, JobKind, JobStatus
@@ -78,8 +80,9 @@ class JobRepository:
         template_id: str,
         *,
         target_source_id: str | None = None,
+        export_format: OutputFormat | None = None,
     ) -> Job:
-        job = self._new_job(project_id, kind, template_id, target_source_id)
+        job = self._new_job(project_id, kind, template_id, target_source_id, export_format)
         self._session.add(job)
         self._commit()
         return job
@@ -91,6 +94,7 @@ class JobRepository:
         template_id: str,
         *,
         target_source_id: str | None = None,
+        export_format: OutputFormat | None = None,
     ) -> Job:
         # Route validation performs reads first. End that deferred transaction,
         # then reserve the SQLite writer lock before checking and inserting so
@@ -120,7 +124,7 @@ class JobRepository:
                 .limit(1)
             ) is None:
                 raise JobTargetUnavailable("Документ для проверки не найден")
-            job = self._new_job(project_id, kind, template_id, target_source_id)
+            job = self._new_job(project_id, kind, template_id, target_source_id, export_format)
             self._session.add(job)
             self._session.commit()
             return job
@@ -134,14 +138,20 @@ class JobRepository:
         kind: JobKind,
         template_id: str,
         target_source_id: str | None,
+        export_format: OutputFormat | None = None,
     ) -> Job:
         if kind in (JobKind.ASSEMBLE, JobKind.EXPORT) and target_source_id is not None:
             raise ValueError("Для задания сборки или экспорта нельзя указывать документ проверки")
+        if kind is JobKind.EXPORT and export_format is None:
+            raise ValueError("Для задания экспорта нужно указать формат")
+        if kind is not JobKind.EXPORT and export_format is not None:
+            raise ValueError("Формат экспорта можно указывать только для задания экспорта")
         return Job(
             project_id=project_id,
             kind=kind,
             template_id=template_id,
             target_source_id=target_source_id,
+            export_format=export_format,
             check_target_kind=(
                 None
                 if kind in (JobKind.ASSEMBLE, JobKind.EXPORT)
@@ -281,6 +291,30 @@ class JobRepository:
             job_id,
             allow_cancel_requested=True,
             warnings_json=json.dumps(deduplicated, ensure_ascii=False),
+            lease_expires_at=self._lease_expiry(now),
+            updated_at=now,
+        )
+
+    def record_export_result(self, job_id: str, result: ExportResult) -> Job:
+        """Attach a finished ExportResult to a still-RUNNING EXPORT job.
+
+        Mirrors `add_warnings`: it only ever updates the job's own
+        export-result columns while it is still RUNNING, exactly like an
+        export workflow calls `DocumentRepository.save_document`/
+        `save_report` mid-run for ASSEMBLE/CHECK. The subsequent, unrelated
+        `mark_succeeded()` call that `JobRunner` always makes after a
+        workflow returns does not touch these columns, so the values
+        recorded here survive the terminal transition untouched.
+        """
+        now = self._now()
+        return self._atomic_owned_update(
+            job_id,
+            allow_cancel_requested=True,
+            export_relative_path=result.relative_path,
+            export_filename=result.filename,
+            export_media_type=result.media_type,
+            export_size_bytes=result.size_bytes,
+            export_document_revision=result.document_revision,
             lease_expires_at=self._lease_expiry(now),
             updated_at=now,
         )
