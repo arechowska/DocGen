@@ -302,6 +302,22 @@ def test_assemble_prompt_tells_faq_to_convert_supported_facts_into_answers(
     assert "точной quote" in payload["инструкция_для_шаблона"]
 
 
+def test_assemble_prompt_tells_use_case_how_to_handle_branches(
+    blocks: list[NormalizedBlock],
+) -> None:
+    template = TemplateCatalog().get("use-case")
+
+    payload = json.loads(_assemble_prompt(template, blocks))
+
+    instruction = payload["инструкция_для_шаблона"].lower()
+    assert "правила сборки корпоративного сценария использования" in instruction
+    assert "одно наблюдаемое действие" in instruction
+    assert "как a1, a2" in instruction
+    assert "как e1, e2" in instruction
+    assert "missing-source-data" in instruction
+    assert "не включайте в готовый сценарий ссылки на источники" in instruction
+
+
 def test_assemble_publishes_normalization_warnings_before_model_call(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:
