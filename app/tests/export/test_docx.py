@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from docx import Document as OpenDocx
@@ -7,6 +8,7 @@ from docx.oxml.ns import qn
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.docx import DocxExporter, local_storage_image_loader
+from docgen.export.storage import ExportStorage
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
 from docgen.sources.storage import LocalStorage
 
@@ -495,3 +497,25 @@ def test_local_storage_image_loader_resolves_stored_image(tmp_path) -> None:
     content, media_type = result
     assert content == _PNG_BYTES
     assert media_type == "image/png"
+
+
+# --- filename byte-length safety (finding 6) -------------------------------
+
+
+def test_docx_long_cyrillic_title_produces_storable_filename(
+    docx_template: FormattingTemplate, tmp_path: Path
+) -> None:
+    """A 150+ character Cyrillic title must never produce a filename that
+    overflows the filesystem's 255-byte limit once ExportStorage appends
+    `-{template_id}` -- reproduced end-to-end via the real storage layer."""
+    long_title = "Очень длинное название регламента для банковского документа " * 4
+    assert len(long_title) > 150
+    document = WorkingDocument(title=long_title, template_id="colvir", nodes=[])
+
+    rendered = DocxExporter().render(document, docx_template)
+    storage = ExportStorage(tmp_path / "data")
+
+    stored = storage.save("proj-1", OutputFormat.DOCX, docx_template.id, rendered)
+
+    assert len(stored.filename.encode("utf-8")) <= 255
+    assert storage.resolve(stored.relative_path).is_file()

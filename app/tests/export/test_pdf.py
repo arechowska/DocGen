@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 from unittest.mock import patch
 
 import pymupdf
@@ -6,6 +7,7 @@ import pytest
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.pdf import ExportError, PdfExporter
+from docgen.export.storage import ExportStorage
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
 
 # A minimal valid 1x1 transparent PNG, used to exercise the "resolvable src"
@@ -366,7 +368,59 @@ def test_pdf_engine_failure_raises_export_error(pdf_template: FormattingTemplate
     exporter never writes to disk, so there is nothing to roll back)."""
     document = WorkingDocument(title="Документ", template_id="docgen-light-pdf", nodes=[])
 
-    with patch("docgen.export.pdf.HTML") as mock_html:
+    # HTML is now imported lazily inside render() (see docgen.export.pdf),
+    # so it must be patched on the real `weasyprint` module rather than as
+    # a `docgen.export.pdf.HTML` module attribute, which no longer exists.
+    with patch("weasyprint.HTML") as mock_html:
         mock_html.return_value.write_pdf.side_effect = RuntimeError("boom")
         with pytest.raises(ExportError, match="Не удалось сформировать PDF"):
             PdfExporter().render(document, pdf_template)
+
+
+# --- lazy import (worker-startup safety) ----------------------------------
+
+
+def test_pdf_module_import_does_not_require_weasyprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importing this module must never import weasyprint.
+
+    `docgen.jobs.worker` builds `default_exporters(...)` at worker startup
+    for every job kind (ASSEMBLE/CHECK/EXPORT), which imports every
+    exporter module including this one. WeasyPrint dlopen()s system
+    libraries (Pango/HarfBuzz) at *its own* import time -- if that ever
+    fails in some environment, it must only break PDF export, not crash the
+    whole worker process on boot. That guarantee only holds if importing
+    `docgen.export.pdf` itself never triggers `import weasyprint`.
+    """
+    import importlib
+    import sys
+
+    monkeypatch.delitem(sys.modules, "docgen.export.pdf", raising=False)
+    monkeypatch.delitem(sys.modules, "weasyprint", raising=False)
+
+    importlib.import_module("docgen.export.pdf")
+
+    assert "weasyprint" not in sys.modules
+
+
+# --- filename byte-length safety (finding 6) -------------------------------
+
+
+def test_pdf_long_cyrillic_title_produces_storable_filename(
+    pdf_template: FormattingTemplate, tmp_path: Path
+) -> None:
+    """A 150+ character Cyrillic title must never produce a filename that
+    overflows the filesystem's 255-byte limit once ExportStorage appends
+    `-{template_id}` -- reproduced end-to-end via the real storage layer."""
+    long_title = "Очень длинное название регламента для банковского документа " * 4
+    assert len(long_title) > 150
+    document = WorkingDocument(title=long_title, template_id="docgen-light-pdf", nodes=[])
+
+    rendered = PdfExporter().render(document, pdf_template)
+    storage = ExportStorage(tmp_path / "data")
+
+    stored = storage.save("proj-1", OutputFormat.PDF, pdf_template.id, rendered)
+
+    assert len(stored.filename.encode("utf-8")) <= 255
+    assert storage.resolve(stored.relative_path).is_file()

@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.markdown import MarkdownExporter
+from docgen.export.storage import ExportStorage
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
 
 
@@ -491,3 +494,152 @@ def test_markdown_renders_gap_with_children(
     # Both gap message and child should be present
     assert "> **Нет данных в источниках**" in text
     assert "Информация о пробеле" in text
+
+
+# --- images without a resolvable src (finding 4) --------------------------
+
+
+def test_markdown_image_without_src_renders_placeholder_with_caption(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """Production AI-assembled image nodes carry only `text` + provenance,
+    never `data.src`. Before the fix, this rendered a literal, meaningless
+    `![]()`, silently dropping the description entirely -- unlike
+    html.py/docx.py/pdf.py, which all render a placeholder plus the
+    caption text in this exact case."""
+    document = WorkingDocument(
+        title="Документ без источника изображения",
+        template_id="docgen-light-markdown",
+        nodes=[DocumentNode(kind=NodeKind.IMAGE, text="Схема архитектуры")],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    assert "![]()" not in text
+    assert "Схема архитектуры" in text
+
+
+def test_markdown_image_with_empty_string_src_renders_placeholder(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """An explicit empty-string src must be treated the same as a missing
+    one, not rendered as a broken `![alt]()` link."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.IMAGE, data={"src": "", "alt": "Логотип"}, text="Подпись"
+            )
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    assert "![" not in text
+    assert "Подпись" in text
+
+
+# --- heading level coercion (finding 5) ------------------------------------
+
+
+def test_markdown_heading_with_string_level_does_not_crash(
+    markdown_template: FormattingTemplate,
+) -> None:
+    """`data` is unvalidated LLM JSON -- a string level like "2" must be
+    coerced, not raise TypeError and fail the whole export job. docx.py/
+    html.py/pdf.py already tolerate this."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text="Заголовок", data={"level": "2"})
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    assert "## Заголовок" in text
+
+
+def test_markdown_heading_with_float_level_does_not_crash(
+    markdown_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text="Заголовок", data={"level": 2.0})
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    assert "## Заголовок" in text
+
+
+def test_markdown_heading_with_unparseable_level_defaults_to_one(
+    markdown_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING, text="Заголовок", data={"level": "не число"}
+            )
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    assert "# Заголовок" in text
+    assert "## Заголовок" not in text
+
+
+def test_markdown_heading_with_none_level_defaults_to_one(
+    markdown_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-markdown",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text="Заголовок", data={"level": None})
+        ],
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    text = rendered.content.decode("utf-8")
+
+    assert "# Заголовок" in text
+    assert "## Заголовок" not in text
+
+
+# --- filename byte-length safety (finding 6) -------------------------------
+
+
+def test_markdown_long_cyrillic_title_produces_storable_filename(
+    markdown_template: FormattingTemplate, tmp_path: Path
+) -> None:
+    """A 150+ character Cyrillic title (titles are allowed up to 200 chars
+    elsewhere in the app) must never produce a filename that overflows the
+    filesystem's 255-byte limit once ExportStorage appends
+    `-{template_id}` -- reproduced end-to-end via the real storage layer."""
+    long_title = "Очень длинное название регламента для банковского документа " * 4
+    assert len(long_title) > 150
+    document = WorkingDocument(
+        title=long_title, template_id="docgen-light-markdown", nodes=[]
+    )
+
+    rendered = MarkdownExporter().render(document, markdown_template)
+    storage = ExportStorage(tmp_path / "data")
+
+    stored = storage.save("proj-1", OutputFormat.MARKDOWN, markdown_template.id, rendered)
+
+    assert len(stored.filename.encode("utf-8")) <= 255
+    assert storage.resolve(stored.relative_path).is_file()

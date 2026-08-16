@@ -39,11 +39,13 @@ class Job(Base):
         CheckConstraint("progress BETWEEN 0 AND 100", name="job_progress_range"),
         CheckConstraint(
             "(kind = 'assemble' AND target_source_id IS NULL "
-            "AND check_target_kind IS NULL AND export_format IS NULL) OR "
+            "AND check_target_kind IS NULL AND export_format IS NULL "
+            "AND requested_document_revision IS NULL) OR "
             "(kind = 'check' AND check_target_kind IN ('current', 'source') "
-            "AND export_format IS NULL) OR "
+            "AND export_format IS NULL AND requested_document_revision IS NULL) OR "
             "(kind = 'export' AND target_source_id IS NULL "
-            "AND check_target_kind IS NULL AND export_format IS NOT NULL)",
+            "AND check_target_kind IS NULL AND export_format IS NOT NULL "
+            "AND requested_document_revision IS NOT NULL)",
             name="job_target_kind_matches_operation",
         ),
     )
@@ -101,6 +103,14 @@ class Job(Base):
     result_document_revision: Mapped[int | None] = mapped_column(Integer)
     result_report_revision: Mapped[int | None] = mapped_column(Integer)
     result_report_generation: Mapped[int | None] = mapped_column(Integer)
+    # The exact document revision the user submitted the export request
+    # against (captured at enqueue time, by export/routes.py). Read this --
+    # never the project's *current* revision -- when actually rendering:
+    # workflows.export.ExportWorkflow passes it straight through to
+    # ExportService.export(), which fails the job (rather than silently
+    # exporting a different revision) if the document has since changed
+    # underneath the queued job.
+    requested_document_revision: Mapped[int | None] = mapped_column(Integer)
     # Populated by JobRepository.record_export_result while an EXPORT job is
     # still RUNNING, straight from the ExportResult the export actually
     # produced. Unlike result_document_revision (which mark_succeeded fills

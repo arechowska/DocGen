@@ -17,6 +17,40 @@ def test_dockerfile_packages_docgen_runtime() -> None:
     assert 'CMD ["uvicorn", "docgen.main:app", "--host", "0.0.0.0", "--port", "8000"]' in dockerfile
 
 
+def test_dockerfile_installs_weasyprint_system_dependencies() -> None:
+    """WeasyPrint (the PDF exporter's rendering engine) dlopen()s Pango/
+    HarfBuzz at import time and does not ship them as Python wheels. Without
+    these apt packages, `docgen.jobs.worker` crashes on import (it builds
+    `default_exporters(...)` at startup, which imports `docgen.export.pdf`)
+    and the whole worker container -- not just PDF export -- fails to start.
+
+    Package names are WeasyPrint's own documented "Debian >= 11, installing
+    via pip wheels" set from doc.courtbouillon.org/weasyprint/stable/
+    first_steps.html, verified against python:3.12-slim's actual Debian
+    base (confirmed via Docker Hub image digests to be "trixie" as of this
+    writing) on packages.debian.org.
+    """
+    dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "apt-get update" in dockerfile
+    assert "apt-get install" in dockerfile
+    for package in (
+        "libpango-1.0-0",
+        "libpangoft2-1.0-0",
+        "libharfbuzz-subset0",
+    ):
+        assert package in dockerfile, f"missing required WeasyPrint dependency: {package}"
+
+    # apt-get install must run before the pip install of the app (which
+    # pulls in weasyprint) so the shared libraries exist before anything
+    # tries to import it, and the apt list cache must not be baked into
+    # the image layer.
+    assert dockerfile.index("apt-get install") < dockerfile.index(
+        "python -m pip install ."
+    )
+    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
+
+
 def test_docker_compose_runs_web_and_worker_from_one_image() -> None:
     compose = yaml.safe_load((REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 

@@ -90,11 +90,15 @@ def main() -> None:
                 instance_token=worker_instance_token,
                 lease_seconds=settings.worker_lease_seconds,
             )
+            formatting_template_dir = settings.formatting_template_dir or default_templates_dir()
             export_service = ExportService(
                 DocumentRepository(session),
-                FormattingCatalog(settings.formatting_template_dir or default_templates_dir()),
+                FormattingCatalog(formatting_template_dir),
                 ExportStorage(settings.data_dir),
-                default_exporters(image_loader=local_storage_image_loader(storage)),
+                default_exporters(
+                    image_loader=local_storage_image_loader(storage),
+                    templates_dir=formatting_template_dir,
+                ),
             )
             workflows = build_workflows(
                 settings,

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import base64
 import mimetypes
-import re
 from collections.abc import Callable
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
 from docgen.documents.schemas import WorkingDocument
+from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
 from docgen.sources.storage import LocalStorage
@@ -85,7 +85,9 @@ class HtmlExporter:
         )
 
         return RenderedFile(
-            filename=self._make_safe_filename(document.title),
+            filename=make_safe_filename(
+                document.title, ".html", reserved_suffix=f"-{template.id}"
+            ),
             media_type="text/html",
             content=html.encode("utf-8"),
         )
@@ -129,21 +131,6 @@ class HtmlExporter:
             return None
         encoded = base64.b64encode(content).decode("ascii")
         return f"data:{media_type};base64,{encoded}"
-
-    def _make_safe_filename(self, title: str) -> str:
-        """Create a filesystem-safe filename from a document title."""
-        safe_name = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ\s\-]", "", title)
-        safe_name = re.sub(r"\s+", "-", safe_name.strip())
-        safe_name = safe_name.strip("-")
-
-        if not safe_name:
-            safe_name = "document"
-
-        max_length = 240
-        if len(safe_name) > max_length:
-            safe_name = safe_name[:max_length]
-
-        return f"{safe_name}.html"
 
 
 def local_storage_image_loader(storage: LocalStorage) -> ImageLoader:

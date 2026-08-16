@@ -81,8 +81,16 @@ class JobRepository:
         *,
         target_source_id: str | None = None,
         export_format: OutputFormat | None = None,
+        requested_document_revision: int | None = None,
     ) -> Job:
-        job = self._new_job(project_id, kind, template_id, target_source_id, export_format)
+        job = self._new_job(
+            project_id,
+            kind,
+            template_id,
+            target_source_id,
+            export_format,
+            requested_document_revision,
+        )
         self._session.add(job)
         self._commit()
         return job
@@ -95,6 +103,7 @@ class JobRepository:
         *,
         target_source_id: str | None = None,
         export_format: OutputFormat | None = None,
+        requested_document_revision: int | None = None,
     ) -> Job:
         # Route validation performs reads first. End that deferred transaction,
         # then reserve the SQLite writer lock before checking and inserting so
@@ -124,7 +133,14 @@ class JobRepository:
                 .limit(1)
             ) is None:
                 raise JobTargetUnavailable("Документ для проверки не найден")
-            job = self._new_job(project_id, kind, template_id, target_source_id, export_format)
+            job = self._new_job(
+                project_id,
+                kind,
+                template_id,
+                target_source_id,
+                export_format,
+                requested_document_revision,
+            )
             self._session.add(job)
             self._session.commit()
             return job
@@ -139,6 +155,7 @@ class JobRepository:
         template_id: str,
         target_source_id: str | None,
         export_format: OutputFormat | None = None,
+        requested_document_revision: int | None = None,
     ) -> Job:
         if kind in (JobKind.ASSEMBLE, JobKind.EXPORT) and target_source_id is not None:
             raise ValueError("Для задания сборки или экспорта нельзя указывать документ проверки")
@@ -146,12 +163,19 @@ class JobRepository:
             raise ValueError("Для задания экспорта нужно указать формат")
         if kind is not JobKind.EXPORT and export_format is not None:
             raise ValueError("Формат экспорта можно указывать только для задания экспорта")
+        if kind is JobKind.EXPORT and requested_document_revision is None:
+            raise ValueError("Для задания экспорта нужно указать ревизию документа")
+        if kind is not JobKind.EXPORT and requested_document_revision is not None:
+            raise ValueError(
+                "Ревизию документа можно указывать только для задания экспорта"
+            )
         return Job(
             project_id=project_id,
             kind=kind,
             template_id=template_id,
             target_source_id=target_source_id,
             export_format=export_format,
+            requested_document_revision=requested_document_revision,
             check_target_kind=(
                 None
                 if kind in (JobKind.ASSEMBLE, JobKind.EXPORT)

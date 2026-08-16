@@ -6,6 +6,7 @@ import pytest
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.html import HtmlExporter, local_storage_image_loader
+from docgen.export.storage import ExportStorage
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
 from docgen.sources.storage import LocalStorage
 
@@ -420,3 +421,25 @@ def test_local_storage_image_loader_rejects_non_image_extension(tmp_path: Path) 
     loader = local_storage_image_loader(storage)
 
     assert loader(saved.relative_path) is None
+
+
+# --- filename byte-length safety (finding 6) -------------------------------
+
+
+def test_html_long_cyrillic_title_produces_storable_filename(
+    html_template: FormattingTemplate, tmp_path: Path
+) -> None:
+    """A 150+ character Cyrillic title must never produce a filename that
+    overflows the filesystem's 255-byte limit once ExportStorage appends
+    `-{template_id}` -- reproduced end-to-end via the real storage layer."""
+    long_title = "Очень длинное название регламента для банковского документа " * 4
+    assert len(long_title) > 150
+    document = WorkingDocument(title=long_title, template_id="docgen-light", nodes=[])
+
+    rendered = HtmlExporter().render(document, html_template)
+    storage = ExportStorage(tmp_path / "data")
+
+    stored = storage.save("proj-1", OutputFormat.HTML, html_template.id, rendered)
+
+    assert len(stored.filename.encode("utf-8")) <= 255
+    assert storage.resolve(stored.relative_path).is_file()

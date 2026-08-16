@@ -126,8 +126,16 @@ def _document() -> WorkingDocument:
     )
 
 
-def _claimed_export_job(jobs: JobRepository, project_id: str) -> Job:
-    jobs.enqueue(project_id, JobKind.EXPORT, "docgen-light", export_format=OutputFormat.HTML)
+def _claimed_export_job(
+    jobs: JobRepository, project_id: str, *, revision: int = 1
+) -> Job:
+    jobs.enqueue(
+        project_id,
+        JobKind.EXPORT,
+        "docgen-light",
+        export_format=OutputFormat.HTML,
+        requested_document_revision=revision,
+    )
     claimed = jobs.claim_next()
     assert claimed is not None
     return claimed
@@ -142,7 +150,7 @@ def _workflow(
     exporter: _FakeExporter,
 ) -> ExportWorkflow:
     service = ExportService(documents, catalog, storage, {OutputFormat.HTML: exporter})
-    return ExportWorkflow(projects=projects, documents=documents, service=service, jobs=jobs)
+    return ExportWorkflow(projects=projects, service=service, jobs=jobs)
 
 
 def test_export_workflow_renders_and_records_result(
@@ -231,13 +239,55 @@ def test_export_workflow_requires_document(
     jobs: JobRepository,
     project_id: str,
 ) -> None:
-    job = _claimed_export_job(jobs, project_id)
+    """No document was ever saved, so the requested revision can never be
+    found. `ExportService.export()` -- not this workflow -- is the sole
+    place that detects this (see `test_export_workflow_uses_requested_
+    revision_not_current_revision_at_run_time` below for why the workflow
+    must not duplicate that check itself), so it surfaces as the same
+    ExportError a mid-flight document change would."""
+    from docgen.export.protocol import ExportError
+
+    job = _claimed_export_job(jobs, project_id, revision=1)
     exporter = _FakeExporter(rendered=RenderedFile(filename="d.html", media_type="text/html", content=b"x"))
     workflow = _workflow(projects, documents, catalog, storage, jobs, exporter)
 
-    with pytest.raises(WorkflowError, match="Документ не найден"):
+    with pytest.raises(ExportError, match="Документ изменён; запустите экспорт повторно"):
         workflow.run(job, ProgressSpy())
 
+    assert exporter.calls == 0
+
+
+def test_export_workflow_uses_requested_revision_not_current_revision_at_run_time(
+    projects: ProjectRepository,
+    documents: DocumentRepository,
+    catalog: FormattingCatalog,
+    storage: ExportStorage,
+    jobs: JobRepository,
+    project_id: str,
+) -> None:
+    """Reproduces the finding-3 bug: a document is edited while an export
+    job for its earlier revision sits queued. The job must never silently
+    export whatever revision happens to be current when it finally runs --
+    it must fail loudly, using the exact revision requested at submit time.
+    """
+    from docgen.export.protocol import ExportError
+
+    documents.save_document(project_id, _document())  # revision 1
+    job = _claimed_export_job(jobs, project_id, revision=1)
+    assert job.requested_document_revision == 1
+
+    # The document changes while the job is still queued/running.
+    documents.save_document(project_id, _document())  # revision 2
+
+    exporter = _FakeExporter(
+        rendered=RenderedFile(filename="d.html", media_type="text/html", content=b"x")
+    )
+    workflow = _workflow(projects, documents, catalog, storage, jobs, exporter)
+
+    with pytest.raises(ExportError, match="Документ изменён; запустите экспорт повторно"):
+        workflow.run(job, ProgressSpy())
+
+    # Must never have rendered the (wrong, now-current) revision.
     assert exporter.calls == 0
 
 

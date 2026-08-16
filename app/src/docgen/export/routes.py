@@ -112,6 +112,7 @@ def start_export(
             JobKind.EXPORT,
             template_id,
             export_format=format,
+            requested_document_revision=revision,
         )
     except ActiveProjectJobExists:
         return _error_response(request, _PROJECT_ACTIVE_MESSAGE, status.HTTP_409_CONFLICT)

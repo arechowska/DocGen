@@ -106,13 +106,18 @@ def test_assemble_enqueue_rejects_target_source(job_repository: JobRepository) -
 
 def test_export_enqueue_has_no_check_target(job_repository: JobRepository) -> None:
     job = job_repository.enqueue(
-        "p1", JobKind.EXPORT, "docgen-light", export_format=OutputFormat.HTML
+        "p1",
+        JobKind.EXPORT,
+        "docgen-light",
+        export_format=OutputFormat.HTML,
+        requested_document_revision=1,
     )
 
     assert job.kind is JobKind.EXPORT
     assert job.target_source_id is None
     assert job.check_target_kind is None
     assert job.export_format is OutputFormat.HTML
+    assert job.requested_document_revision == 1
     assert job.status is JobStatus.QUEUED
 
 
@@ -129,7 +134,34 @@ def test_export_enqueue_rejects_target_source(job_repository: JobRepository) -> 
 
 def test_export_enqueue_requires_format(job_repository: JobRepository) -> None:
     with pytest.raises(ValueError, match="формат"):
-        job_repository.enqueue("p1", JobKind.EXPORT, "docgen-light")
+        job_repository.enqueue(
+            "p1", JobKind.EXPORT, "docgen-light", requested_document_revision=1
+        )
+
+
+def test_export_enqueue_requires_revision(job_repository: JobRepository) -> None:
+    with pytest.raises(ValueError, match="ревизию"):
+        job_repository.enqueue(
+            "p1", JobKind.EXPORT, "docgen-light", export_format=OutputFormat.HTML
+        )
+
+
+def test_assemble_enqueue_rejects_requested_document_revision(
+    job_repository: JobRepository,
+) -> None:
+    with pytest.raises(ValueError, match="экспорта"):
+        job_repository.enqueue(
+            "p1", JobKind.ASSEMBLE, "use-case", requested_document_revision=1
+        )
+
+
+def test_check_enqueue_rejects_requested_document_revision(
+    job_repository: JobRepository,
+) -> None:
+    with pytest.raises(ValueError, match="экспорта"):
+        job_repository.enqueue(
+            "p1", JobKind.CHECK, "use-case", requested_document_revision=1
+        )
 
 
 def test_assemble_enqueue_rejects_export_format(job_repository: JobRepository) -> None:
@@ -149,7 +181,13 @@ def test_check_enqueue_rejects_export_format(job_repository: JobRepository) -> N
 def test_record_export_result_persists_fields_while_job_stays_running(
     job_repository: JobRepository,
 ) -> None:
-    job_repository.enqueue("p1", JobKind.EXPORT, "docgen-light", export_format=OutputFormat.HTML)
+    job_repository.enqueue(
+        "p1",
+        JobKind.EXPORT,
+        "docgen-light",
+        export_format=OutputFormat.HTML,
+        requested_document_revision=1,
+    )
     claimed = job_repository.claim_next()
     assert claimed is not None
 

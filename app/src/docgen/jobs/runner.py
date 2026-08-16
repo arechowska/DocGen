@@ -307,7 +307,6 @@ def build_workflows(
     if dependencies.jobs is not None and dependencies.export_service is not None:
         workflows[JobKind.EXPORT] = ExportWorkflow(
             projects=dependencies.projects,
-            documents=dependencies.documents,
             service=dependencies.export_service,
             jobs=dependencies.jobs,
         )

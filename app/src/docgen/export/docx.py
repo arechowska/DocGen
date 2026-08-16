@@ -9,7 +9,6 @@ writes back to it -- the shared template file is never mutated in place.
 
 from __future__ import annotations
 
-import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -19,6 +18,7 @@ from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.export._naming import make_safe_filename
 from docgen.export.html import ImageAsset, ImageLoader, local_storage_image_loader
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
@@ -116,7 +116,9 @@ class DocxExporter:
         docx_document.save(buffer)
 
         return RenderedFile(
-            filename=self._make_safe_filename(document.title),
+            filename=make_safe_filename(
+                document.title, ".docx", reserved_suffix=f"-{template.id}"
+            ),
             media_type=_MEDIA_TYPE,
             content=buffer.getvalue(),
         )
@@ -422,19 +424,3 @@ class DocxExporter:
         num_pr.append(num_id_element)
         p_pr.append(num_pr)
 
-    # --- filename ------------------------------------------------------
-
-    def _make_safe_filename(self, title: str) -> str:
-        """Create a filesystem-safe filename from a document title."""
-        safe_name = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ\s\-]", "", title)
-        safe_name = re.sub(r"\s+", "-", safe_name.strip())
-        safe_name = safe_name.strip("-")
-
-        if not safe_name:
-            safe_name = "document"
-
-        max_length = 240
-        if len(safe_name) > max_length:
-            safe_name = safe_name[:max_length]
-
-        return f"{safe_name}.docx"

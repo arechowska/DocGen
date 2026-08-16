@@ -380,7 +380,11 @@ def _make_export_job(
     with _session(client) as session:
         repository = JobRepository(session, worker_id="route-test-worker")
         job = repository.enqueue(
-            project_id, JobKind.EXPORT, "docgen-light", export_format=OutputFormat.DOCX
+            project_id,
+            JobKind.EXPORT,
+            "docgen-light",
+            export_format=OutputFormat.DOCX,
+            requested_document_revision=1,
         )
         if state == "queued":
             session.expunge(job)

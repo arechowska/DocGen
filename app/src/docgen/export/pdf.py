@@ -12,12 +12,10 @@ print-specific rasterization step.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-from weasyprint import HTML
-
 from docgen.documents.schemas import WorkingDocument
+from docgen.export._naming import make_safe_filename
 from docgen.export.html import HtmlExporter, ImageAsset, ImageLoader, local_storage_image_loader
 from docgen.export.protocol import ExportError, RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
@@ -86,28 +84,26 @@ class PdfExporter:
         html_rendered = self._html_exporter.render(document, template)
         html = html_rendered.content.decode("utf-8")
 
+        # Imported lazily (not at module scope) so that merely *importing*
+        # this module -- which `export.service.default_exporters()` does at
+        # worker startup for every job kind, not just EXPORT -- never
+        # requires WeasyPrint's system libraries (Pango/HarfBuzz, loaded via
+        # dlopen at import time) to be present. If they're ever missing in
+        # some environment, only a PDF render fails here; ASSEMBLE/CHECK and
+        # the other export formats are unaffected. The Dockerfile is the
+        # primary fix (it installs those libraries); this is defense in
+        # depth on top of that.
         try:
+            from weasyprint import HTML
+
             pdf_bytes = HTML(string=html, base_url=str(self._templates_dir)).write_pdf()
         except Exception as exc:
             raise ExportError("Не удалось сформировать PDF") from exc
 
         return RenderedFile(
-            filename=self._make_safe_filename(document.title),
+            filename=make_safe_filename(
+                document.title, ".pdf", reserved_suffix=f"-{template.id}"
+            ),
             media_type=_MEDIA_TYPE,
             content=pdf_bytes,
         )
-
-    def _make_safe_filename(self, title: str) -> str:
-        """Create a filesystem-safe filename from a document title."""
-        safe_name = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ\s\-]", "", title)
-        safe_name = re.sub(r"\s+", "-", safe_name.strip())
-        safe_name = safe_name.strip("-")
-
-        if not safe_name:
-            safe_name = "document"
-
-        max_length = 240
-        if len(safe_name) > max_length:
-            safe_name = safe_name[:max_length]
-
-        return f"{safe_name}.pdf"

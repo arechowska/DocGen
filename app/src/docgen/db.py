@@ -145,6 +145,7 @@ def _migrate_jobs(connection: Connection) -> None:
         "result_report_revision": "INTEGER",
         "result_report_generation": "INTEGER",
         "export_format": "VARCHAR(20)",
+        "requested_document_revision": "INTEGER",
         "export_relative_path": "VARCHAR(1024)",
         "export_filename": "VARCHAR(255)",
         "export_media_type": "VARCHAR(255)",

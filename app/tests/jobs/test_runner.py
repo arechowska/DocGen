@@ -46,9 +46,14 @@ def enqueue(
     session_factory: sessionmaker[Session], kind: JobKind = JobKind.ASSEMBLE
 ) -> Job:
     export_format = OutputFormat.HTML if kind is JobKind.EXPORT else None
+    requested_document_revision = 1 if kind is JobKind.EXPORT else None
     with session_factory() as session:
         return JobRepository(session, worker_id="producer").enqueue(
-            "p1", kind, "use-case", export_format=export_format
+            "p1",
+            kind,
+            "use-case",
+            export_format=export_format,
+            requested_document_revision=requested_document_revision,
         )
 
 
@@ -635,4 +640,55 @@ def test_production_worker_processes_registered_workflow_instead_of_leaving_job_
         assert persisted_job is not None
         assert persisted_job.status is JobStatus.FAILED
         assert persisted_job.error_message == "Локальные модели не настроены"
+    factory.kw["bind"].dispose()
+
+
+def test_production_worker_threads_formatting_template_dir_into_exporters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings.formatting_template_dir is the documented operator override
+    for a custom template *catalog* directory. Before this fix,
+    docgen.jobs.worker.main() honored it for the FormattingCatalog (used to
+    look up which templates exist) but not for default_exporters(...) (used
+    to actually render them) -- so a custom catalog's templates would be
+    listed and accepted by the UI, then either fail or silently render with
+    the built-in asset on a name collision once a job actually ran.
+    """
+    custom_templates_dir = tmp_path / "custom-templates"
+    custom_templates_dir.mkdir()
+
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'custom-template-worker.db'}",
+        data_dir=tmp_path / "data",
+        formatting_template_dir=custom_templates_dir,
+        local_text_base_url=None,
+        local_text_model=None,
+        local_vision_base_url=None,
+        local_vision_model=None,
+    )
+    factory = sessionmaker(
+        create_engine(settings.database_url, connect_args={"check_same_thread": False}),
+        expire_on_commit=False,
+    )
+    Base.metadata.create_all(factory.kw["bind"])
+
+    captured: dict[str, Any] = {}
+    real_default_exporters = worker_module.default_exporters
+
+    def spying_default_exporters(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return real_default_exporters(**kwargs)
+
+    def run_one_job(runner: JobRunner, stop_event: Any) -> None:
+        del runner, stop_event
+
+    monkeypatch.setattr(worker_module, "Settings", lambda: settings)
+    monkeypatch.setattr(worker_module, "default_exporters", spying_default_exporters)
+    monkeypatch.setattr(worker_module, "run_worker", run_one_job)
+    monkeypatch.setenv("DOCGEN_WORKER_ID", "worker-slot-test")
+
+    worker_module.main()
+
+    assert captured.get("templates_dir") == custom_templates_dir
     factory.kw["bind"].dispose()

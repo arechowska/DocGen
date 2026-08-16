@@ -1,10 +1,15 @@
 """Markdown exporter for rendering WorkingDocuments as Markdown text."""
 
-import re
-
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
+
+# Shared with html.py/docx.py/pdf.py's identical wording for the same
+# situation: an image node with no locally-resolvable `src` (the dominant
+# production case for AI-assembled documents, whose IMAGE nodes carry only
+# `text` + provenance, never `data.src`).
+_IMAGE_PLACEHOLDER_MESSAGE = "Изображение или схема"
 
 
 class MarkdownExporter:
@@ -17,8 +22,8 @@ class MarkdownExporter:
 
         Args:
             document: The WorkingDocument to render.
-            template: The FormattingTemplate (currently unused but included for
-                protocol compatibility).
+            template: The FormattingTemplate naming the id folded into the
+                on-disk filename by ExportStorage.
 
         Returns:
             RenderedFile with Markdown content.
@@ -40,7 +45,9 @@ class MarkdownExporter:
             content = "\n"
 
         # Create filesystem-safe filename from document title
-        filename = self._make_safe_filename(document.title)
+        filename = make_safe_filename(
+            document.title, ".md", reserved_suffix=f"-{template.id}"
+        )
 
         return RenderedFile(
             filename=filename,
@@ -96,9 +103,7 @@ class MarkdownExporter:
 
     def _render_heading(self, node: DocumentNode) -> str:
         """Render a heading node."""
-        level = node.data.get("level", 1)
-        # Clamp level between 1 and 6
-        level = max(1, min(6, level))
+        level = self._coerce_heading_level(node.data.get("level", 1))
         prefix = "#" * level
         text = node.text or ""
 
@@ -106,6 +111,24 @@ class MarkdownExporter:
         result += self._render_children(node)
 
         return result
+
+    @staticmethod
+    def _coerce_heading_level(value: object) -> int:
+        """Coerce a heading `level` to an int in [1, 6].
+
+        `data` comes straight from the LLM's JSON payload -- its envelope is
+        validated but `data` itself is not, so `level` can arrive as
+        `"2"` (string) or `2.0` (float) as well as a plain int. The other
+        three exporters already tolerate this (html.py/pdf.py via Jinja's
+        `|int(1)` filter, docx.py via an isinstance check); unlike a bare
+        `max(1, min(6, level))`, this must never raise `TypeError` on a
+        non-numeric `level` and fail the whole export job.
+        """
+        try:
+            level = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            level = 1
+        return max(1, min(6, level))
 
     def _render_paragraph(self, node: DocumentNode) -> str:
         """Render a paragraph node."""
@@ -192,11 +215,27 @@ class MarkdownExporter:
         return result
 
     def _render_image(self, node: DocumentNode) -> str:
-        """Render an image node."""
+        """Render an image node.
+
+        When `src` is present, renders a normal Markdown image link (the
+        alt text is used as-is). Otherwise -- the dominant production case
+        for AI-assembled documents, whose IMAGE nodes carry only `text` +
+        provenance, never `data.src` -- a literal `![]()` would be a
+        meaningless, broken link that silently drops the description
+        entirely. Instead, mirror html.py/docx.py/pdf.py's placeholder
+        convention and surface `node.text` as a caption underneath it, so
+        the description always survives the export.
+        """
         src = node.data.get("src", "")
         alt = node.data.get("alt", "")
 
-        result = f"![{alt}]({src})"
+        if isinstance(src, str) and src:
+            image_part = f"![{alt}]({src})"
+        else:
+            image_part = f"*{_IMAGE_PLACEHOLDER_MESSAGE}*"
+
+        caption = node.text or ""
+        result = f"{image_part}\n\n{caption}" if caption else image_part
         result += self._render_children(node)
 
         return result
@@ -213,30 +252,3 @@ class MarkdownExporter:
         result += self._render_children(node)
 
         return result
-
-    def _make_safe_filename(self, title: str) -> str:
-        """Create a filesystem-safe filename from a document title.
-
-        Args:
-            title: The document title.
-
-        Returns:
-            A filesystem-safe filename ending in .md
-        """
-        # Replace non-alphanumeric characters (except spaces and hyphens) with hyphens
-        safe_name = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ\s\-]", "", title)
-        # Replace multiple spaces with single hyphen
-        safe_name = re.sub(r"\s+", "-", safe_name.strip())
-        # Remove leading/trailing hyphens
-        safe_name = safe_name.strip("-")
-
-        # If name is empty, use default
-        if not safe_name:
-            safe_name = "document"
-
-        # Truncate to reasonable length (255 - .md = 252 chars max)
-        max_length = 240  # Leave some buffer
-        if len(safe_name) > max_length:
-            safe_name = safe_name[:max_length]
-
-        return f"{safe_name}.md"
