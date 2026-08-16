@@ -21,6 +21,7 @@ from docgen.ai.grounding import GroundingValidator
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
 from docgen.export.protocol import ExportError
+from docgen.export.service import ExportService
 from docgen.extraction.registry import ExtractionError
 from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import TemplateCatalog
@@ -65,6 +66,13 @@ class WorkflowDependencies:
     normalization: NormalizationWorkflow
     templates: TemplateCatalog
     documents: DocumentRepository
+    # Both optional so existing callers that only need ASSEMBLE/CHECK (e.g.
+    # tests exercising `build_workflows` directly) keep working unchanged.
+    # `jobs` must be the *same* JobRepository instance (matching worker id
+    # /instance token) that JobRunner uses to claim jobs -- see
+    # `docgen.workflows.export.ExportWorkflow`.
+    jobs: JobRepository | None = None
+    export_service: ExportService | None = None
 
 
 class _ProductionTextModel:
@@ -278,6 +286,7 @@ def build_workflows(
 ) -> dict[JobKind, JobWorkflow]:
     from docgen.workflows.assemble import AssembleWorkflow
     from docgen.workflows.check import CheckWorkflow
+    from docgen.workflows.export import ExportWorkflow
 
     text_model = _ProductionTextModel(settings)
     vision_model = _ProductionVisionModel(settings)
@@ -291,10 +300,18 @@ def build_workflows(
         "grounding": grounding,
         "documents": dependencies.documents,
     }
-    return {
+    workflows: dict[JobKind, JobWorkflow] = {
         JobKind.ASSEMBLE: AssembleWorkflow(**shared),
         JobKind.CHECK: CheckWorkflow(**shared),
     }
+    if dependencies.jobs is not None and dependencies.export_service is not None:
+        workflows[JobKind.EXPORT] = ExportWorkflow(
+            projects=dependencies.projects,
+            documents=dependencies.documents,
+            service=dependencies.export_service,
+            jobs=dependencies.jobs,
+        )
+    return workflows
 
 
 __all__ = [

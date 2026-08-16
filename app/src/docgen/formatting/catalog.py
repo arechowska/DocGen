@@ -13,6 +13,18 @@ class FormattingTemplateError(ValueError):
     """Raised when a formatting template catalog cannot be loaded safely."""
 
 
+def default_templates_dir() -> Path:
+    """Return the built-in formatting template catalog directory.
+
+    This is the same `formatting/templates` directory the export renderers
+    (`docgen.export.html`/`docx`/`pdf`) fall back to for their own assets, so
+    routes and the export workflow can build a `FormattingCatalog` over
+    exactly the templates those renderers know how to load, unless an
+    operator overrides it via `Settings.formatting_template_dir`.
+    """
+    return Path(__file__).resolve().parent / "templates"
+
+
 class _StrictYamlLoader(yaml.SafeLoader):
     pass
 

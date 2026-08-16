@@ -8,6 +8,7 @@ from .chat.routes import router as chat_router
 from .config import Settings
 from .db import build_session_factory, initialize_database
 from .editor.routes import router as editor_router
+from .export.routes import router as export_router
 from .generation.routes import router as generation_router
 from .jobs.models import Job  # noqa: F401
 from .projects.models import Project  # noqa: F401
@@ -60,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(sources_router)
     app.include_router(generation_router)
     app.include_router(editor_router)
+    app.include_router(export_router)
     app.include_router(chat_router)
     app.include_router(projects_router)
 

@@ -11,8 +11,12 @@ from uuid import uuid4
 from docgen.config import Settings
 from docgen.db import build_session_factory, initialize_database
 from docgen.documents.repository import DocumentRepository
+from docgen.export.html import local_storage_image_loader
+from docgen.export.service import ExportService, default_exporters
+from docgen.export.storage import ExportStorage
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractorRegistry
+from docgen.formatting.catalog import FormattingCatalog, default_templates_dir
 from docgen.projects.models import Project  # noqa: F401
 from docgen.projects.repository import ProjectRepository
 from docgen.sources.repository import SourceRepository
@@ -80,6 +84,18 @@ def main() -> None:
                 ExtractorRegistry.default(settings),
                 ConfluenceClient.from_settings(settings),
             )
+            jobs_repository = JobRepository(
+                session,
+                worker_id=worker_id,
+                instance_token=worker_instance_token,
+                lease_seconds=settings.worker_lease_seconds,
+            )
+            export_service = ExportService(
+                DocumentRepository(session),
+                FormattingCatalog(settings.formatting_template_dir or default_templates_dir()),
+                ExportStorage(settings.data_dir),
+                default_exporters(image_loader=local_storage_image_loader(storage)),
+            )
             workflows = build_workflows(
                 settings,
                 WorkflowDependencies(
@@ -87,15 +103,12 @@ def main() -> None:
                     normalization=normalization,
                     templates=TemplateCatalog(external_directory=settings.template_dir),
                     documents=DocumentRepository(session),
+                    jobs=jobs_repository,
+                    export_service=export_service,
                 ),
             )
             runner = JobRunner(
-                JobRepository(
-                    session,
-                    worker_id=worker_id,
-                    instance_token=worker_instance_token,
-                    lease_seconds=settings.worker_lease_seconds,
-                ),
+                jobs_repository,
                 workflows,
                 max_job_seconds=settings.max_job_seconds,
             )

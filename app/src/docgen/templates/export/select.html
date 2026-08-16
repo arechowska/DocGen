@@ -1,0 +1,46 @@
+<section
+  class="mt-6 rounded-2xl border border-[#d6e5f8] bg-[#f4f7fa] p-4"
+  id="export-panel"
+  aria-label="Экспорт документа"
+>
+  <p class="docgen-eyebrow">Экспорт</p>
+  <h2 class="mt-1 text-lg font-semibold text-[#202428]">Скачать документ</h2>
+  <form
+    id="export-form"
+    class="mt-3 flex flex-wrap items-end gap-3"
+    hx-post="/projects/{{ project_id }}/export"
+    hx-target="#export-result"
+    hx-swap="innerHTML"
+  >
+    <label class="flex flex-col text-sm text-[#5f6873]">
+      <span>Формат</span>
+      <select
+        class="rounded-2xl border border-[#d6e5f8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
+        name="format"
+        hx-get="/projects/{{ project_id }}/export/templates"
+        hx-trigger="load, change"
+        hx-target="#export-template-select"
+        hx-swap="innerHTML"
+      >
+        {% for value, label in [("docx", "DOCX"), ("html", "HTML"), ("pdf", "PDF"), ("markdown", "Markdown")] %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="flex flex-col text-sm text-[#5f6873]">
+      <span>Шаблон</span>
+      <div id="export-template-select">
+        <select
+          class="rounded-2xl border border-[#d6e5f8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
+          name="template_id"
+          disabled
+        >
+          <option>Загрузка…</option>
+        </select>
+      </div>
+    </label>
+    <input type="hidden" name="revision" value="{{ revision }}">
+    <button class="docgen-primary-button" type="submit">Экспортировать</button>
+  </form>
+  <div id="export-result" class="mt-3" aria-live="polite"></div>
+</section>

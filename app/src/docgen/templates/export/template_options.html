@@ -1,0 +1,12 @@
+<select
+  class="rounded-2xl border border-[#d6e5f8] px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#1b5eaa]"
+  name="template_id"
+  {% if not templates %}disabled{% endif %}
+>
+  {% if not templates %}
+    <option value="">Нет доступных шаблонов</option>
+  {% endif %}
+  {% for template in templates %}
+    <option value="{{ template.id }}">{{ template.name }}</option>
+  {% endfor %}
+</select>

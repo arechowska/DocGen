@@ -44,10 +44,18 @@ class Settings(BaseSettings):
     max_model_request_bytes: int = Field(default=20_971_520, gt=0)
     max_job_seconds: int = Field(default=300, gt=0)
     template_dir: Path | None = None
+    formatting_template_dir: Path | None = None
 
     @field_validator("template_dir")
     @classmethod
     def resolve_template_dir(cls, value: Path | None) -> Path | None:
+        if value is None or value.is_absolute():
+            return value
+        return repository_root() / value
+
+    @field_validator("formatting_template_dir")
+    @classmethod
+    def resolve_formatting_template_dir(cls, value: Path | None) -> Path | None:
         if value is None or value.is_absolute():
             return value
         return repository_root() / value
