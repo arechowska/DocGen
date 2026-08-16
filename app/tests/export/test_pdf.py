@@ -38,6 +38,18 @@ def pdf_template() -> FormattingTemplate:
 
 
 @pytest.fixture
+def colvir_pdf_template() -> FormattingTemplate:
+    """The real Colvir-branded PDF template/CSS pair, loaded from the catalog dir."""
+    return FormattingTemplate(
+        id="colvir",
+        name="Фирменный стиль Colvir",
+        format=OutputFormat.PDF,
+        renderer=OutputFormat.PDF,
+        assets=["colvir-pdf.html.j2", "colvir-pdf.css"],
+    )
+
+
+@pytest.fixture
 def document_all_kinds() -> WorkingDocument:
     """A document exercising every supported node kind, mirroring the other
     exporters' `document_all_kinds` fixture (see test_markdown.py)."""
@@ -95,6 +107,18 @@ def test_pdf_has_valid_header_and_expected_text(
     text = _open_pdf_text(rendered.content)
     assert "Заголовок" in text
     assert "DocGen" in text
+
+
+def test_colvir_pdf_has_valid_header_and_expected_text(
+    document_all_kinds: WorkingDocument, colvir_pdf_template: FormattingTemplate
+) -> None:
+    rendered = PdfExporter(image_loader=fake_image_loader).render(
+        document_all_kinds, colvir_pdf_template
+    )
+    assert rendered.content.startswith(b"%PDF-")
+    text = _open_pdf_text(rendered.content)
+    assert "Заголовок" in text
+    assert "Colvir" in text
 
 
 def test_pdf_filename_and_media_type(pdf_template: FormattingTemplate) -> None:

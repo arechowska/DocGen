@@ -1,0 +1,15 @@
+{% import "docgen-light.html.j2" as html_base with context %}
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ document.title }}</title>
+    <style>{{ css|safe }}</style>
+  </head>
+  <body>
+    <main class="dg-document">
+      <h1 class="dg-title">{{ document.title }}</h1>
+      {% for node in document.nodes %}{{ html_base.render_node(node) }}{% endfor %}
+    </main>
+  </body>
+</html>

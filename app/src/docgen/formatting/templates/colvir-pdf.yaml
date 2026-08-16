@@ -1,0 +1,8 @@
+id: colvir
+name: "Фирменный стиль Colvir"
+format: pdf
+renderer: pdf
+assets:
+  - colvir-pdf.html.j2
+  - colvir-pdf.css
+options: {}

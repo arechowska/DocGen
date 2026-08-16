@@ -1,0 +1,221 @@
+/* Colvir -- PDF print theme (colvir-pdf). Palette/typography taken from the
+   actual named paragraph styles inside colvir.docx (styles.xml + theme1.xml),
+   not invented: brand blue #1561AD (Heading 1-3, matches #1461AF on the
+   cover title), secondary blue #2F5496 (Heading 4-5), body text unstyled in
+   the template (plain black, theme font). The .docx theme's own Latin
+   typeface is Segoe UI, but it's a proprietary Microsoft font that won't be
+   installed on the Linux container this renders in -- WeasyPrint's fallback
+   for a missing family isn't graceful (it visibly widens letter-spacing
+   instead of just substituting), so this reuses docgen-light-pdf.css's
+   already-verified-safe font stack instead of the exact brand typeface.
+   Structural rules (paged A4, colontitles, break-inside guards) are
+   unchanged from docgen-light-pdf.css -- only color and typography differ.
+   Shares dg-* class names with docgen-light.css/html.j2 because
+   colvir-pdf.html.j2 renders through the very same render_node Jinja macro
+   (imported, not copied). */
+
+:root {
+  --dg-bg: #ffffff;
+  --dg-surface: #eaf2fa;
+  --dg-text: #1a1a1a;
+  --dg-text-secondary: #5b6b7a;
+  --dg-accent: #1561ad;
+  --dg-accent-secondary: #2f5496;
+  --dg-border: #c7d9ec;
+}
+
+@page {
+  size: A4;
+  margin: 20mm;
+
+  @top-center {
+    content: "Colvir";
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 9pt;
+    color: var(--dg-text-secondary);
+  }
+
+  @bottom-center {
+    content: counter(page) " / " counter(pages);
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 9pt;
+    color: var(--dg-text-secondary);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--dg-bg);
+  color: var(--dg-text);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 11pt;
+  line-height: 1.5;
+}
+
+.dg-document {
+  padding: 0;
+}
+
+.dg-title {
+  font-size: 30pt;
+  font-weight: 700;
+  color: var(--dg-accent);
+  margin: 0 0 6pt;
+  padding-top: 60pt;
+}
+
+.dg-node {
+  background: var(--dg-bg);
+  border: none;
+  border-bottom: 1px solid var(--dg-border);
+  border-radius: 0;
+  padding: 0 0 12pt;
+  margin-bottom: 12pt;
+  break-inside: avoid;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--dg-accent);
+  font-weight: 700;
+  margin-top: 0;
+  break-after: avoid;
+}
+
+h4,
+h5,
+h6 {
+  color: var(--dg-accent-secondary);
+  font-weight: 700;
+  margin-top: 0;
+  break-after: avoid;
+}
+
+h1 {
+  font-size: 16pt;
+}
+
+h2 {
+  font-size: 14pt;
+}
+
+h3 {
+  font-size: 12pt;
+}
+
+h4 {
+  font-size: 11pt;
+}
+
+h5 {
+  font-size: 10.5pt;
+}
+
+h6 {
+  font-size: 10pt;
+}
+
+p {
+  color: var(--dg-text);
+  white-space: pre-wrap;
+}
+
+.dg-caption {
+  color: var(--dg-text-secondary);
+  font-weight: 700;
+  font-size: 10pt;
+}
+
+ul,
+ol {
+  padding-left: 1.2cm;
+}
+
+.dg-table-wrap {
+  break-inside: avoid;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+  break-inside: avoid;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tr {
+  break-inside: avoid;
+}
+
+th,
+td {
+  border: 1px solid var(--dg-border);
+  padding: 4pt 6pt;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--dg-surface);
+  color: var(--dg-accent);
+  font-weight: 700;
+  font-size: 10pt;
+}
+
+.dg-image {
+  margin: 0;
+  break-inside: avoid;
+}
+
+.dg-image img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.dg-image-placeholder {
+  background: var(--dg-surface);
+  color: var(--dg-text-secondary);
+  padding: 12pt;
+  text-align: center;
+  font-weight: 700;
+}
+
+figcaption {
+  color: var(--dg-text-secondary);
+  font-weight: 700;
+  font-size: 10pt;
+  margin-top: 4pt;
+}
+
+.dg-gap {
+  display: block;
+  background: var(--dg-surface);
+  border: 1px dashed var(--dg-border);
+  padding: 8pt;
+  color: var(--dg-text);
+  break-inside: avoid;
+}
+
+.dg-children {
+  margin-top: 8pt;
+  padding-left: 8pt;
+  border-left: 2px solid var(--dg-border);
+}
+
+a {
+  color: var(--dg-accent);
+}
