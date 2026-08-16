@@ -206,7 +206,6 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     template_select = soup.find(id="templateSelect")
     assert template_select is not None
     assert not template_select.has_attr("disabled")
-    assert soup.find(id="formatSelect") is not None
     assert soup.find(id="buildButton") is not None
     assert soup.find(id="chat-panel") is None
 
@@ -289,6 +288,47 @@ def test_project_detail_embeds_editor_when_document_exists(client: TestClient) -
     assert table_menu.find("button", attrs={"data-table-action": "delete-column"}) is not None
     assert soup.find(id="editor-shell") is None
     assert soup.find(id="chatPanel") is not None
+
+
+def test_project_detail_result_panel_offers_export_without_a_submit_button(
+    client: TestClient,
+) -> None:
+    created = client.post("/projects", data={"name": "Экспорт"}, follow_redirects=False)
+    project_url = created.headers["location"]
+    project_id = project_url.rsplit("/", 1)[-1]
+    with client.app.state.session_factory() as session:
+        DocumentRepository(session).save_document(
+            project_id,
+            WorkingDocument(
+                title="FAQ",
+                template_id="faq",
+                nodes=[DocumentNode(id="intro", kind=NodeKind.PARAGRAPH, text="Введение")],
+            ),
+        )
+        session.commit()
+
+    response = client.get(project_url)
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find(id="formatSelect") is None
+
+    export_form = soup.find(id="export-form")
+    assert export_form is not None
+    format_select = export_form.find("select", attrs={"name": "format"})
+    assert format_select is not None
+    assert format_select.get("hx-trigger") == "load, change"
+    assert export_form.find("input", attrs={"name": "revision"}) is not None
+    assert export_form.find("button", attrs={"type": "submit"}) is None
+
+    result_actions = soup.find(class_="result-actions")
+    assert result_actions is not None
+    open_button = result_actions.find(id="openButton")
+    assert open_button is not None
+    assert open_button.get_text(strip=True).startswith("Открыть")
+    export_result = result_actions.find(id="export-result")
+    assert export_result is not None
+    assert "Скачать" in export_result.get_text(" ")
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

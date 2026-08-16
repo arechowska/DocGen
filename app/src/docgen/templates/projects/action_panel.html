@@ -56,20 +56,7 @@
             <span id="resultMeta">Текущий документ</span>
           </div>
         </div>
-        <div class="result-actions">
-          <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
-            <span>Открыть</span>
-            <span class="external-icon" aria-hidden="true"></span>
-          </a>
-        </div>
-
-        <form
-          id="export-form"
-          class="export-form"
-          hx-post="/projects/{{ project_id }}/export"
-          hx-target="#export-result"
-          hx-swap="innerHTML"
-        >
+        <form id="export-form" class="export-form">
           <label class="export-field">
             <span>Формат</span>
             <select
@@ -85,7 +72,7 @@
             </select>
           </label>
           <label class="export-field">
-            <span>Шаблон</span>
+            <span>Оформление</span>
             <div id="export-template-select">
               <select name="template_id" disabled>
                 <option>Загрузка…</option>
@@ -93,9 +80,20 @@
             </div>
           </label>
           <input type="hidden" name="revision" value="{{ revision }}">
-          <button class="button primary" type="submit">Экспортировать</button>
         </form>
-        <div id="export-result" class="export-result" aria-live="polite"></div>
+
+        <div class="result-actions">
+          <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
+            <span>Открыть</span>
+            <span class="external-icon" aria-hidden="true"></span>
+          </a>
+          <div id="export-result" class="export-result">
+            <button class="button primary" type="button" disabled>
+              <span>Скачать</span>
+              <span class="download-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
       </div>
     {% else %}
       <div id="resultEmpty" class="result-empty">Готовый файл появится после сборки.</div>

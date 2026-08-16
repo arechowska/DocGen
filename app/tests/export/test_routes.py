@@ -219,7 +219,7 @@ def test_export_status_reports_active_job(
     response = client.get(f"/projects/{project_with_document.id}/exports/{job.id}/status")
 
     assert response.status_code == 200
-    assert "Формирование файла" in response.text
+    assert "Формируется" in response.text
     assert f"/projects/{project_with_document.id}/exports/{job.id}/status" in response.text
 
 

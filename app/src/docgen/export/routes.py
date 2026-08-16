@@ -75,7 +75,7 @@ def export_templates(
     return templates.TemplateResponse(
         request=request,
         name="export/template_options.html",
-        context={"templates": catalog.list(format)},
+        context={"templates": catalog.list(format), "project_id": project_id},
     )
 
 
@@ -225,7 +225,7 @@ def _status_response(
 ) -> Response:
     return templates.TemplateResponse(
         request=request,
-        name="export/status.html",
+        name="export/download_button.html",
         context={
             "job": job,
             "is_active": job.status in _ACTIVE_STATUSES,

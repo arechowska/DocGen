@@ -147,7 +147,7 @@
 .topbar {
   min-height: 88px;
   display: grid;
-  grid-template-columns: minmax(210px, auto) minmax(240px, 1fr) minmax(160px, 220px) auto;
+  grid-template-columns: minmax(210px, auto) minmax(240px, 1fr) auto;
   align-items: center;
   gap: 24px;
   margin: 0 calc(-1 * var(--formatta-gutter));
@@ -1531,19 +1531,6 @@
   font-size: 11px;
 }
 
-.result-actions {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.result-actions .button {
-  min-height: 40px;
-  padding: 6px 12px;
-  font-size: 13px;
-}
-
 .export-form {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1576,21 +1563,31 @@
   box-shadow: 0 0 0 2px rgba(27, 94, 170, .28);
 }
 
-.export-form .button {
-  grid-column: 1 / -1;
+.result-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.result-actions .button {
+  width: 100%;
   min-height: 40px;
   padding: 6px 12px;
   font-size: 13px;
 }
 
 .export-result {
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--lk-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.export-result .docgen-primary-button {
-  display: inline-flex;
+.export-error-message {
+  margin: 0;
+  color: #b42318;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .external-icon {
@@ -1616,6 +1613,16 @@
   border-left: 2px solid currentColor;
 }
 
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(27, 94, 170, .22);
+  border-top-color: var(--lk-primary-hover);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -1634,14 +1641,8 @@
 
 @media (max-width: 1180px) {
   .topbar {
-    grid-template-columns: auto minmax(220px, 1fr) 150px;
+    grid-template-columns: auto minmax(220px, 1fr) auto;
     gap: 15px;
-  }
-
-  .topbar-actions {
-    grid-column: 2 / 4;
-    justify-self: stretch;
-    justify-content: flex-end;
   }
 
   .workspace {

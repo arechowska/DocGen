@@ -1,0 +1,31 @@
+{% if is_active %}
+  <button
+    class="button primary"
+    type="button"
+    disabled
+    hx-get="/projects/{{ job.project_id }}/exports/{{ job.id }}/status"
+    hx-trigger="every 2s"
+    hx-target="this"
+    hx-swap="outerHTML"
+  >
+    <span class="button-spinner" aria-hidden="true"></span>
+    <span>Формируется…</span>
+  </button>
+{% elif job.status.value == "succeeded" %}
+  <a class="button primary" href="/projects/{{ job.project_id }}/exports/{{ job.id }}/download">
+    <span>Скачать</span>
+    <span class="download-icon" aria-hidden="true"></span>
+  </a>
+{% elif safe_error %}
+  <p class="export-error-message">{{ safe_error }}</p>
+  <button
+    class="button primary"
+    type="button"
+    hx-post="/projects/{{ job.project_id }}/export"
+    hx-include="#export-form"
+    hx-target="#export-result"
+    hx-swap="innerHTML"
+  >Повторить экспорт</button>
+{% else %}
+  <button class="button secondary" type="button" disabled>Экспорт отменён</button>
+{% endif %}
