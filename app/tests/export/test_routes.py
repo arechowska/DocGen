@@ -129,6 +129,18 @@ def test_start_export_rejects_invalid_format_template_pair(
     assert _jobs_for_project(client, project_with_document.id) == []
 
 
+def test_start_export_rejects_unknown_format_value(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/export",
+        data={"format": "bogus", "template_id": "docgen-light", "revision": 1},
+    )
+
+    assert response.status_code == 422
+    assert _jobs_for_project(client, project_with_document.id) == []
+
+
 def test_start_export_rejects_stale_revision(
     client: TestClient, project_with_document: Project
 ) -> None:
