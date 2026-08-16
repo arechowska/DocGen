@@ -1,19 +1,45 @@
 template_id: use-case
 applicable_rule_ids:
   - use-case-structure
+  - use-case-flow-branches
   - use-case-completeness
+  - use-case-grounding
   - use-case-terminology
   - use-case-contradiction
+  - use-case-source-conflicts
   - use-case-style
+  - use-case-traceability
 required_nodes:
   - kind: heading
-    title: Участники
+    title: Краткое описание
+  - kind: heading
+    title: Область действия
+  - kind: heading
+    title: Уровень цели
+  - kind: heading
+    title: Основное действующее лицо
+  - kind: heading
+    title: Цель основного действующего лица
+  - kind: heading
+    title: Участники и интересы
   - kind: heading
     title: Предусловия
+  - kind: heading
+    title: Минимальные гарантии
+  - kind: heading
+    title: Инициируется
   - kind: heading
     title: Основной поток
   - kind: heading
     title: Результат
+  - kind: heading
+    title: Альтернативный вариант
+  - kind: heading
+    title: Исключения
+  - kind: heading
+    title: Открытые вопросы
+  - kind: heading
+    title: Термины и определения
 expected_gaps:
   - id: gap-notification-channel
     reason: Канал отдельного уведомления клиента не определён

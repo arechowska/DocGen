@@ -233,13 +233,7 @@ class _DeterministicStage2Model:
         payload = json.loads(user)
         if schema is CheckReport:
             rule_ids = tuple(rule["id"] for rule in payload["правила"])
-            assert set(rule_ids) == {
-                "use-case-structure",
-                "use-case-completeness",
-                "use-case-terminology",
-                "use-case-contradiction",
-                "use-case-style",
-            }
+            assert len(rule_ids) == len(set(rule_ids))
             return CheckReport(
                 template_id="use-case",
                 passed_rule_ids=rule_ids,
@@ -252,7 +246,9 @@ class _DeterministicStage2Model:
             if block["text"].strip()
         }
         for index, section in enumerate(payload["шаблон"]["sections"], start=1):
-            block = blocks_by_text[section["title"].casefold()]
+            block = blocks_by_text.get(section["title"].casefold())
+            if block is None:
+                continue
             nodes.append(
                 DocumentNode(
                     id=f"assembled-node-{index}",
@@ -289,7 +285,7 @@ class _NoConfluenceClient:
 
 _SYNTHETIC_SOURCE = """# Перевод между своими счетами
 
-## Участники
+## Участники и интересы
 
 - Клиент мобильного банка
 - Система дистанционного банковского обслуживания

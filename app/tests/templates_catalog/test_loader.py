@@ -92,7 +92,7 @@ def test_catalog_get_returns_template_by_id(catalog: TemplateCatalog) -> None:
     """Fails if lookup does not return the loaded semantic template."""
     template = catalog.get("use-case")
 
-    assert template.name == "Сценарий использования"
+    assert template.name == "Корпоративный сценарий использования Colvir"
     assert len(template.sections) >= 3
 
 

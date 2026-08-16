@@ -242,6 +242,187 @@ def _format_example(template: SemanticTemplate) -> str:
             ],
         }
         return json.dumps(example, ensure_ascii=False, indent=2)
+    if template.id == "use-case":
+        example = {
+            "title": "Название сценария по материалам источников",
+            "template_id": "use-case",
+            "nodes": [
+                {
+                    "kind": "paragraph",
+                    "section_id": "overview",
+                    "text": "Краткое назначение и границы сценария, подтверждённые источниками.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "scope",
+                    "text": "Процесс, продукт или система, к которым относится сценарий.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "primary-actor",
+                    "text": "Основное действующее лицо: подтверждённая роль или система.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "actor-goal",
+                    "text": "Цель основного действующего лица: наблюдаемый результат, подтверждённый источниками.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "actors",
+                    "text": "Участники и интересы",
+                    "data": {"items": ["Участник — подтверждённый интерес или ответственность"]},
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "preconditions",
+                    "text": "Условие, которое должно быть выполнено до начала сценария.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "minimum-guarantees",
+                    "text": "Минимальное безопасное состояние, подтверждённое источником.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "trigger",
+                    "text": "Событие или запрос, инициирующий сценарий.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "main-flow",
+                    "text": "Основной поток",
+                    "data": {"items": ["1. Участник выполняет действие. 2. Система отвечает подтверждённым действием."]},
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "result",
+                    "text": "Проверяемое состояние после успешного выполнения сценария.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "alternative-flow",
+                    "text": "Альтернативный вариант",
+                    "data": {"items": ["A1. Условие ветвления. Действие участника. Реакция системы. Возврат к шагу основного потока или завершение."]},
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "exceptions",
+                    "text": "Исключения",
+                    "data": {"items": ["E1. Ошибочное условие. Реакция системы. Безопасное состояние после прерывания."]},
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "paragraph",
+                    "section_id": "open-questions",
+                    "text": "Неразрешённый вопрос или недостающий факт из источников.",
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+                {
+                    "kind": "list",
+                    "section_id": "terms",
+                    "text": "Термины и определения",
+                    "data": {"items": ["Термин — подтверждённое определение"]},
+                    "provenance": [
+                        {
+                            "source_id": "<id исходного блока>",
+                            "locator": "<locator исходного блока>",
+                            "quote": "<точная цитата из блока>",
+                        }
+                    ],
+                },
+            ],
+        }
+        return json.dumps(example, ensure_ascii=False, indent=2)
     return (
         "Верните WorkingDocument с nodes, где каждый верхнеуровневый node содержит "
         "kind, section_id, text или data, а также provenance для всех фактических данных."
