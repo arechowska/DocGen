@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated
 from uuid import uuid4
 
@@ -158,14 +159,17 @@ def update_node_text(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Блок не найден",
         )
-    return templates.TemplateResponse(
-        request=request,
-        name="editor/node.html",
-        context={
-            "project_id": project_id,
-            "node": node,
-            "revision": result.revision,
-        },
+    return _with_document_updated_trigger(
+        templates.TemplateResponse(
+            request=request,
+            name="editor/node.html",
+            context={
+                "project_id": project_id,
+                "node": node,
+                "revision": result.revision,
+            },
+        ),
+        result.revision,
     )
 
 
@@ -307,6 +311,25 @@ async def update_image_node(
     )
 
 
+def _with_document_updated_trigger(response: Response, revision: int) -> Response:
+    """Attach the `docgen:document-updated` HX-Trigger header, exactly like
+    chat/routes.py already does after an AI edit.
+
+    docgen2-editor.js listens for this event and re-syncs every
+    `input[name="revision"]` on the page -- including the export panel's and
+    the chat panel's own hidden revision fields, both of which sit outside
+    `#editor-shell` and are otherwise never refreshed by a direct toolbar
+    edit. Without this, a toolbar edit (insert/delete/move/text/list/table
+    /image) leaves those fields stale, and the next export or chat message
+    incorrectly hits their conflict/stale-revision guard.
+    """
+    response.headers["HX-Trigger"] = json.dumps(
+        {"docgen:document-updated": {"revision": revision}},
+        ensure_ascii=False,
+    )
+    return response
+
+
 def _project_or_404(session: Session, project_id: str):
     project = ProjectRepository(session).get(project_id)
     if project is None:
@@ -350,14 +373,17 @@ def _apply_and_render_node(
     node = find_node(result.document, node_id)
     if node is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Блок не найден")
-    return templates.TemplateResponse(
-        request=request,
-        name="editor/node.html",
-        context={
-            "project_id": project_id,
-            "node": node,
-            "revision": result.revision,
-        },
+    return _with_document_updated_trigger(
+        templates.TemplateResponse(
+            request=request,
+            name="editor/node.html",
+            context={
+                "project_id": project_id,
+                "node": node,
+                "revision": result.revision,
+            },
+        ),
+        result.revision,
     )
 
 
@@ -390,14 +416,17 @@ def _apply_and_render_document(
         )
 
     session.commit()
-    return templates.TemplateResponse(
-        request=request,
-        name="editor/surface.html",
-        context={
-            "project_id": project_id,
-            "document": result.document,
-            "revision": result.revision,
-        },
+    return _with_document_updated_trigger(
+        templates.TemplateResponse(
+            request=request,
+            name="editor/surface.html",
+            context={
+                "project_id": project_id,
+                "document": result.document,
+                "revision": result.revision,
+            },
+        ),
+        result.revision,
     )
 
 

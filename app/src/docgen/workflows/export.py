@@ -72,7 +72,6 @@ class ExportWorkflow:
         )
 
         progress(100, "Сохранение файла экспорта")
-        progress.checkpoint()
         self._jobs.record_export_result(job.id, result)
         return result
 

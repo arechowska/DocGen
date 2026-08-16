@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -106,6 +107,34 @@ def test_start_export_enqueues_job(client: TestClient, project_with_document: Pr
     assert job.kind is JobKind.EXPORT
     assert job.export_format is OutputFormat.DOCX
     assert job.template_id == "docgen-light"
+
+
+def test_toolbar_edit_then_export_succeeds_with_updated_revision(
+    client: TestClient, project_with_document: Project
+) -> None:
+    """A direct editor-toolbar edit (not a chat edit) must also refresh the
+    export panel's hidden revision field, via the same `docgen:document
+    -updated` HX-Trigger chat/routes.py already sets. Before the fix,
+    editor/routes.py's toolbar mutation endpoints didn't set this header, so
+    the export form kept the pre-edit revision and the very next export
+    attempt would incorrectly 409 as "stale" even though the user had just
+    made an ordinary edit.
+    """
+    edit_response = client.patch(
+        f"/projects/{project_with_document.id}/editor/nodes/node-1/text",
+        data={"text": "Обновлённый текст", "revision": "1"},
+    )
+    assert edit_response.status_code == 200
+    trigger = json.loads(edit_response.headers["hx-trigger"])
+    updated_revision = trigger["docgen:document-updated"]["revision"]
+    assert updated_revision == 2
+
+    export_response = client.post(
+        f"/projects/{project_with_document.id}/export",
+        data={"format": "docx", "template_id": "docgen-light", "revision": updated_revision},
+    )
+
+    assert export_response.status_code == 202
 
 
 def test_start_export_for_unknown_project_returns_404(client: TestClient) -> None:

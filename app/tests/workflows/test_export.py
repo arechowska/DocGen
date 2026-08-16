@@ -167,7 +167,7 @@ def test_export_workflow_renders_and_records_result(
     assert exporter.calls == 1
     assert result.document_revision == 1
     assert result.filename == "document-docgen-light.html"
-    assert "checkpoint" in progress.events
+    assert "progress:100" in progress.events
     stored_job = jobs.get(job.id)
     assert stored_job is not None
     assert stored_job.export_relative_path == result.relative_path
