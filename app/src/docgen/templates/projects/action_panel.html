@@ -53,7 +53,7 @@
           <span id="resultFileIcon" class="result-file-icon">D</span>
           <div>
             <strong id="resultFilename">{{ document.title }}</strong>
-            <span id="resultMeta">DOCX · текущий документ</span>
+            <span id="resultMeta">Текущий документ</span>
           </div>
         </div>
         <div class="result-actions">
@@ -61,11 +61,41 @@
             <span>Открыть</span>
             <span class="external-icon" aria-hidden="true"></span>
           </a>
-          <a id="downloadButton" class="button primary" href="/projects/{{ project.id }}/document">
-            <span class="download-icon" aria-hidden="true"></span>
-            <span>Скачать</span>
-          </a>
         </div>
+
+        <form
+          id="export-form"
+          class="export-form"
+          hx-post="/projects/{{ project_id }}/export"
+          hx-target="#export-result"
+          hx-swap="innerHTML"
+        >
+          <label class="export-field">
+            <span>Формат</span>
+            <select
+              name="format"
+              hx-get="/projects/{{ project_id }}/export/templates"
+              hx-trigger="load, change"
+              hx-target="#export-template-select"
+              hx-swap="innerHTML"
+            >
+              {% for value, label in [("docx", "DOCX"), ("html", "HTML"), ("pdf", "PDF"), ("markdown", "Markdown")] %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="export-field">
+            <span>Шаблон</span>
+            <div id="export-template-select">
+              <select name="template_id" disabled>
+                <option>Загрузка…</option>
+              </select>
+            </div>
+          </label>
+          <input type="hidden" name="revision" value="{{ revision }}">
+          <button class="button primary" type="submit">Экспортировать</button>
+        </form>
+        <div id="export-result" class="export-result" aria-live="polite"></div>
       </div>
     {% else %}
       <div id="resultEmpty" class="result-empty">Готовый файл появится после сборки.</div>

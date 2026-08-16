@@ -1326,7 +1326,8 @@
 }
 
 .faq-question-list li {
-  margin-bottom: 16px;
+  margin-bottom: 28px;
+  line-height: 1.6;
 }
 
 .document-canvas a {
@@ -1532,7 +1533,7 @@
 
 .result-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   margin-top: 12px;
 }
@@ -1541,6 +1542,55 @@
   min-height: 40px;
   padding: 6px 12px;
   font-size: 13px;
+}
+
+.export-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.export-field {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lk-title);
+}
+
+.export-field select {
+  height: 38px;
+  padding: 0 9px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--lk-ink);
+  background: var(--lk-surface-soft);
+  border: 1px solid var(--lk-border);
+  border-radius: var(--lk-radius-control);
+  outline: 0;
+}
+
+.export-field select:focus {
+  border-color: var(--lk-primary);
+  box-shadow: 0 0 0 2px rgba(27, 94, 170, .28);
+}
+
+.export-form .button {
+  grid-column: 1 / -1;
+  min-height: 40px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.export-result {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--lk-text-muted);
+}
+
+.export-result .docgen-primary-button {
+  display: inline-flex;
 }
 
 .external-icon {

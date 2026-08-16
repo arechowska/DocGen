@@ -1,7 +1,7 @@
 # Vendored UI dependencies
 
 - `htmx-2.0.8.min.js`: `htmx.org@2.0.8` from the npm registry; SHA-256 `22283ef68cb7545914f0a88a1bdedc7256a703d1d580c1d255217d0a50d31313`; Zero-Clause BSD license in `HTMX-LICENSE.txt`.
-- `../css/docgen.css`: generated with `tailwindcss@3.4.17` from `../css/tailwind-source.css` and `templates/**/*.html`; SHA-256 `c3d0ea84531d66a71fdc48ea346d495ec4b78e29965b4187841bc23adc54aea9`; MIT license in `TAILWIND-LICENSE.txt`.
+- `../css/docgen.css`: generated with `tailwindcss@3.4.17` from `../css/tailwind-source.css` and `templates/**/*.html`; SHA-256 `0987339d632d1000c80bce1687b09feac26dacca19a45f856aa7ecd4335233f9`; MIT license in `TAILWIND-LICENSE.txt`.
 
 Regenerate the stylesheet from the application directory:
 

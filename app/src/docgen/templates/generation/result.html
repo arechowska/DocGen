@@ -11,8 +11,12 @@
         {% if document.template_id == "faq" %}
           <ol class="mt-2 list-decimal space-y-3 pl-6">
             {% for item in items %}
-              {% set parts = item.split("Ответ:", 1) %}
-              <li><strong>{{ parts[0].strip() }}</strong>{% if parts|length > 1 %}<br><strong>Ответ:{{ parts[1] }}</strong>{% endif %}</li>
+              {% set answer_split = item.split("Ответ:", 1) %}
+              {% set question_split = answer_split[0].split("Вопрос:", 1) %}
+              <li>
+                {% if question_split|length > 1 %}<strong>Вопрос:</strong>{{ question_split[1] }}{% else %}{{ answer_split[0] }}{% endif %}
+                {% if answer_split|length > 1 %}<br><strong>Ответ:</strong>{{ answer_split[1] }}{% endif %}
+              </li>
             {% endfor %}
           </ol>
         {% else %}

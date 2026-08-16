@@ -163,8 +163,12 @@
               {% if document.template_id == "faq" %}
                 <ol data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{% if node.text %} data-section-title="{{ node.text }}"{% endif %} class="faq-question-list"{{ node_style_attribute(node) }}>
                   {% for item in node.data.get("items", []) %}
-                    {% set parts = item.split("Ответ:", 1) %}
-                    <li><strong>{{ parts[0].strip() }}</strong>{% if parts|length > 1 %}<br><strong>Ответ:{{ parts[1] }}</strong>{% endif %}</li>
+                    {% set answer_split = item.split("Ответ:", 1) %}
+                    {% set question_split = answer_split[0].split("Вопрос:", 1) %}
+                    <li>
+                      {% if question_split|length > 1 %}<strong>Вопрос:</strong>{{ question_split[1] }}{% else %}{{ answer_split[0] }}{% endif %}
+                      {% if answer_split|length > 1 %}<br><strong>Ответ:</strong>{{ answer_split[1] }}{% endif %}
+                    </li>
                   {% endfor %}
                 </ol>
               {% else %}
