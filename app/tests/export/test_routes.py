@@ -76,6 +76,7 @@ def test_format_selection_returns_only_matching_templates(
     assert response.status_code == 200
     assert "Лёгкий DocGen" in response.text
     assert 'value="docgen-light"' in response.text
+    assert 'hx-include="#export-form"' in response.text
     assert "Облегченный HTML" not in response.text
 
 

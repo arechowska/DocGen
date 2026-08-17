@@ -5,7 +5,7 @@
   {% else %}
     hx-post="/projects/{{ project_id }}/export"
     hx-trigger="load, change"
-    hx-include="closest form"
+    hx-include="#export-form"
     hx-target="#export-result"
     hx-swap="innerHTML"
   {% endif %}

@@ -14,7 +14,6 @@
 {% elif job.status.value == "succeeded" %}
   <a class="button primary" href="/projects/{{ job.project_id }}/exports/{{ job.id }}/download">
     <span>Скачать</span>
-    <span class="download-icon" aria-hidden="true"></span>
   </a>
 {% elif safe_error %}
   <p class="export-error-message">{{ safe_error }}</p>

@@ -44,11 +44,14 @@
             {% endfor %}
           </select>
         </label>
-        <div id="export-template-select" class="visually-hidden">
-          <select name="template_id" disabled>
-            <option>Загрузка…</option>
-          </select>
-        </div>
+        <label class="control style-control">
+          <span>Оформление</span>
+          <div id="export-template-select">
+            <select name="template_id" disabled>
+              <option>Загрузка…</option>
+            </select>
+          </div>
+        </label>
         <input type="hidden" name="revision" value="{{ revision }}">
       </form>
 

@@ -104,7 +104,7 @@
         input.value = String(result.revision);
       });
       markDocumentReady();
-      setSaveStatus("Сохранено", "saved");
+      setSaveStatus("Сохранено в проекте", "saved");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Не удалось сохранить";
       setSaveStatus(message, "error");

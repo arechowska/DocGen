@@ -31,13 +31,13 @@
     action="/projects/{{ project_id }}/chat"
     method="post"
     hx-post="/projects/{{ project_id }}/chat"
+    hx-include="#chatForm"
     hx-target="#chat-messages"
     hx-swap="beforeend"
   >
     <textarea id="chatInput" name="message" rows="1" maxlength="4000" placeholder="Напишите, что изменить..." {% if not document %}disabled{% endif %}></textarea>
     <input type="hidden" name="revision" value="{{ revision }}">
     <button id="sendButton" class="send-button" type="submit" title="Отправить" aria-label="Отправить" {% if not document %}disabled{% endif %}>
-      <span class="send-label">Отправить</span>
       <span class="send-icon" aria-hidden="true"></span>
     </button>
   </form>
@@ -64,7 +64,6 @@
           <div id="export-result" class="export-result">
             <button class="button primary" type="button" disabled>
               <span>Скачать</span>
-              <span class="download-icon" aria-hidden="true"></span>
             </button>
           </div>
         </div>

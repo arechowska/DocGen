@@ -308,6 +308,9 @@ if (editor.dataset.revision !== "2") throw new Error("revision was not updated")
 if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
   throw new Error("normalized html was not applied");
 }}
+if (saveStatus.textContent !== "Сохранено в проекте") {{
+  throw new Error(`unexpected save status: ${{saveStatus.textContent}}`);
+}}
 """
 
     subprocess.run(

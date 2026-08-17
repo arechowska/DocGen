@@ -89,6 +89,16 @@ def test_chat_grounding_error_preserves_document(
     assert "нет подтверждения в источниках" in response.text
 
 
+def test_chat_without_message_returns_readable_error(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(f"/projects/{project_with_document.id}/chat", data={})
+
+    assert response.status_code == 422
+    assert "Введите сообщение" in response.text
+    assert "Field required" not in response.text
+
+
 def test_chat_source_blocks_come_from_uploaded_sources(
     client: TestClient, project_with_document: Project
 ) -> None:

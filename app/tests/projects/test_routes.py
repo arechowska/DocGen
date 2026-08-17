@@ -275,7 +275,7 @@ def test_project_detail_embeds_editor_when_document_exists(client: TestClient) -
     assert table_button.get("aria-expanded") == "false"
     save_button = toolbar.find("button", attrs={"data-editor-save": ""})
     assert save_button is not None
-    assert save_button.get_text(strip=True) == "Сохранить"
+    assert save_button.get_text(strip=True) == "Сохранить в проект"
     table_menu = editor_panel.find(id="tableMenu")
     assert table_menu is not None
     assert table_menu.get("hidden") == ""
@@ -336,10 +336,15 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     export_result = result_actions.find(id="export-result")
     assert export_result is not None
     assert "Скачать" in export_result.get_text(" ")
+    assert export_result.find(class_="download-icon") is None
 
     send_button = soup.find(id="sendButton")
     assert send_button is not None
-    assert send_button.get_text(" ", strip=True) == "Отправить"
+    assert send_button.get_text(" ", strip=True) == ""
+    assert send_button.find(class_="send-icon") is not None
+    chat_form = soup.find(id="chatForm")
+    assert chat_form is not None
+    assert chat_form.get("hx-include") == "#chatForm"
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

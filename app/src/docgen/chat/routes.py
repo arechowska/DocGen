@@ -31,10 +31,18 @@ SessionDependency = Annotated[Session, Depends(get_session)]
 def post_chat(
     request: Request,
     project_id: str,
-    message: Annotated[str, Form()],
-    revision: Annotated[int, Form()],
     session: SessionDependency,
+    message: Annotated[str | None, Form()] = None,
+    revision: Annotated[int | None, Form()] = None,
 ) -> Response:
+    if message is None or not message.strip() or revision is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Введите сообщение и повторите попытку"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+
     chat = _chat_service(request, session)
     try:
         result = chat.edit(
