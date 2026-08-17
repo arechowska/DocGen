@@ -1233,17 +1233,33 @@
 }
 
 .editor-save-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
   min-width: 86px;
+  padding: 5px 10px;
+  border-radius: 999px;
   color: var(--lk-text-muted);
   font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  background: transparent;
+  transition: background-color .16s ease-in-out, color .16s ease-in-out;
 }
 
 .editor-save-status[data-state="saved"] {
   color: #28775f;
+  background: #dff5e8;
 }
 
 .editor-save-status[data-state="error"] {
   color: #9d2745;
+  background: #fde7e7;
+}
+
+.editor-save-status[data-state="pending"] {
+  color: #8a5b00;
+  background: #fff1cc;
 }
 
 .table-menu {
