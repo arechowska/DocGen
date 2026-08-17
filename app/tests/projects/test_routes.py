@@ -332,9 +332,14 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     open_button = result_actions.find(id="openButton")
     assert open_button is not None
     assert open_button.get_text(strip=True).startswith("Открыть")
+    assert open_button.find(class_="external-icon") is None
     export_result = result_actions.find(id="export-result")
     assert export_result is not None
     assert "Скачать" in export_result.get_text(" ")
+
+    send_button = soup.find(id="sendButton")
+    assert send_button is not None
+    assert send_button.get_text(" ", strip=True) == "Отправить"
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

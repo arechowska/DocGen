@@ -852,6 +852,7 @@
 .chat-panel {
   grid-column: 3;
   grid-row: 1;
+  min-width: 0;
   min-height: 0;
   align-self: stretch;
   display: grid;
@@ -1035,8 +1036,9 @@
 
 .chat-form {
   min-height: 48px;
+  min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   margin: 0 26px;
   background: var(--lk-surface-soft);
@@ -1057,11 +1059,14 @@
 }
 
 .send-button {
-  width: 38px;
+  min-width: 112px;
   height: 38px;
   margin: 4px;
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
   color: #fff;
   background: var(--lk-primary);
   border: 0;
@@ -1075,6 +1080,10 @@
   border-top: 2px solid currentColor;
   border-right: 2px solid currentColor;
   transform: rotate(45deg);
+}
+
+.send-label {
+  white-space: nowrap;
 }
 
 .chat-help {
@@ -1550,6 +1559,7 @@
 
 .review-panel,
 .result-panel {
+  min-width: 0;
   margin-top: 12px;
   background: var(--lk-surface-soft);
   border: 0;
@@ -1595,6 +1605,7 @@
 }
 
 .result-ready {
+  min-width: 0;
   margin-top: 12px;
 }
 
@@ -1675,20 +1686,23 @@
 }
 
 .result-actions {
+  min-width: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
   margin-top: 12px;
 }
 
 .result-actions .button {
   width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 6px 12px;
   font-size: 13px;
 }
 
 .export-result {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;

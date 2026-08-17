@@ -37,6 +37,7 @@
     <textarea id="chatInput" name="message" rows="1" maxlength="4000" placeholder="Напишите, что изменить..." {% if not document %}disabled{% endif %}></textarea>
     <input type="hidden" name="revision" value="{{ revision }}">
     <button id="sendButton" class="send-button" type="submit" title="Отправить" aria-label="Отправить" {% if not document %}disabled{% endif %}>
+      <span class="send-label">Отправить</span>
       <span class="send-icon" aria-hidden="true"></span>
     </button>
   </form>
@@ -59,7 +60,6 @@
         <div class="result-actions">
           <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
             <span>Открыть</span>
-            <span class="external-icon" aria-hidden="true"></span>
           </a>
           <div id="export-result" class="export-result">
             <button class="button primary" type="button" disabled>
