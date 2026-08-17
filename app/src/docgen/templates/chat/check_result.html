@@ -1,0 +1,34 @@
+<div class="check-result-card" hx-swap-oob="beforeend:#chat-messages">
+  <div class="check-result-heading">
+    <strong>Проверка по шаблону</strong>
+    {% if confirmed %}
+      <span class="check-result-badge problem">{{ confirmed|length }} {{ "проблема" if confirmed|length == 1 else "проблемы" if confirmed|length in [2, 3, 4] else "проблем" }}</span>
+    {% else %}
+      <span class="check-result-badge ok">Проблем не найдено</span>
+    {% endif %}
+  </div>
+
+  {% if confirmed %}
+    <ul class="check-result-findings">
+      {% for finding in confirmed %}
+        <li>
+          <p class="check-result-rule">{{ rule_instructions.get(finding.rule_id, finding.rule_id) }}</p>
+          <p class="check-result-message">{{ finding.message }}</p>
+          <a
+            class="check-result-link"
+            href="/projects/{{ project_id }}/document#{% if finding.node_id %}node-{{ finding.node_id }}{% else %}document-start{% endif %}"
+          >К узлу документа</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if low_confidence %}
+    <p class="check-result-note">
+      Ещё {{ low_confidence|length }} {{ "замечание" if low_confidence|length == 1 else "замечания" if low_confidence|length in [2, 3, 4] else "замечаний" }}
+      с низкой уверенностью — смотрите в полном отчёте.
+    </p>
+  {% endif %}
+
+  <a class="check-result-link check-result-full" href="/projects/{{ project_id }}/report">Полный отчёт →</a>
+</div>

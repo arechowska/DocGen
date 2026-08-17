@@ -788,7 +788,18 @@ def test_earlier_check_job_does_not_render_later_report_for_same_document(
         assert jobs.claim_next() is not None
         documents.save_report(
             project_with_source.id,
-            CheckReport(template_id="use-case", passed_rule_ids=["report-A"]),
+            CheckReport(
+                template_id="use-case",
+                findings=[
+                    CheckFinding(
+                        code="marker",
+                        severity=Severity.ERROR,
+                        confidence=0.9,
+                        message="report-A",
+                        rule_id="use-case-structure",
+                    )
+                ],
+            ),
         )
         first_succeeded = jobs.mark_succeeded(first_job.id)
 
@@ -796,7 +807,18 @@ def test_earlier_check_job_does_not_render_later_report_for_same_document(
         assert jobs.claim_next() is not None
         documents.save_report(
             project_with_source.id,
-            CheckReport(template_id="use-case", passed_rule_ids=["report-B"]),
+            CheckReport(
+                template_id="use-case",
+                findings=[
+                    CheckFinding(
+                        code="marker",
+                        severity=Severity.ERROR,
+                        confidence=0.9,
+                        message="report-B",
+                        rule_id="use-case-structure",
+                    )
+                ],
+            ),
         )
         second_succeeded = jobs.mark_succeeded(second_job.id)
 
@@ -862,6 +884,9 @@ def test_empty_report_never_claims_that_all_rules_were_checked(
 def test_report_renders_explicit_passed_rules(
     client: TestClient, project_with_source: Project
 ) -> None:
+    """Passed rule ids must render as their human-readable instruction text
+    (from the semantic template), not the bare machine id -- a bare id like
+    "use-case-flow-branches" means nothing to someone reading the report."""
     _save_document(client, project_with_source.id, _document())
     _save_report(
         client,
@@ -875,8 +900,10 @@ def test_report_renders_explicit_passed_rules(
     response = client.get(f"/projects/{project_with_source.id}/report")
 
     assert "Успешно пройденные правила" in response.text
-    assert "use-case-structure" in response.text
-    assert "use-case-style" in response.text
+    assert "включает участников, предусловия" in response.text
+    assert "наблюдаемые действия без оценочных слов" in response.text
+    assert "use-case-structure" not in response.text
+    assert "use-case-style" not in response.text
 
 
 def test_check_route_job_runs_once_and_swaps_to_saved_report(
@@ -928,10 +955,15 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
 
     response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
     assert response.status_code == 200
-    assert "Результат проверки" in response.text
-    assert "Непроверенные правила" in response.text
     assert 'id="generation-status"' in response.text
-    assert unchecked_rules[0] in response.text
+    assert "Проверка по шаблону" in response.text
+    assert "Проблем не найдено" in response.text
+    assert f'href="/projects/{project_with_source.id}/report"' in response.text
+
+    full_report_response = client.get(f"/projects/{project_with_source.id}/report")
+    assert "Результат проверки" in full_report_response.text
+    assert "Непроверенные правила" in full_report_response.text
+    assert unchecked_rules[0] not in full_report_response.text
 
     repeat_response = client.post(
         f"/projects/{project_with_source.id}/jobs/check",
