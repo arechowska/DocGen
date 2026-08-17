@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPOSITORY_ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
@@ -26,6 +26,20 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./var/docgen.db"
     data_dir: Path = Path("./var/data")
     confluence_hosts: tuple[str, ...] = ("confluence.local",)
+    confluence_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "DOCGEN_CONFLUENCE_BASE_URL", "CONFLUENCE_BASE_URL"
+        ),
+    )
+    confluence_user: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DOCGEN_CONFLUENCE_USER", "CONFLUENCE_USER"),
+    )
+    confluence_pass: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DOCGEN_CONFLUENCE_PASS", "CONFLUENCE_PASS"),
+    )
     confluence_api_base: str | None = None
     confluence_token: SecretStr | None = None
     local_text_base_url: str | None = None

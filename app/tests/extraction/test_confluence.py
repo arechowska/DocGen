@@ -291,6 +291,33 @@ def test_client_from_settings_sends_secret_and_uses_30_second_timeout() -> None:
     assert observed_timeouts == [{"connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0}]
 
 
+def test_client_from_settings_supports_confluence_basic_auth() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == httpx.URL(
+            "https://wiki.example.test/wiki/rest/api/content/42",
+            params={"expand": "body.storage,version"},
+        )
+        assert request.headers["Authorization"] == (
+            "Basic " + base64.b64encode(b"docgen-user:secret-password").decode()
+        )
+        return _page_response("<p>Configured</p>")
+
+    settings = Settings(
+        confluence_base_url="https://wiki.example.test/wiki",
+        confluence_user="docgen-user",
+        confluence_pass="secret-password",
+        confluence_hosts=("wiki.example.test",),
+        trusted_integration_hosts=("wiki.example.test",),
+    )
+
+    result = ConfluenceClient.from_settings(
+        settings,
+        transport=httpx.MockTransport(handler),
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks[0].text == "Configured"
+
+
 @pytest.mark.parametrize(
     "endpoint",
     [

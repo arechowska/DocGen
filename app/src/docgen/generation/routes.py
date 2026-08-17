@@ -243,7 +243,11 @@ def _dependency_error(request: Request, sources: list[Source]) -> str | None:
             return str(error)
         token = settings.confluence_token
         token_value = token.get_secret_value() if isinstance(token, SecretStr) else token
-        if settings.confluence_api_base is None or not token_value or not token_value.strip():
+        password = settings.confluence_pass
+        password_value = password.get_secret_value() if isinstance(password, SecretStr) else password
+        has_api_base = settings.confluence_api_base or settings.confluence_base_url
+        has_basic_auth = settings.confluence_user and password_value
+        if not has_api_base or not ((token_value and token_value.strip()) or has_basic_auth):
             return "Интеграция Confluence не настроена"
     return None
 

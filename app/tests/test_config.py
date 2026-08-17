@@ -40,6 +40,27 @@ def test_trusted_hosts_are_loaded_from_json_environment(
     assert settings.trusted_integration_hosts == ("model.internal", "wiki.internal")
 
 
+def test_confluence_basic_auth_accepts_existing_environment_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "DOCGEN_CONFLUENCE_BASE_URL",
+        "DOCGEN_CONFLUENCE_USER",
+        "DOCGEN_CONFLUENCE_PASS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://wiki.internal/wiki")
+    monkeypatch.setenv("CONFLUENCE_USER", "docgen-user")
+    monkeypatch.setenv("CONFLUENCE_PASS", "secret-password")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.confluence_base_url == "https://wiki.internal/wiki"
+    assert settings.confluence_user == "docgen-user"
+    assert settings.confluence_pass is not None
+    assert settings.confluence_pass.get_secret_value() == "secret-password"
+
+
 def test_template_directory_can_be_configured(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, template_dir=tmp_path)
 

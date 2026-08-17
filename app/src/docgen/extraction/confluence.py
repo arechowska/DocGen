@@ -50,6 +50,8 @@ class ConfluenceClient:
         api_base: str | None = None,
         token: str | SecretStr | None = None,
         *,
+        username: str | None = None,
+        password: str | SecretStr | None = None,
         allowed_hosts: Iterable[str] | None = None,
         transport: httpx.BaseTransport | None = None,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
@@ -59,6 +61,8 @@ class ConfluenceClient:
     ) -> None:
         self._api_base = api_base.rstrip("/") if api_base else None
         self._token = token
+        self._username = username
+        self._password = password
         self._transport = transport
         self._max_response_bytes = max_response_bytes
         self._max_attachment_bytes = (
@@ -77,11 +81,13 @@ class ConfluenceClient:
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         max_attachment_bytes: int | None = None,
     ) -> ConfluenceClient:
-        api_base = None
-        if settings.confluence_api_base is not None:
+        api_base = settings.confluence_api_base
+        if api_base is None and settings.confluence_base_url is not None:
+            api_base = f"{settings.confluence_base_url.rstrip('/')}/rest/api"
+        if api_base is not None:
             try:
                 api_base = validate_trusted_endpoint(
-                    settings.confluence_api_base,
+                    api_base,
                     settings.trusted_integration_hosts,
                 )
             except UntrustedEndpoint:
@@ -91,6 +97,8 @@ class ConfluenceClient:
         return cls(
             api_base=api_base,
             token=settings.confluence_token,
+            username=settings.confluence_user,
+            password=settings.confluence_pass,
             allowed_hosts=settings.confluence_hosts,
             transport=transport,
             max_response_bytes=max_response_bytes,
@@ -104,9 +112,9 @@ class ConfluenceClient:
         *,
         before_external_call: Callable[[], None] | None = None,
     ) -> ExtractionResult:
-        token = self._configured_token()
+        auth = self._configured_auth()
         page_id = self._page_id_from_url(url)
-        response_body = self._get_page(page_id, token, before_external_call)
+        response_body = self._get_page(page_id, auth, before_external_call)
         storage_html = self._storage_html(response_body)
         blocks = _normalize_storage_html(page_id, storage_html)
         page_units = VirtualPageCalculator().from_blocks(blocks)
@@ -118,7 +126,7 @@ class ConfluenceClient:
             resolved_block, retained_bytes = self._resolve_native_attachment(
                 page_id,
                 block,
-                token,
+                auth,
                 before_external_call,
                 self._max_attachment_bytes - attachment_bytes,
             )
@@ -136,13 +144,17 @@ class ConfluenceClient:
         host = urlsplit(self._api_base).hostname
         return (host,) if host else ()
 
-    def _configured_token(self) -> str:
-        if self._api_base is None or self._token is None:
+    def _configured_auth(self) -> str | tuple[str, str]:
+        if self._api_base is None:
             raise ExtractionError(_NOT_CONFIGURED_ERROR)
-        token = self._token.get_secret_value() if isinstance(self._token, SecretStr) else self._token
-        if not token:
-            raise ExtractionError(_NOT_CONFIGURED_ERROR)
-        return token
+        if self._token is not None:
+            token = self._token.get_secret_value() if isinstance(self._token, SecretStr) else self._token
+            if token:
+                return token
+        password = self._password.get_secret_value() if isinstance(self._password, SecretStr) else self._password
+        if self._username and password:
+            return self._username, password
+        raise ExtractionError(_NOT_CONFIGURED_ERROR)
 
     def _page_id_from_url(self, url: str) -> str:
         try:
@@ -171,14 +183,14 @@ class ConfluenceClient:
     def _get_page(
         self,
         page_id: str,
-        token: str,
+        auth: str | tuple[str, str],
         before_external_call: Callable[[], None] | None,
     ) -> dict:
         assert self._api_base is not None
         endpoint = f"{self._api_base}/content/{page_id}"
         body = self._get_bytes(
             endpoint,
-            token,
+            auth,
             params={"expand": "body.storage,version"},
             before_external_call=before_external_call,
         )
@@ -187,7 +199,7 @@ class ConfluenceClient:
     def _get_bytes(
         self,
         endpoint: str,
-        token: str,
+        auth: str | tuple[str, str],
         *,
         params: dict[str, str | int] | None = None,
         before_external_call: Callable[[], None] | None = None,
@@ -203,11 +215,14 @@ class ConfluenceClient:
             ) as client:
                 if before_external_call is not None:
                     before_external_call()
+                headers = {"Authorization": f"Bearer {auth}"} if isinstance(auth, str) else None
+                request_auth = None if isinstance(auth, str) else auth
                 with client.stream(
                     "GET",
                     endpoint,
                     params=params,
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=headers,
+                    auth=request_auth,
                 ) as response:
                     if response.status_code in {401, 403}:
                         raise ExtractionError(_ACCESS_ERROR)
@@ -239,7 +254,7 @@ class ConfluenceClient:
         self,
         page_id: str,
         block: NormalizedBlock,
-        token: str,
+        auth: str | tuple[str, str],
         before_external_call: Callable[[], None] | None,
         remaining_attachment_bytes: int,
     ) -> tuple[NormalizedBlock, int]:
@@ -251,7 +266,7 @@ class ConfluenceClient:
         assert self._api_base is not None
         metadata_body = self._get_bytes(
             f"{self._api_base}/content/{page_id}/child/attachment",
-            token,
+            auth,
             params={"filename": filename, "limit": 2},
             before_external_call=before_external_call,
             not_found_message=_ATTACHMENT_NOT_FOUND_ERROR,
@@ -287,7 +302,7 @@ class ConfluenceClient:
         )
         content = self._get_bytes(
             download_url,
-            token,
+            auth,
             before_external_call=before_external_call,
             not_found_message=_ATTACHMENT_NOT_FOUND_ERROR,
             max_bytes=download_limit,
