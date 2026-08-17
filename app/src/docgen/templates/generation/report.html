@@ -28,7 +28,7 @@
       <div class="mt-4 space-y-3">
         {% for finding in confirmed %}
           <article class="rounded-2xl bg-[#fff2f2] p-4">
-            <p class="text-sm font-medium text-[#5f6873]">Правило: {{ finding.rule_id }}</p>
+            <p class="text-sm font-medium text-[#5f6873]">{{ rule_instructions.get(finding.rule_id, finding.rule_id) }}</p>
             <p>{{ finding.message }}</p>
             {% if finding.node_id %}
               <a class="mt-2 inline-block text-sm font-medium text-[#1b5eaa]" href="/projects/{{ project_id }}/document#node-{{ finding.node_id }}">К узлу документа</a>
@@ -44,7 +44,7 @@
       <h2 class="text-xl font-semibold">Успешно пройденные правила</h2>
       {% if report.passed_rule_ids %}
         <ul class="mt-4 list-disc space-y-2 pl-6">
-          {% for rule_id in report.passed_rule_ids %}<li>{{ rule_id }}</li>{% endfor %}
+          {% for rule_id in report.passed_rule_ids %}<li>{{ rule_instructions.get(rule_id, rule_id) }}</li>{% endfor %}
         </ul>
       {% else %}
         <p class="mt-4 text-sm text-[#5f6873]">Успешно пройденные правила не указаны.</p>
@@ -56,7 +56,7 @@
       <div class="mt-4 space-y-3">
         {% for finding in low_confidence %}
           <article class="rounded-2xl bg-[#fff8e6] p-4">
-            <p class="text-sm font-medium text-[#5f6873]">Правило: {{ finding.rule_id }}</p>
+            <p class="text-sm font-medium text-[#5f6873]">{{ rule_instructions.get(finding.rule_id, finding.rule_id) }}</p>
             <p>{{ finding.message }}</p>
             {% if finding.node_id %}
               <a class="mt-2 inline-block text-sm font-medium text-[#1b5eaa]" href="/projects/{{ project_id }}/document#node-{{ finding.node_id }}">К узлу документа</a>
@@ -71,7 +71,7 @@
     <section class="mt-8">
       <h2 class="text-xl font-semibold">Непроверенные правила</h2>
       {% if report.unchecked_rules %}
-        <ul class="mt-4 list-disc space-y-2 pl-6">{% for rule_id in report.unchecked_rules %}<li>{{ rule_id }}</li>{% endfor %}</ul>
+        <ul class="mt-4 list-disc space-y-2 pl-6">{% for rule_id in report.unchecked_rules %}<li>{{ rule_instructions.get(rule_id, rule_id) }}</li>{% endfor %}</ul>
       {% elif report.findings or report.passed_rule_ids %}
         <p class="mt-4 text-sm text-[#5f6873]">Непроверенных правил нет.</p>
       {% else %}

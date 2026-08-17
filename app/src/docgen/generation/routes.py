@@ -400,11 +400,18 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                 else None
             )
             if report is not None:
-                return _report_response(
+                if _wants_full_page(request):
+                    return _report_response(
+                        request,
+                        job.project_id,
+                        report,
+                        standalone=True,
+                        warnings=job.warning_messages,
+                    )
+                return _check_complete_response(
                     request,
                     job.project_id,
                     report,
-                    standalone=_wants_full_page(request),
                     warnings=job.warning_messages,
                 )
         return _status_response(
@@ -517,10 +524,43 @@ def _report_response(
             "report": report,
             "confirmed": confirmed,
             "low_confidence": low_confidence,
+            "rule_instructions": _rule_instructions(request, report.template_id),
             "standalone": standalone,
             "warnings": warnings,
         },
     )
+
+
+def _check_complete_response(
+    request: Request,
+    project_id: str,
+    report: CheckReport,
+    *,
+    warnings: tuple[str, ...] = (),
+) -> Response:
+    confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
+    low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
+    return templates.TemplateResponse(
+        request=request,
+        name="generation/check_complete.html",
+        context={
+            "project_id": project_id,
+            "report": report,
+            "confirmed": confirmed,
+            "low_confidence": low_confidence,
+            "rule_instructions": _rule_instructions(request, report.template_id),
+            "warnings": warnings,
+        },
+    )
+
+
+def _rule_instructions(request: Request, template_id: str) -> dict[str, str]:
+    catalog = TemplateCatalog(external_directory=request.app.state.settings.template_dir)
+    try:
+        template = catalog.get(template_id)
+    except TemplateConfigurationError:
+        return {}
+    return {rule.id: rule.instruction for rule in template.rules}
 
 
 __all__ = ["router"]
