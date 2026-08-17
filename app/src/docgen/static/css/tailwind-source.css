@@ -147,7 +147,7 @@
 .topbar {
   min-height: 88px;
   display: grid;
-  grid-template-columns: minmax(210px, auto) minmax(240px, 1fr) auto;
+  grid-template-columns: minmax(210px, auto) minmax(200px, 1fr) minmax(200px, 1fr) auto;
   align-items: center;
   gap: 24px;
   margin: 0 calc(-1 * var(--formatta-gutter));
@@ -1643,6 +1643,11 @@
   margin-top: 12px;
 }
 
+.topbar-export-form {
+  display: block;
+  margin-top: 0;
+}
+
 .export-field {
   display: grid;
   gap: 5px;
@@ -1747,7 +1752,7 @@
 
 @media (max-width: 1180px) {
   .topbar {
-    grid-template-columns: auto minmax(220px, 1fr) auto;
+    grid-template-columns: auto minmax(180px, 1fr) minmax(180px, 1fr) auto;
     gap: 15px;
   }
 

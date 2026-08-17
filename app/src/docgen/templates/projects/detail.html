@@ -23,6 +23,35 @@
         </select>
       </label>
 
+      <form
+        id="export-form"
+        class="export-form topbar-export-form"
+        action="/projects/{{ project_id }}/export"
+        method="post"
+      >
+        <label class="control format-control">
+          <span>Формат</span>
+          <select
+            id="formatSelect"
+            name="format"
+            hx-get="/projects/{{ project_id }}/export/templates"
+            hx-trigger="load, change"
+            hx-target="#export-template-select"
+            hx-swap="innerHTML"
+          >
+            {% for value, label in [("docx", "DOCX"), ("html", "HTML"), ("pdf", "PDF"), ("markdown", "Markdown")] %}
+              <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div id="export-template-select" class="visually-hidden">
+          <select name="template_id" disabled>
+            <option>Загрузка…</option>
+          </select>
+        </div>
+        <input type="hidden" name="revision" value="{{ revision }}">
+      </form>
+
       <div class="topbar-actions">
         {% include "projects/build_button.html" %}
         {% include "projects/review_button.html" %}

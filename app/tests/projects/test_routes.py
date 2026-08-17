@@ -311,16 +311,22 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
 
     assert response.status_code == 200
     soup = BeautifulSoup(response.text, "html.parser")
-    assert soup.find(id="formatSelect") is None
+    format_select = soup.find(id="formatSelect")
+    assert format_select is not None
+    assert format_select.get("name") == "format"
+    assert soup.find(class_="topbar").find(id="formatSelect") is format_select
 
     export_form = soup.find(id="export-form")
     assert export_form is not None
-    format_select = export_form.find("select", attrs={"name": "format"})
-    assert format_select is not None
-    assert format_select.get("hx-trigger") == "load, change"
+    assert export_form.find("select", attrs={"name": "format"}) is format_select
+    assert export_form.find("select", attrs={"name": "template_id"}) is not None
     assert export_form.find("input", attrs={"name": "revision"}) is not None
     assert export_form.find("button", attrs={"type": "submit"}) is None
 
+    result_panel = soup.find(id="resultPanel")
+    assert result_panel is not None
+    assert "Формат" not in result_panel.get_text(" ")
+    assert "Оформление" not in result_panel.get_text(" ")
     result_actions = soup.find(class_="result-actions")
     assert result_actions is not None
     open_button = result_actions.find(id="openButton")

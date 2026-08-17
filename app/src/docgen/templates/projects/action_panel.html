@@ -56,32 +56,6 @@
             <span id="resultMeta">Текущий документ</span>
           </div>
         </div>
-        <form id="export-form" class="export-form">
-          <label class="export-field">
-            <span>Формат</span>
-            <select
-              name="format"
-              hx-get="/projects/{{ project_id }}/export/templates"
-              hx-trigger="load, change"
-              hx-target="#export-template-select"
-              hx-swap="innerHTML"
-            >
-              {% for value, label in [("docx", "DOCX"), ("html", "HTML"), ("pdf", "PDF"), ("markdown", "Markdown")] %}
-                <option value="{{ value }}">{{ label }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label class="export-field">
-            <span>Оформление</span>
-            <div id="export-template-select">
-              <select name="template_id" disabled>
-                <option>Загрузка…</option>
-              </select>
-            </div>
-          </label>
-          <input type="hidden" name="revision" value="{{ revision }}">
-        </form>
-
         <div class="result-actions">
           <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
             <span>Открыть</span>
