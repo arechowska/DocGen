@@ -900,8 +900,8 @@ def test_report_renders_explicit_passed_rules(
     response = client.get(f"/projects/{project_with_source.id}/report")
 
     assert "Успешно пройденные правила" in response.text
-    assert "включает участников, предусловия" in response.text
-    assert "наблюдаемые действия без оценочных слов" in response.text
+    assert "нумерованным основным потоком" in response.text
+    assert "один переход состояния" in response.text
     assert "use-case-structure" not in response.text
     assert "use-case-style" not in response.text
 
