@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
+from docgen.extraction.registry import ExtractionError, ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.models import Source, SourceKind
 from docgen.workflows.normalize import (
@@ -199,6 +199,64 @@ def test_normalization_delegates_each_confluence_request_gate_to_client() -> Non
     workflow.run("p1", before_extract=lambda: events.append("gate"))
 
     assert events == ["gate", "request"]
+
+
+def test_normalization_skips_inaccessible_confluence_and_keeps_file_sources() -> None:
+    confluence_source = Source(
+        id="confluence-1",
+        project_id="p1",
+        kind=SourceKind.CONFLUENCE,
+        display_name="https://wiki.example.test/pages/42",
+        url="https://wiki.example.test/pages/42",
+        status="linked",
+    )
+    file_source = Source(
+        id="file-1",
+        project_id="p1",
+        kind=SourceKind.FILE,
+        display_name="case.txt",
+        media_type="text/plain",
+        size_bytes=4,
+        storage_path="projects/p1/sources/case.txt",
+        status="stored",
+    )
+
+    class MixedSources:
+        def list_for_project(self, project_id: str) -> list[Source]:
+            assert project_id == "p1"
+            return [confluence_source, file_source]
+
+    class FileExtractor:
+        def for_source(self, source: Source) -> FileExtractor:
+            assert source is file_source
+            return self
+
+        def extract(self, source: Source, path: Path) -> ExtractionResult:
+            assert source is file_source
+            assert path == Path("projects/p1/sources/case.txt")
+            return ExtractionResult(
+                blocks=[_block("file-block", BlockKind.TEXT, "DOCX content")],
+                page_units=1,
+                warnings=[],
+            )
+
+    class InaccessibleConfluence:
+        def fetch(self, url: str, *, before_external_call=None) -> ExtractionResult:
+            assert url == confluence_source.url
+            raise ExtractionError("Нет доступа к странице Confluence")
+
+    result = NormalizationWorkflow(
+        MixedSources(),
+        FakeStorage(),
+        FileExtractor(),
+        InaccessibleConfluence(),
+    ).run("p1")
+
+    assert [block.text for block in result.blocks] == ["DOCX content"]
+    assert result.total_pages == 1
+    assert result.warnings == [
+        "Источник Confluence пропущен: Нет доступа к странице Confluence"
+    ]
 
 
 def test_normalization_includes_source_warnings_and_adds_long_processing_warning(

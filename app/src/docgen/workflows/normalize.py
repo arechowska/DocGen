@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from docgen.extraction.page_units import VirtualPageCalculator
-from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
+from docgen.extraction.registry import ExtractionError, ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import NormalizedBlock
 from docgen.models import Source, SourceKind
 from docgen.sources.repository import SourceRepository
@@ -63,7 +63,13 @@ class NormalizationWorkflow:
         block_ids: set[str] = set()
 
         for source in self._sources.list_for_project(project_id):
-            extraction = self._extract(source, before_extract)
+            try:
+                extraction = self._extract(source, before_extract)
+            except ExtractionError as error:
+                if source.kind is not SourceKind.CONFLUENCE:
+                    raise
+                warnings.append(f"Источник Confluence пропущен: {error}")
+                continue
             total_pages += extraction.page_units
             if total_pages > _MAX_PAGE_UNITS:
                 raise PageLimitExceeded(_PAGE_LIMIT_MESSAGE)
