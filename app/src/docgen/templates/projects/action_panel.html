@@ -30,10 +30,6 @@
     class="chat-form"
     action="/projects/{{ project_id }}/chat"
     method="post"
-    hx-post="/projects/{{ project_id }}/chat"
-    hx-include="#chatForm"
-    hx-target="#chat-messages"
-    hx-swap="beforeend"
   >
     <textarea id="chatInput" name="message" rows="1" maxlength="4000" placeholder="Напишите, что изменить..." {% if not document %}disabled{% endif %}></textarea>
     <input type="hidden" name="revision" value="{{ revision }}">
@@ -41,8 +37,6 @@
       <span class="send-icon" aria-hidden="true"></span>
     </button>
   </form>
-  <p class="chat-help">Редактор и файл обновляются после каждой правки.</p>
-
   <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle">
     <div class="result-heading">
       <h2 id="resultTitle">Результат</h2>

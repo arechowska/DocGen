@@ -68,6 +68,69 @@ def test_htmx_shows_safe_model_configuration_error(client: TestClient) -> None:
     assert rule["swap"] is True
 
 
+@_requires_node
+def test_chat_submit_sends_explicit_message_and_revision(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const documentListeners = new Map();
+const input = {{ value: "Что за ошибки", focus() {{}} }};
+const revision = {{ value: "4" }};
+const button = {{ disabled: false }};
+const banner = {{ hidden: true, textContent: "" }};
+const form = {{
+  action: "/projects/p1/chat",
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector(selector) {{
+    if (selector === "#chatInput") return input;
+    if (selector === 'input[name="revision"]') return revision;
+    if (selector === "#sendButton") return button;
+    return null;
+  }},
+}};
+let request = null;
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#chatForm") return form;
+    if (selector === "#errorBanner") return banner;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener(type, listener) {{ documentListeners.set(type, listener); }},
+  execCommand() {{}},
+}};
+globalThis.window = {{
+  getSelection() {{ return null; }},
+  htmx: {{
+    ajax(method, url, options) {{
+      request = {{ method, url, options }};
+      return Promise.resolve();
+    }},
+  }},
+}};
+{script.text}
+let prevented = false;
+await form.listeners.get("submit")({{ preventDefault() {{ prevented = true; }} }});
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (!prevented) throw new Error("native submit was not stopped");
+if (request?.method !== "POST" || request?.url !== "/projects/p1/chat") {{
+  throw new Error("chat request was not sent");
+}}
+if (request.options.values.message !== "Что за ошибки" || request.options.values.revision !== "4") {{
+  throw new Error(`unexpected chat payload: ${{JSON.stringify(request.options.values)}}`);
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_templates_have_no_inline_handlers_styles_or_public_executable_assets() -> None:
     template_root = Path(__file__).parents[1] / "src" / "docgen" / "templates"
 
@@ -101,7 +164,7 @@ def test_workspace_css_contains_corporate_layout_tokens(client: TestClient) -> N
         ".document-canvas",
         ".tool-button",
         ".editor-save-status[data-state=saved]",
-        "background:#dff5e8",
+        "color:#28775f",
         ".editor-save-status[data-state=error]",
         "background:#fde7e7",
         ".table-menu",
@@ -308,8 +371,11 @@ if (editor.dataset.revision !== "2") throw new Error("revision was not updated")
 if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
   throw new Error("normalized html was not applied");
 }}
-if (saveStatus.textContent !== "Сохранено в проекте") {{
+if (saveStatus.textContent !== "✓") {{
   throw new Error(`unexpected save status: ${{saveStatus.textContent}}`);
+}}
+if (saveStatus.title !== "Сохранено в проекте") {{
+  throw new Error(`unexpected save status tooltip: ${{saveStatus.title}}`);
 }}
 """
 

@@ -28,6 +28,54 @@
     synchronizeTemplate();
     templateSource.addEventListener("change", synchronizeTemplate);
   }
+
+  const initializeChat = () => {
+    const form = document.querySelector("#chatForm");
+    if (!form || form.dataset.chatInitialized === "true") return;
+    const input = form.querySelector("#chatInput");
+    const revision = form.querySelector('input[name="revision"]');
+    const button = form.querySelector("#sendButton");
+    const errorBanner = document.querySelector("#errorBanner");
+    if (!input || !revision || !button) return;
+
+    form.dataset.chatInitialized = "true";
+    form.addEventListener("submit", (event) => {
+      if (!window.htmx?.ajax) return;
+      event.preventDefault();
+      const message = input.value.trim();
+      if (!message || !revision.value) {
+        if (errorBanner) {
+          errorBanner.textContent = "Введите сообщение и повторите попытку";
+          errorBanner.hidden = false;
+        }
+        return;
+      }
+
+      if (errorBanner) errorBanner.hidden = true;
+      button.disabled = true;
+      Promise.resolve(
+        window.htmx.ajax("POST", form.action, {
+          source: form,
+          target: "#chat-messages",
+          swap: "beforeend",
+          values: {message, revision: revision.value},
+        })
+      )
+        .then(() => {
+          input.value = "";
+        })
+        .catch(() => {
+          if (errorBanner) {
+            errorBanner.textContent = "Не удалось отправить сообщение";
+            errorBanner.hidden = false;
+          }
+        })
+        .finally(() => {
+          button.disabled = false;
+        });
+    });
+  };
+
   const initializeEditor = () => {
     const editor = document.querySelector("#docgen2Editor");
     if (!editor || editor.dataset.editorInitialized === "true") return;
@@ -57,7 +105,10 @@
 
   const setSaveStatus = (message, state = "") => {
     if (!saveStatus) return;
-    saveStatus.textContent = message;
+    const isSaved = state === "saved";
+    saveStatus.textContent = isSaved ? "✓" : message;
+    saveStatus.title = isSaved ? message : "";
+    saveStatus.ariaLabel = isSaved ? message : "";
     saveStatus.dataset.state = state;
   };
 
@@ -303,6 +354,7 @@
   document.addEventListener("htmx:afterSwap", () => {
     synchronizeTemplate();
     initializeEditor();
+    initializeChat();
   });
   document.addEventListener("docgen:document-updated", (event) => {
     const revision = event.detail?.revision;
@@ -311,5 +363,6 @@
       input.value = String(revision);
     });
   });
+  initializeChat();
   initializeEditor();
 })();

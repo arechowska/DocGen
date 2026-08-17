@@ -147,7 +147,7 @@
 .topbar {
   min-height: 88px;
   display: grid;
-  grid-template-columns: minmax(210px, auto) minmax(170px, 0.8fr) minmax(300px, 1.6fr) auto;
+  grid-template-columns: minmax(210px, auto) minmax(155px, .45fr) minmax(560px, 1.8fr) auto;
   align-items: center;
   gap: 24px;
   margin: 0 calc(-1 * var(--formatta-gutter));
@@ -1251,8 +1251,13 @@
 }
 
 .editor-save-status[data-state="saved"] {
+  min-width: 30px;
+  justify-content: center;
+  padding: 0;
   color: #28775f;
-  background: #dff5e8;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
 }
 
 .editor-save-status[data-state="error"] {
@@ -1649,18 +1654,18 @@
 }
 
 .topbar-export-form {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(230px, .9fr) minmax(300px, 1.35fr);
   gap: 16px;
+  min-width: 0;
   margin-top: 0;
 }
 
 .topbar-export-form .format-control {
-  flex: 0 0 150px;
+  min-width: 0;
 }
 
 .topbar-export-form .style-control {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -1771,7 +1776,7 @@
 
 @media (max-width: 1180px) {
   .topbar {
-    grid-template-columns: auto minmax(180px, 1fr) minmax(180px, 1fr) auto;
+    grid-template-columns: auto minmax(145px, .5fr) minmax(430px, 1.5fr) auto;
     gap: 15px;
   }
 

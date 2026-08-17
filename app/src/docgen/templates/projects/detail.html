@@ -14,7 +14,7 @@
         </span>
       </div>
 
-      <label class="control template-control">
+      <label class="control template-control" title="Шаблон определяет структуру документа">
         <span>Шаблон</span>
         <select id="templateSelect" data-template-source>
           {% for semantic_template in templates %}
@@ -29,7 +29,7 @@
         action="/projects/{{ project_id }}/export"
         method="post"
       >
-        <label class="control format-control">
+        <label class="control format-control" title="Тип скачиваемого файла">
           <span>Формат</span>
           <select
             id="formatSelect"
@@ -44,7 +44,7 @@
             {% endfor %}
           </select>
         </label>
-        <label class="control style-control">
+        <label class="control style-control" title="Оформление задаёт внешний вид скачиваемого файла">
           <span>Оформление</span>
           <div id="export-template-select">
             <select name="template_id" disabled>

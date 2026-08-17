@@ -315,6 +315,14 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     assert format_select is not None
     assert format_select.get("name") == "format"
     assert soup.find(class_="topbar").find(id="formatSelect") is format_select
+    assert format_select.parent.get("title") == "Тип скачиваемого файла"
+
+    template_control = soup.find(class_="template-control")
+    assert template_control is not None
+    assert template_control.get("title") == "Шаблон определяет структуру документа"
+    style_control = soup.find(class_="style-control")
+    assert style_control is not None
+    assert style_control.get("title") == "Оформление задаёт внешний вид скачиваемого файла"
 
     export_form = soup.find(id="export-form")
     assert export_form is not None
@@ -344,7 +352,8 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     assert send_button.find(class_="send-icon") is not None
     chat_form = soup.find(id="chatForm")
     assert chat_form is not None
-    assert chat_form.get("hx-include") == "#chatForm"
+    assert chat_form.get("action") == f"/projects/{project_id}/chat"
+    assert chat_form.get("hx-post") is None
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:
