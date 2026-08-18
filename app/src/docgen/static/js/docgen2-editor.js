@@ -53,6 +53,7 @@
 
       if (errorBanner) errorBanner.hidden = true;
       button.disabled = true;
+      input.value = "";
       let request;
       try {
         request = window.htmx.ajax("POST", form.action, {
@@ -66,10 +67,8 @@
         request = Promise.reject(error);
       }
       Promise.resolve(request)
-        .then(() => {
-          input.value = "";
-        })
         .catch(() => {
+          if (!input.value) input.value = message;
           if (errorBanner) {
             errorBanner.textContent = "Не удалось отправить сообщение";
             errorBanner.hidden = false;

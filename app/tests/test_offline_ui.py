@@ -115,6 +115,7 @@ let prevented = false;
 await form.listeners.get("submit")({{ preventDefault() {{ prevented = true; }} }});
 await new Promise((resolve) => setTimeout(resolve, 0));
 if (!prevented) throw new Error("native submit was not stopped");
+if (input.value !== "") throw new Error("message was not cleared after submit");
 if (request?.method !== "POST" || request?.url !== "/projects/p1/chat") {{
   throw new Error("chat request was not sent");
 }}
