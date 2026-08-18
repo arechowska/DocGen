@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from docgen.ai.client import ModelError
 from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest
 from docgen.chat.service import ChatGroundingError, ChatService, ChatValidationError
 from docgen.db import Base
@@ -18,6 +19,7 @@ from docgen.sources.models import Source
 class FakeModel:
     def __init__(self) -> None:
         self.calls = 0
+        self.error: ModelError | None = None
         self.result: ChatEditPlan | None = None
 
     def generate_json(self, system: str, user: str, schema):
@@ -25,6 +27,8 @@ class FakeModel:
         assert "русском языке" in system
         assert "Оператор" in user
         assert schema is ChatEditPlan
+        if self.error is not None:
+            raise self.error
         assert self.result is not None
         return self.result
 
@@ -242,6 +246,25 @@ def test_chat_unpositioned_manual_insert_keeps_model_first_fallback(
 
     assert fake_model.calls == 1
     assert result.document.nodes[-1].text == "авторский текст"
+
+
+def test_chat_unpositioned_manual_insert_survives_model_error(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.error = ModelError("Модель недоступна")
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="добавь авторский текст", expected_revision=2),
+    )
+
+    assert fake_model.calls == 1
+    assert result.summary == "Добавлен текст пользователя"
+    assert result.revision == 3
+    inserted = result.document.nodes[-1]
+    assert inserted.kind is NodeKind.PARAGRAPH
+    assert inserted.text == "авторский текст"
 
 
 def test_chat_rejects_unknown_evidence(
