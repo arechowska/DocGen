@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -488,7 +489,7 @@ def _assemble_complete_response(
     template_catalog = TemplateCatalog(
         external_directory=request.app.state.settings.template_dir
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="generation/assemble_complete.html",
         context={
@@ -508,6 +509,10 @@ def _assemble_complete_response(
             "warnings": warnings,
         },
     )
+    response.headers["HX-Trigger"] = json.dumps(
+        {"docgen:document-ready": {}}, ensure_ascii=False
+    )
+    return response
 
 
 def _report_response(

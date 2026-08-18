@@ -53,14 +53,18 @@
 
       if (errorBanner) errorBanner.hidden = true;
       button.disabled = true;
-      Promise.resolve(
-        window.htmx.ajax("POST", form.action, {
+      let request;
+      try {
+        request = window.htmx.ajax("POST", form.action, {
           source: form,
           target: "#chat-messages",
           swap: "beforeend",
           values: {message, revision: revision.value},
-        })
-      )
+        });
+      } catch (error) {
+        request = Promise.reject(error);
+      }
+      Promise.resolve(request)
         .then(() => {
           input.value = "";
         })

@@ -131,6 +131,56 @@ if (request.options.values.message !== "Что за ошибки" || request.opt
     )
 
 
+@_requires_node
+def test_chat_submit_reenables_button_when_htmx_throws(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    harness = f"""
+const input = {{ value: "Добавь вопрос", focus() {{}} }};
+const revision = {{ value: "4" }};
+const button = {{ disabled: false }};
+const banner = {{ hidden: true, textContent: "" }};
+const form = {{
+  action: "/projects/p1/chat",
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector(selector) {{
+    if (selector === "#chatInput") return input;
+    if (selector === 'input[name="revision"]') return revision;
+    if (selector === "#sendButton") return button;
+    return null;
+  }},
+}};
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#chatForm") return form;
+    if (selector === "#errorBanner") return banner;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+}};
+globalThis.window = {{
+  htmx: {{ ajax() {{ throw new Error("request failed"); }} }},
+}};
+{script.text}
+let prevented = false;
+form.listeners.get("submit")({{ preventDefault() {{ prevented = true; }} }});
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (!prevented || button.disabled) throw new Error("button was not re-enabled");
+if (banner.hidden || banner.textContent !== "Не удалось отправить сообщение") {{
+  throw new Error("request error was not shown");
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_templates_have_no_inline_handlers_styles_or_public_executable_assets() -> None:
     template_root = Path(__file__).parents[1] / "src" / "docgen" / "templates"
 
