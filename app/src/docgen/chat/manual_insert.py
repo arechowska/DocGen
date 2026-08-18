@@ -1,6 +1,10 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
+from uuid import uuid4
+
+from docgen.documents.operations import DeleteNode, DocumentOperation, InsertNode
+from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 
 
 class InsertAnchor(str, Enum):
@@ -20,6 +24,18 @@ class ManualInsertIntent:
 
 class ManualInsertError(ValueError):
     pass
+
+
+class ManualInsertTargetError(ManualInsertError):
+    pass
+
+
+@dataclass(frozen=True)
+class _VisualTarget:
+    parent_id: str | None
+    node_index: int
+    node: DocumentNode
+    list_item_index: int | None = None
 
 
 _MANUAL_COMMAND_PATTERN = re.compile(
@@ -117,6 +133,109 @@ def parse_manual_insert(message: str) -> ManualInsertIntent | None:
         return _intent(position.group("text"), anchor, ordinal, True)
 
     return _intent(body, InsertAnchor.DOCUMENT_END, None, False)
+
+
+def manual_insert_operations(
+    document: WorkingDocument,
+    intent: ManualInsertIntent,
+) -> list[DocumentOperation]:
+    paragraph = _manual_paragraph(intent.text)
+    if intent.anchor is InsertAnchor.DOCUMENT_START:
+        return [InsertNode(parent_id=None, index=0, node=paragraph)]
+    if intent.anchor is InsertAnchor.DOCUMENT_END:
+        return [InsertNode(parent_id=None, index=len(document.nodes), node=paragraph)]
+
+    target = _visual_target(document, intent.ordinal)
+    if target.list_item_index is not None:
+        return _list_insert_operations(target, intent.anchor, paragraph)
+
+    index = (
+        target.node_index
+        if intent.anchor is InsertAnchor.BEFORE_VISUAL
+        else target.node_index + 1
+    )
+    return [InsertNode(parent_id=target.parent_id, index=index, node=paragraph)]
+
+
+def _manual_paragraph(text: str) -> DocumentNode:
+    return DocumentNode(
+        id=f"manual-{uuid4()}",
+        kind=NodeKind.PARAGRAPH,
+        text=text,
+        flags=["manual-edit"],
+    )
+
+
+def _visual_target(document: WorkingDocument, ordinal: int | None) -> _VisualTarget:
+    targets = _visual_targets(document.nodes, None)
+    if ordinal is None or ordinal > len(targets):
+        raise ManualInsertTargetError(f"Абзац {ordinal} не найден")
+    return targets[ordinal - 1]
+
+
+def _visual_targets(
+    nodes: list[DocumentNode],
+    parent_id: str | None,
+) -> list[_VisualTarget]:
+    targets: list[_VisualTarget] = []
+    for index, node in enumerate(nodes):
+        if node.kind in {NodeKind.HEADING, NodeKind.PARAGRAPH} and (node.text or "").strip():
+            targets.append(_VisualTarget(parent_id, index, node))
+        if node.kind is NodeKind.LIST:
+            items = node.data.get("items")
+            if isinstance(items, list):
+                targets.extend(
+                    _VisualTarget(parent_id, index, node, item_index)
+                    for item_index, item in enumerate(items)
+                    if isinstance(item, str)
+                )
+        targets.extend(_visual_targets(node.children, node.id))
+    return targets
+
+
+def _list_insert_operations(
+    target: _VisualTarget,
+    anchor: InsertAnchor,
+    paragraph: DocumentNode,
+) -> list[DocumentOperation]:
+    assert target.list_item_index is not None
+    items = target.node.data.get("items")
+    assert isinstance(items, list)
+    boundary = target.list_item_index
+    if anchor is InsertAnchor.AFTER_VISUAL:
+        boundary += 1
+
+    if boundary == 0:
+        return [InsertNode(parent_id=target.parent_id, index=target.node_index, node=paragraph)]
+    if boundary == len(items):
+        return [InsertNode(parent_id=target.parent_id, index=target.node_index + 1, node=paragraph)]
+
+    left_list, right_list = _split_list_node(target.node, boundary)
+    return [
+        InsertNode(parent_id=target.parent_id, index=target.node_index + 1, node=paragraph),
+        DeleteNode(node_id=target.node.id),
+        InsertNode(parent_id=target.parent_id, index=target.node_index, node=left_list),
+        InsertNode(parent_id=target.parent_id, index=target.node_index + 2, node=right_list),
+    ]
+
+
+def _split_list_node(node: DocumentNode, boundary: int) -> tuple[DocumentNode, DocumentNode]:
+    left_data = dict(node.data)
+    right_data = dict(node.data)
+    for key in ("items", "items_html", "item_styles"):
+        value = node.data.get(key)
+        if isinstance(value, list):
+            left_data[key] = value[:boundary]
+            right_data[key] = value[boundary:]
+
+    left_list = node.model_copy(update={"data": left_data, "children": []})
+    right_list = node.model_copy(
+        update={
+            "id": f"manual-split-{uuid4()}",
+            "data": right_data,
+        }
+    )
+    return left_list, right_list
 
 
 def _intent(
