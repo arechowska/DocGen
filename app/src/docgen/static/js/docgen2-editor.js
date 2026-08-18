@@ -103,13 +103,19 @@
     document.execCommand(command, false, value);
   };
 
+  let saveStatusTimer = null;
+
   const setSaveStatus = (message, state = "") => {
     if (!saveStatus) return;
+    if (saveStatusTimer) clearTimeout(saveStatusTimer);
     const isSaved = state === "saved";
     saveStatus.textContent = isSaved ? "✓" : message;
     saveStatus.title = isSaved ? message : "";
     saveStatus.ariaLabel = isSaved ? message : "";
     saveStatus.dataset.state = state;
+    if (isSaved) {
+      saveStatusTimer = setTimeout(() => setSaveStatus(""), 2000);
+    }
   };
 
   const markDocumentReady = () => {

@@ -234,6 +234,18 @@ def test_workspace_topbar_and_document_heading_colours_have_scoped_roles(
     assert ".panel-heading h1{margin:0;color:var(--lk-ink)" in css
 
 
+def test_workspace_topbar_keeps_template_and_format_equally_wide(client: TestClient) -> None:
+    """The export-style selector must not take space from the two primary selectors."""
+    css = client.get("/static/css/docgen.css").text.lower()
+    topbar = css[css.index(".topbar{") : css.index("}", css.index(".topbar{"))]
+
+    assert (
+        "grid-template-columns:auto minmax(300px,1fr) minmax(300px,1fr) "
+        "minmax(220px,.65fr) auto"
+    ) in topbar
+    assert ".topbar-export-form{display:contents" in css
+
+
 def test_heading_select_chevron_is_vertically_aligned_like_docgen2(
     client: TestClient,
 ) -> None:
@@ -328,6 +340,7 @@ const canvas = element({{ innerHTML: '<p data-node-id="n1">Правка</p>', fo
 const title = element({{ value: "После сборки" }});
 const saveButton = element({{ disabled: false }});
 const saveStatus = element({{ textContent: "" }});
+let scheduledClear = null;
 const editor = element({{
   dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
   querySelector(selector) {{
@@ -351,6 +364,13 @@ globalThis.document = {{
   execCommand() {{}},
 }};
 globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.setTimeout = (callback, delay) => {{
+  if (delay === 0) {{ callback(); return 0; }}
+  if (delay !== 2000) throw new Error(`unexpected save-status timeout: ${{delay}}`);
+  scheduledClear = callback;
+  return 1;
+}};
+globalThis.clearTimeout = () => {{}};
 globalThis.fetch = async (url, options) => {{
   posted = {{ url, payload: JSON.parse(options.body) }};
   return {{
@@ -376,6 +396,11 @@ if (saveStatus.textContent !== "✓") {{
 }}
 if (saveStatus.title !== "Сохранено в проекте") {{
   throw new Error(`unexpected save status tooltip: ${{saveStatus.title}}`);
+}}
+if (!scheduledClear) throw new Error("saved status clear was not scheduled");
+scheduledClear();
+if (saveStatus.textContent || saveStatus.title || saveStatus.ariaLabel || saveStatus.dataset.state) {{
+  throw new Error("saved status was not cleared");
 }}
 """
 
