@@ -9,6 +9,8 @@ from pydantic import ValidationError
 
 from docgen.templates_catalog.schemas import SemanticTemplate
 
+NO_TEMPLATE_ID = "no-template"
+
 
 class TemplateConfigurationError(ValueError):
     """Raised when a semantic-template catalog cannot be loaded safely."""

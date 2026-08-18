@@ -4,10 +4,6 @@
   aria-labelledby="sourcesTitle"
   {% if source_panel_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
 >
-  {% set selected_template = namespace(id=templates[0].id if templates else '') %}
-  {% for semantic_template in templates %}
-    {% if semantic_template.id == "use-case" %}{% set selected_template.id = semantic_template.id %}{% endif %}
-  {% endfor %}
   <a class="project-return-link" href="/projects" data-action="back-to-projects">← К выбору проекта</a>
 
   <div class="panel-heading">
@@ -110,7 +106,7 @@
     hx-swap="outerHTML"
     {% if has_document %}hx-confirm="Пересобрать документ? Текущее содержимое и правки через чат будут заменены новым результатом."{% endif %}
   >
-    <input type="hidden" name="template_id" value="{{ selected_template.id }}" data-template-target>
+    <input type="hidden" name="template_id" value="no-template" data-template-target>
   </form>
   <form
     id="checkForm"
@@ -120,7 +116,7 @@
     hx-target="#generation-status"
     hx-swap="outerHTML"
   >
-    <input type="hidden" name="template_id" value="{{ selected_template.id }}" data-template-target>
+    <input type="hidden" name="template_id" value="no-template" data-template-target>
   </form>
   <div id="generation-status" aria-live="polite">
     {% if generation_error %}

@@ -95,7 +95,7 @@ def _project_with_markdown_source(client: TestClient) -> str:
     return project_url
 
 
-def test_workspace_check_is_available_for_one_uploaded_document(client: TestClient) -> None:
+def test_workspace_defaults_to_assembly_without_template(client: TestClient) -> None:
     project_url = _project_with_markdown_source(client)
     page = BeautifulSoup(client.get(project_url).text, "html.parser")
     review = page.find("button", id="reviewButton")
@@ -103,12 +103,13 @@ def test_workspace_check_is_available_for_one_uploaded_document(client: TestClie
     template_select = page.find("select", id="templateSelect")
 
     assert review is not None
-    assert review.has_attr("disabled") is False
+    assert review.has_attr("data-template-required")
     assert check_form is not None
     assert template_select is not None
     selected_template = template_select.find("option", selected=True)
     assert selected_template is not None
-    assert selected_template["value"] == "use-case"
+    assert selected_template["value"] == "no-template"
+    assert selected_template.get_text(strip=True) == "Без шаблона"
     assert check_form.find("input", attrs={"name": "template_id"})["value"] == selected_template["value"]
 
 
@@ -142,7 +143,8 @@ def test_workspace_source_update_swaps_review_button_state(client: TestClient) -
     review = fragment.find("button", id="reviewButton")
     assert review is not None
     assert review["hx-swap-oob"] == "outerHTML"
-    assert review.has_attr("disabled") is False
+    assert review.has_attr("disabled") is True
+    assert review["data-check-available"] == "true"
 
     delete_form = fragment.find("form", attrs={"hx-delete": True})
     source_id = delete_form["hx-delete"].rsplit("/", 1)[-1]
@@ -156,6 +158,7 @@ def test_workspace_source_update_swaps_review_button_state(client: TestClient) -
     assert review is not None
     assert review["hx-swap-oob"] == "outerHTML"
     assert review.has_attr("disabled") is True
+    assert review["data-check-available"] == "false"
 
 
 def test_project_detail_renders_layout_agent_workspace_without_document(

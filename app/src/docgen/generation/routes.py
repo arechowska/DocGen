@@ -23,7 +23,11 @@ from docgen.models import Project, Source, SourceKind
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
 from docgen.sources.repository import SourceRepository
-from docgen.templates_catalog.loader import TemplateCatalog, TemplateConfigurationError
+from docgen.templates_catalog.loader import (
+    NO_TEMPLATE_ID,
+    TemplateCatalog,
+    TemplateConfigurationError,
+)
 from docgen.web import templates
 
 from .targets import is_supported_check_target
@@ -137,12 +141,34 @@ def _start_job(
         return _setup_error(request, session, project, "Добавьте хотя бы один источник", 422)
 
     catalog = TemplateCatalog(external_directory=request.app.state.settings.template_dir)
-    try:
-        template = catalog.get(template_id)
-    except TemplateConfigurationError:
+    without_template = template_id == NO_TEMPLATE_ID
+    if without_template and kind is JobKind.CHECK:
         return _setup_error(
-            request, session, project, "Шаблон не найден", 422, catalog=catalog
+            request,
+            session,
+            project,
+            "Для проверки выберите смысловой шаблон",
+            422,
+            catalog=catalog,
         )
+    if without_template and len(sources) != 1:
+        return _setup_error(
+            request,
+            session,
+            project,
+            "Для сборки без шаблона выберите ровно один источник",
+            422,
+            catalog=catalog,
+        )
+
+    template = None
+    if not without_template:
+        try:
+            template = catalog.get(template_id)
+        except TemplateConfigurationError:
+            return _setup_error(
+                request, session, project, "Шаблон не найден", 422, catalog=catalog
+            )
 
     if kind is JobKind.CHECK:
         document = DocumentRepository(session).get_document(project_id)
@@ -186,7 +212,9 @@ def _start_job(
                 catalog=catalog,
             )
 
-    dependency_error = _dependency_error(request, sources)
+    dependency_error = _dependency_error(
+        request, sources, require_text_model=not without_template
+    )
     if dependency_error is not None:
         return _setup_error(
             request, session, project, dependency_error, 503, catalog=catalog
@@ -196,7 +224,7 @@ def _start_job(
         job = JobRepository(session).enqueue_if_project_idle(
             project_id,
             kind,
-            template.id,
+            NO_TEMPLATE_ID if without_template else template.id,
             target_source_id=target_source_id,
         )
     except ActiveProjectJobExists:
@@ -230,11 +258,14 @@ def _start_job(
     )
 
 
-def _dependency_error(request: Request, sources: list[Source]) -> str | None:
-    try:
-        build_text_model(request.app.state.settings)
-    except ModelConfigurationError:
-        return "Локальные модели не настроены"
+def _dependency_error(
+    request: Request, sources: list[Source], *, require_text_model: bool = True
+) -> str | None:
+    if require_text_model:
+        try:
+            build_text_model(request.app.state.settings)
+        except ModelConfigurationError:
+            return "Локальные модели не настроены"
 
     if any(source.kind is SourceKind.CONFLUENCE for source in sources):
         settings = request.app.state.settings

@@ -224,6 +224,41 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
     assert "storage_path" not in model.user_prompt
 
 
+def test_assemble_without_template_preserves_normalized_blocks_without_models(
+    blocks: list[NormalizedBlock],
+) -> None:
+    events: list[str] = []
+    documents = FakeDocuments(events)
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=FakeNormalization(blocks, events),
+        templates=TemplateCatalog(),
+        text_model=FakeTextModel(AssertionError("text model must not run"), events),
+        vision_model=FakeVisionModel(events),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+    progress = ProgressSpy(events)
+    job = _job(JobKind.ASSEMBLE)
+    job.template_id = "no-template"
+
+    document = workflow.run(job, progress)
+
+    assert document.template_id == "no-template"
+    assert [node.kind for node in document.nodes] == [
+        NodeKind.PARAGRAPH,
+        NodeKind.IMAGE,
+    ]
+    assert [node.text for node in document.nodes] == [block.text for block in blocks]
+    assert [node.data for node in document.nodes] == [block.data for block in blocks]
+    assert [node.provenance for node in document.nodes] == [
+        block.provenance for block in blocks
+    ]
+    assert "text" not in events
+    assert "vision" not in events
+    assert documents.get_document("p1") == document
+
+
 def test_assemble_uses_job_template_when_model_returns_a_different_template_id(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:

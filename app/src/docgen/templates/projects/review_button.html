@@ -3,7 +3,9 @@
   class="button secondary"
   type="submit"
   form="checkForm"
-  {% if not has_document and not check_targets %}disabled{% endif %}
+  data-template-required
+  data-check-available="{% if has_document or check_targets %}true{% else %}false{% endif %}"
+  disabled
   {% if review_button_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
 >
   <span class="button-icon shield-icon" aria-hidden="true"></span>

@@ -108,6 +108,40 @@ def test_start_assemble_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 
+def test_start_assemble_without_template_does_not_require_models(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "no-template"},
+    )
+
+    assert response.status_code == 202
+    job = _jobs_for_project(client, project_with_source.id)[0]
+    assert job.kind is JobKind.ASSEMBLE
+    assert job.template_id == "no-template"
+
+
+def test_start_assemble_without_template_requires_exactly_one_source(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("second.md", b"# Second", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/assemble",
+        data={"template_id": "no-template"},
+    )
+
+    assert response.status_code == 422
+    assert "ровно один источник" in response.text
+    assert _jobs_for_project(client, project_with_source.id) == []
+
+
 def test_start_assemble_accepts_external_semantic_template(
     client: TestClient,
     configured_models: None,
@@ -161,6 +195,19 @@ def test_start_check_enqueues_job(
     assert response.status_code == 202
     assert "Проверка поставлена в очередь" in response.text
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.CHECK
+
+
+def test_start_check_rejects_without_template(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/jobs/check",
+        data={"template_id": "no-template"},
+    )
+
+    assert response.status_code == 422
+    assert "выберите смысловой шаблон" in response.text.lower()
+    assert _jobs_for_project(client, project_with_source.id) == []
 
 
 def test_start_standalone_check_enqueues_owned_target_source(

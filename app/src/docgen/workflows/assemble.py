@@ -12,12 +12,12 @@ from docgen.ai.client import TextModel, VisionDescription, VisionModel
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import DOCUMENT_SYSTEM_PROMPT
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, WorkingDocument
+from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.runner import ProgressSink, UserSafeJobError
 from docgen.projects.repository import ProjectRepository
-from docgen.templates_catalog.loader import TemplateCatalog
+from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticTemplate
 
 from .normalize import NormalizationWorkflow, NormalizedProject
@@ -57,11 +57,20 @@ class AssembleWorkflow:
             raise WorkflowError(_ASSEMBLE_KIND_ERROR)
 
         progress(10, "Загружены проект и шаблон")
-        if self._projects.get(job.project_id) is None:
+        project = self._projects.get(job.project_id)
+        if project is None:
             raise WorkflowError(_PROJECT_NOT_FOUND)
-        template = self._templates.get(job.template_id)
 
         normalized = normalize_sources(self._normalization, job.project_id, progress)
+        if job.template_id == NO_TEMPLATE_ID:
+            document = _document_without_template(
+                normalized.blocks, getattr(project, "name", "Документ")
+            )
+            progress(100, "Сохранение документа")
+            self._documents.save_document(job.project_id, document)
+            return document
+
+        template = self._templates.get(job.template_id)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
 
         progress(90, "Сборка документа моделью")
@@ -87,6 +96,33 @@ class AssembleWorkflow:
         progress(100, "Сохранение документа")
         self._documents.save_document(job.project_id, document)
         return document
+
+
+def _document_without_template(
+    blocks: list[NormalizedBlock], title: str
+) -> WorkingDocument:
+    node_kinds = {
+        BlockKind.TEXT: NodeKind.PARAGRAPH,
+        BlockKind.HEADING: NodeKind.HEADING,
+        BlockKind.LIST: NodeKind.LIST,
+        BlockKind.TABLE: NodeKind.TABLE,
+        BlockKind.IMAGE: NodeKind.IMAGE,
+    }
+    nodes: list[DocumentNode] = []
+    for block in blocks:
+        data = dict(block.data)
+        if block.kind is BlockKind.LIST and "items" not in data:
+            data["items"] = [block.text]
+        nodes.append(
+            DocumentNode(
+                id=f"document-node:{block.id}",
+                kind=node_kinds[block.kind],
+                text=block.text,
+                data=data,
+                provenance=list(block.provenance),
+            )
+        )
+    return WorkingDocument(title=title, template_id=NO_TEMPLATE_ID, nodes=nodes)
 
 
 def enrich_images(

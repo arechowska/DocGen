@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 
 {% block content %}
-  {% set selected_template = namespace(id=templates[0].id if templates else '') %}
-  {% for semantic_template in templates %}
-    {% if semantic_template.id == "use-case" %}{% set selected_template.id = semantic_template.id %}{% endif %}
-  {% endfor %}
   <div class="app-shell">
     <header class="topbar">
       <div class="brand" aria-label="Formatta">
@@ -23,8 +19,9 @@
       <label class="control template-control" title="Шаблон определяет структуру документа">
         <span>Шаблон</span>
         <select id="templateSelect" data-template-source>
+          <option value="no-template" selected>Без шаблона</option>
           {% for semantic_template in templates %}
-            <option value="{{ semantic_template.id }}" {% if semantic_template.id == selected_template.id %}selected{% endif %}>{{ semantic_template.name }}{% if semantic_template.id == "use-case" %} (Use Case){% endif %}</option>
+            <option value="{{ semantic_template.id }}">{{ semantic_template.name }}{% if semantic_template.id == "use-case" %} (Use Case){% endif %}</option>
           {% endfor %}
         </select>
       </label>

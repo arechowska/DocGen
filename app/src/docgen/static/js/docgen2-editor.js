@@ -22,6 +22,12 @@
     document.querySelectorAll("[data-template-target]").forEach((target) => {
       target.value = templateSource?.value || "";
     });
+    const reviewButton = document.querySelector("[data-template-required]");
+    if (reviewButton) {
+      reviewButton.disabled =
+        templateSource?.value === "no-template" ||
+        reviewButton.dataset.checkAvailable !== "true";
+    }
   };
 
   if (templateSource) {
