@@ -353,7 +353,9 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     chat_form = soup.find(id="chatForm")
     assert chat_form is not None
     assert chat_form.get("action") == f"/projects/{project_id}/chat"
-    assert chat_form.get("hx-post") is None
+    assert chat_form.get("hx-post") == f"/projects/{project_id}/chat"
+    assert chat_form.get("hx-target") == "#chat-messages"
+    assert chat_form.get("hx-swap") == "beforeend"
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:
