@@ -60,6 +60,7 @@
           target: "#chat-messages",
           swap: "beforeend",
           values: {message, revision: revision.value},
+          timeout: 30000,
         });
       } catch (error) {
         request = Promise.reject(error);

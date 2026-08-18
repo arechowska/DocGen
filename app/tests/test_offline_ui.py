@@ -121,6 +121,7 @@ if (request?.method !== "POST" || request?.url !== "/projects/p1/chat") {{
 if (request.options.values.message !== "Что за ошибки" || request.options.values.revision !== "4") {{
   throw new Error(`unexpected chat payload: ${{JSON.stringify(request.options.values)}}`);
 }}
+if (request.options.timeout !== 30000) throw new Error("chat timeout is missing");
 """
 
     subprocess.run(
@@ -220,6 +221,7 @@ def test_workspace_css_contains_corporate_layout_tokens(client: TestClient) -> N
         ".table-menu",
         ".table-size-grid",
         ".chat-panel",
+        "row-gap:12px",
         ".result-panel",
         ".project-card-link{min-height:84px;display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center",
         ".project-delete-button{position:absolute;top:10px;right:10px",
