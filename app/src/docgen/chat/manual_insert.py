@@ -168,7 +168,7 @@ def _manual_paragraph(text: str) -> DocumentNode:
 
 def _visual_target(document: WorkingDocument, ordinal: int | None) -> _VisualTarget:
     targets = _visual_targets(document.nodes, None)
-    if ordinal is None or ordinal > len(targets):
+    if ordinal is None or ordinal < 1 or ordinal > len(targets):
         raise ManualInsertTargetError(f"Абзац {ordinal} не найден")
     return targets[ordinal - 1]
 

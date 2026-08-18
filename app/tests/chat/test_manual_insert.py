@@ -4,6 +4,7 @@ from docgen.chat.manual_insert import (
     InsertAnchor,
     ManualInsertError,
     ManualInsertIntent,
+    ManualInsertTargetError,
     manual_insert_operations,
     parse_manual_insert,
 )
@@ -26,6 +27,22 @@ def test_insert_before_second_visual_paragraph_counts_heading() -> None:
 
     assert [node.text for node in result.nodes] == ["Заголовок", "Новый", "Текст"]
     assert result.nodes[1].flags == ["manual-edit"]
+
+
+@pytest.mark.parametrize("ordinal", [0, -1])
+def test_insert_rejects_non_positive_visual_ordinal(ordinal: int) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(id="one", kind=NodeKind.PARAGRAPH, text="Первый"),
+            DocumentNode(id="two", kind=NodeKind.PARAGRAPH, text="Второй"),
+        ],
+    )
+    intent = ManualInsertIntent("Новый", InsertAnchor.BEFORE_VISUAL, ordinal, True)
+
+    with pytest.raises(ManualInsertTargetError):
+        manual_insert_operations(document, intent)
 
 
 @pytest.mark.parametrize(
