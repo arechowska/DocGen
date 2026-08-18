@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest
-from docgen.chat.service import ChatGroundingError, ChatService
+from docgen.chat.service import ChatGroundingError, ChatService, ChatValidationError
 from docgen.db import Base
 from docgen.documents.models import ProjectArtifact
 from docgen.documents.operations import MoveNode, UpdateData, UpdateText, find_node
@@ -17,9 +17,11 @@ from docgen.sources.models import Source
 
 class FakeModel:
     def __init__(self) -> None:
+        self.calls = 0
         self.result: ChatEditPlan | None = None
 
     def generate_json(self, system: str, user: str, schema):
+        self.calls += 1
         assert "русском языке" in system
         assert "Оператор" in user
         assert schema is ChatEditPlan
@@ -182,6 +184,64 @@ def test_chat_adds_user_text_at_document_start_when_requested(
     assert inserted.text == "я поэт зовусь незнайка от меня вам балалайка"
     assert result.document.nodes[1].id == "actor"
     assert result.document.nodes[2].id == "limit"
+
+
+def test_chat_positioned_manual_insert_bypasses_model(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(
+            message="допиши перед вторым абзацем: Новый текст",
+            expected_revision=2,
+        ),
+    )
+
+    assert fake_model.calls == 0
+    assert [node.text for node in result.document.nodes] == [
+        "Оператор",
+        "Новый текст",
+        "Лимит",
+    ]
+    assert result.summary == "Добавлен текст пользователя"
+
+
+def test_chat_missing_visual_target_preserves_document(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    with pytest.raises(ChatValidationError, match="Абзац 9 не найден"):
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(
+                message="допиши после девятого абзаца: Новый текст",
+                expected_revision=2,
+            ),
+        )
+
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None
+    document, revision = stored
+    assert revision == 2
+    assert [node.text for node in document.nodes] == ["Оператор", "Лимит"]
+    assert fake_model.calls == 0
+
+
+def test_chat_unpositioned_manual_insert_keeps_model_first_fallback(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="добавь авторский текст", expected_revision=2),
+    )
+
+    assert fake_model.calls == 1
+    assert result.document.nodes[-1].text == "авторский текст"
 
 
 def test_chat_rejects_unknown_evidence(
