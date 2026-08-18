@@ -909,6 +909,18 @@
   padding: 20px 26px;
 }
 
+.chat-user-message {
+  width: fit-content;
+  max-width: 88%;
+  margin: 0 0 10px auto;
+  padding: 10px 12px;
+  color: #fff;
+  background: var(--lk-primary);
+  border-radius: 12px 12px 4px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .empty-chat,
 .preview-empty {
   height: 100%;

@@ -53,6 +53,10 @@
 
       if (errorBanner) errorBanner.hidden = true;
       button.disabled = true;
+      const userMessage = document.createElement("div");
+      userMessage.className = "message chat-user-message";
+      userMessage.textContent = message;
+      document.querySelector("#chat-messages")?.appendChild(userMessage);
       input.value = "";
       let request;
       try {

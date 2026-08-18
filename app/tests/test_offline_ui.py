@@ -78,6 +78,7 @@ const input = {{ value: "Что за ошибки", focus() {{}} }};
 const revision = {{ value: "4" }};
 const button = {{ disabled: false }};
 const banner = {{ hidden: true, textContent: "" }};
+const messages = {{ children: [], appendChild(node) {{ this.children.push(node); }} }};
 const form = {{
   action: "/projects/p1/chat",
   dataset: {{}},
@@ -95,8 +96,10 @@ globalThis.document = {{
   querySelector(selector) {{
     if (selector === "#chatForm") return form;
     if (selector === "#errorBanner") return banner;
+    if (selector === "#chat-messages") return messages;
     return null;
   }},
+  createElement() {{ return {{ className: "", textContent: "" }}; }},
   querySelectorAll() {{ return []; }},
   addEventListener(type, listener) {{ documentListeners.set(type, listener); }},
   execCommand() {{}},
@@ -116,6 +119,9 @@ await form.listeners.get("submit")({{ preventDefault() {{ prevented = true; }} }
 await new Promise((resolve) => setTimeout(resolve, 0));
 if (!prevented) throw new Error("native submit was not stopped");
 if (input.value !== "") throw new Error("message was not cleared after submit");
+if (messages.children.length !== 1 || messages.children[0].textContent !== "Что за ошибки") {{
+  throw new Error("sent message was not added to chat");
+}}
 if (request?.method !== "POST" || request?.url !== "/projects/p1/chat") {{
   throw new Error("chat request was not sent");
 }}
@@ -157,8 +163,10 @@ globalThis.document = {{
   querySelector(selector) {{
     if (selector === "#chatForm") return form;
     if (selector === "#errorBanner") return banner;
+    if (selector === "#chat-messages") return {{ appendChild() {{}} }};
     return null;
   }},
+  createElement() {{ return {{ className: "", textContent: "" }}; }},
   querySelectorAll() {{ return []; }},
   addEventListener() {{}},
 }};
