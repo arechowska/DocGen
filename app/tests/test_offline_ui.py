@@ -82,7 +82,13 @@ const input = {{ value: "Что за ошибки", focus() {{}} }};
 const revision = {{ value: "4" }};
 const button = {{ disabled: false }};
 const banner = {{ hidden: true, textContent: "" }};
-const messages = {{ children: [], appendChild(node) {{ this.children.push(node); }} }};
+const messages = {{
+  children: [],
+  appendChild(node) {{
+    node.remove = () => {{ this.children = this.children.filter((item) => item !== node); }};
+    this.children.push(node);
+  }},
+}};
 const form = {{
   action: "/projects/p1/chat",
   dataset: {{}},
@@ -133,6 +139,79 @@ if (request.options.values.message !== "Что за ошибки" || request.opt
   throw new Error(`unexpected chat payload: ${{JSON.stringify(request.options.values)}}`);
 }}
 if (request.options.timeout !== 30000) throw new Error("chat timeout is missing");
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@_requires_node
+def test_chat_shows_thinking_state_until_request_finishes(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const input = {{ value: "Добавь вопросы" }};
+const revision = {{ value: "4" }};
+const button = {{ disabled: false }};
+const banner = {{ hidden: true, textContent: "" }};
+const statusText = {{ textContent: "Готово" }};
+const statusBadge = {{ state: "ready", setAttribute(name, value) {{ if (name === "data-state") this.state = value; }} }};
+const messages = {{
+  children: [],
+  appendChild(node) {{
+    node.remove = () => {{ this.children = this.children.filter((item) => item !== node); }};
+    this.children.push(node);
+  }},
+}};
+const form = {{
+  action: "/projects/p1/chat",
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector(selector) {{
+    if (selector === "#chatInput") return input;
+    if (selector === 'input[name="revision"]') return revision;
+    if (selector === "#sendButton") return button;
+    return null;
+  }},
+}};
+let finishRequest;
+globalThis.document = {{
+  querySelector(selector) {{
+    if (selector === "#chatForm") return form;
+    if (selector === "#errorBanner") return banner;
+    if (selector === "#chat-messages") return messages;
+    if (selector === "#statusBadge") return statusBadge;
+    if (selector === "#statusText") return statusText;
+    return null;
+  }},
+  createElement() {{ return {{ className: "", textContent: "" }}; }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+}};
+globalThis.window = {{
+  htmx: {{ ajax() {{ return new Promise((resolve) => {{ finishRequest = resolve; }}); }} }},
+}};
+{script.text}
+form.listeners.get("submit")({{ preventDefault() {{}} }});
+if (!button.disabled) throw new Error("send button stayed enabled");
+if (statusText.textContent !== "Думаю…" || statusBadge.state !== "thinking") {{
+  throw new Error("top status did not switch to thinking");
+}}
+if (messages.children.length !== 2 || messages.children[1].textContent !== "Думаю…") {{
+  throw new Error("thinking message was not added to chat");
+}}
+finishRequest();
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (button.disabled) throw new Error("send button stayed disabled");
+if (statusText.textContent !== "Готово" || statusBadge.state !== "ready") {{
+  throw new Error("top status did not return to ready");
+}}
+if (messages.children.length !== 1) throw new Error("thinking message was not removed");
 """
 
     subprocess.run(

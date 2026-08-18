@@ -42,6 +42,8 @@
     const revision = form.querySelector('input[name="revision"]');
     const button = form.querySelector("#sendButton");
     const errorBanner = document.querySelector("#errorBanner");
+    const statusBadge = document.querySelector("#statusBadge");
+    const statusText = document.querySelector("#statusText");
     if (!input || !revision || !button) return;
 
     form.dataset.chatInitialized = "true";
@@ -63,6 +65,12 @@
       userMessage.className = "message chat-user-message";
       userMessage.textContent = message;
       document.querySelector("#chat-messages")?.appendChild(userMessage);
+      const thinkingMessage = document.createElement("div");
+      thinkingMessage.className = "message chat-thinking-message";
+      thinkingMessage.textContent = "Думаю…";
+      document.querySelector("#chat-messages")?.appendChild(thinkingMessage);
+      statusBadge?.setAttribute("data-state", "thinking");
+      if (statusText) statusText.textContent = "Думаю…";
       input.value = "";
       let request;
       try {
@@ -85,6 +93,9 @@
           }
         })
         .finally(() => {
+          thinkingMessage.remove?.();
+          statusBadge?.setAttribute("data-state", "ready");
+          if (statusText) statusText.textContent = "Готово";
           button.disabled = false;
         });
     });

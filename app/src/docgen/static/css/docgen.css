@@ -2,3 +2,4 @@
 /* Workspace chat spacing override. */
 .chat-panel{row-gap:12px}
 .chat-user-message{width:fit-content;max-width:88%;margin:0 0 10px auto;padding:10px 12px;color:#fff;background:var(--lk-primary);border-radius:12px 12px 4px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.status-badge[data-state=thinking] .status-dot{background:#d49a24;animation:chat-thinking-pulse 1.2s ease-in-out infinite}.chat-thinking-message{width:fit-content;margin:0 auto 10px 0;padding:10px 12px;color:var(--lk-text-muted);background:var(--lk-surface-soft);border-radius:12px 12px 12px 4px;animation:chat-thinking-pulse 1.2s ease-in-out infinite}@keyframes chat-thinking-pulse{50%{opacity:.55}}
