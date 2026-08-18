@@ -156,23 +156,47 @@
         {% else %}
           {% for node in document.nodes %}
             {% if node.kind.value == "heading" %}
-              <h2 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ node.text }}</h2>
+              {% set heading_level = node.data.get("level", 2)|int(2) %}
+              {% set heading_level = [heading_level, 1]|max %}
+              {% set heading_level = [heading_level, 6]|min %}
+              {% set heading_content %}{% if node.data.get("html") %}{{ node.data.get("html") | safe }}{% else %}{{ node.text }}{% endif %}{% endset %}
+              {% if heading_level == 1 %}
+                <h1 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ heading_content }}</h1>
+              {% elif heading_level == 2 %}
+                <h2 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ heading_content }}</h2>
+              {% elif heading_level == 3 %}
+                <h3 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ heading_content }}</h3>
+              {% elif heading_level == 4 %}
+                <h4 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ heading_content }}</h4>
+              {% elif heading_level == 5 %}
+                <h5 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ heading_content }}</h5>
+              {% else %}
+                <h6 data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ heading_content }}</h6>
+              {% endif %}
             {% elif node.kind.value == "paragraph" %}
-              <p data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{{ node.text }}</p>
+              <p data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% if node.data.get("html") %}{{ node.data.get("html") | safe }}{% else %}{{ node.text }}{% endif %}</p>
             {% elif node.kind.value == "list" %}
               {% if document.template_id == "faq" %}
                 <ol data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{% if node.text %} data-section-title="{{ node.text }}"{% endif %} class="faq-question-list"{{ node_style_attribute(node) }}>
                   {% for item in node.data.get("items", []) %}
-                    {% set answer_split = item.split("Ответ:", 1) %}
-                    {% set question_split = answer_split[0].split("Вопрос:", 1) %}
-                    <li>
-                      {% if question_split|length > 1 %}<strong>Вопрос:</strong>{{ question_split[1] }}{% else %}{{ answer_split[0] }}{% endif %}
-                      {% if answer_split|length > 1 %}<br><strong>Ответ:</strong>{{ answer_split[1] }}{% endif %}
+                    {% set item_style = "" %}
+                    {% if node.data.get("item_styles") and node.data.get("item_styles")|length > loop.index0 %}
+                      {% set item_style = node.data.get("item_styles")[loop.index0] %}
+                    {% endif %}
+                    <li{{ style_attribute(item_style) }}>
+                      {% if node.data.get("items_html") and node.data.get("items_html")|length > loop.index0 %}
+                        {{ node.data.get("items_html")[loop.index0] | safe }}
+                      {% else %}
+                        {% set answer_split = item.split("Ответ:", 1) %}
+                        {% set question_split = answer_split[0].split("Вопрос:", 1) %}
+                        {% if question_split|length > 1 %}<strong>Вопрос:</strong>{{ question_split[1] }}{% else %}{{ answer_split[0] }}{% endif %}
+                        {% if answer_split|length > 1 %}<br><strong>Ответ:</strong>{{ answer_split[1] }}{% endif %}
+                      {% endif %}
                     </li>
                   {% endfor %}
                 </ol>
               {% else %}
-                <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% for item in node.data.get("items", []) %}<li>{{ item }}</li>{% endfor %}</ul>
+                <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% for item in node.data.get("items", []) %}{% set item_style = "" %}{% if node.data.get("item_styles") and node.data.get("item_styles")|length > loop.index0 %}{% set item_style = node.data.get("item_styles")[loop.index0] %}{% endif %}<li{{ style_attribute(item_style) }}>{% if node.data.get("items_html") and node.data.get("items_html")|length > loop.index0 %}{{ node.data.get("items_html")[loop.index0] | safe }}{% else %}{{ item }}{% endif %}</li>{% endfor %}</ul>
               {% endif %}
             {% elif node.kind.value == "table" %}
               <table data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>

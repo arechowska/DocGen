@@ -65,6 +65,13 @@ def node_style_attribute(node: Any) -> Markup:
     return Markup(f' style="{escape(style)}"')
 
 
+def style_attribute(value: str) -> Markup:
+    style = normalized_style_attribute(value)
+    if not style:
+        return Markup("")
+    return Markup(f' style="{escape(style)}"')
+
+
 def _normalized_style_items(items: dict[str, Any]) -> dict[str, str]:
     result: dict[str, str] = {}
     for raw_property, raw_value in items.items():

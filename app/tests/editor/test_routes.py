@@ -490,6 +490,32 @@ def test_project_detail_renders_semantic_node_formatting(
     assert paragraph.get("style") == "color:blue;font-weight:700;margin-left:24px"
 
 
+def test_project_detail_renders_semantic_heading_level(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        nodes = [
+            node.model_copy(update={"data": {"level": 1}})
+            if node.id == "n1"
+            else node
+            for node in document.nodes
+        ]
+        DocumentRepository(session).save_document(
+            project_with_document.id,
+            document.model_copy(update={"nodes": nodes}),
+        )
+        session.commit()
+
+    response = client.get(f"/projects/{project_with_document.id}")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    heading = soup.find("h1", attrs={"data-node-id": "n1"})
+    assert heading is not None
+
+
 def test_workspace_save_preserves_allowed_inline_formatting(
     client: TestClient, project_with_document: Project
 ) -> None:
@@ -518,6 +544,609 @@ def test_workspace_save_preserves_allowed_inline_formatting(
             "margin-left": "24px",
         }
     }
+
+
+def test_workspace_save_preserves_heading_level_in_document_data(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Heading level",
+            "html": '<h1 data-node-id="n1">Top heading</h1>',
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id).nodes[0]
+    assert saved.kind is NodeKind.HEADING
+    assert saved.data["level"] == 1
+
+
+def test_workspace_save_promotes_full_span_style_to_document_data(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Nested style",
+            "html": (
+                '<p data-node-id="p1">'
+                '<span style="color:red;margin-left:24px">Styled paragraph</span>'
+                "</p>"
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id).nodes[0]
+    assert saved.data["style"] == {"color": "red", "margin-left": "24px"}
+    assert saved.data["html"] == (
+        '<span style="color:red;margin-left:24px">Styled paragraph</span>'
+    )
+
+
+def test_workspace_save_converts_browser_font_color_to_document_style(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Font color",
+            "html": '<p data-node-id="p1"><font color="blue">Blue paragraph</font></p>',
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id).nodes[0]
+    assert saved.data["style"] == {"color": "blue"}
+    assert saved.data["html"] == '<span style="color:blue">Blue paragraph</span>'
+
+
+def test_workspace_save_preserves_faq_question_list_presentation(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={
+                        "items": [
+                            "Вопрос: Первый вопрос Ответ: Первый ответ",
+                            "Вопрос: Второй вопрос Ответ: Второй ответ",
+                        ]
+                    },
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    canvas = page.find(id="docgen2DocumentCanvas")
+    assert canvas is not None
+    faq_list = canvas.find("ol", attrs={"data-node-id": "faq-questions"})
+    assert faq_list is not None
+    assert faq_list.get("class") == ["faq-question-list"]
+    assert faq_list.get("data-section-title") == "Общие вопросы"
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": canvas.decode_contents(),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved_html = BeautifulSoup(response.json()["html"], "html.parser")
+    saved_list = saved_html.find("ol", attrs={"data-node-id": "faq-questions"})
+    assert saved_list is not None
+    assert saved_list.get("class") == ["faq-question-list"]
+    assert saved_list.get("data-section-title") == "Общие вопросы"
+
+
+def test_workspace_save_preserves_faq_question_list_block_style(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={"items": ["Вопрос: Первый Ответ: Первый"]},
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": (
+                '<ol class="faq-question-list" data-node-id="faq-questions" '
+                'data-kind="list" data-section-title="Общие вопросы" '
+                'style="color:green;font-style:italic">'
+                "<li><strong>Вопрос:</strong> Первый<br>"
+                "<strong>Ответ:</strong> Первый</li>"
+                "</ol>"
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved_html = BeautifulSoup(response.json()["html"], "html.parser")
+    saved_list = saved_html.find("ol", attrs={"data-node-id": "faq-questions"})
+    assert saved_list is not None
+    assert saved_list.get("style") == "color:green;font-style:italic"
+    saved = _stored_document(client, project_id).nodes[0]
+    assert saved.data["style"] == {"color": "green", "font-style": "italic"}
+
+
+def test_workspace_save_promotes_common_faq_item_style_to_list_data(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={
+                        "items": [
+                            "Вопрос: Первый Ответ: Первый",
+                            "Вопрос: Второй Ответ: Второй",
+                        ]
+                    },
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": (
+                '<ol class="faq-question-list" data-node-id="faq-questions" '
+                'data-kind="list" data-section-title="Общие вопросы">'
+                '<li style="color:green;font-style:italic">'
+                "<strong>Вопрос:</strong> Первый<br><strong>Ответ:</strong> Первый"
+                "</li>"
+                '<li><span style="color:green;font-style:italic">'
+                "<strong>Вопрос:</strong> Второй<br><strong>Ответ:</strong> Второй"
+                "</span></li>"
+                "</ol>"
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_id).nodes[0]
+    assert saved.data["style"] == {"color": "green", "font-style": "italic"}
+
+
+def test_workspace_save_restores_rich_list_item_html_from_document_data(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={"items": ["Вопрос: Первый Ответ: Первый"]},
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": (
+                '<ol class="faq-question-list" data-node-id="faq-questions" '
+                'data-kind="list" data-section-title="Общие вопросы">'
+                "<li>"
+                '<span style="color:green;font-family:Arial;font-size:18px;'
+                'font-style:italic;font-weight:700">'
+                "Вопрос: Первый<br>Ответ: Первый"
+                "</span>"
+                "</li>"
+                "</ol>"
+            ),
+            "revision": 1,
+        },
+    )
+    assert response.status_code == 200
+    saved = _stored_document(client, project_id)
+
+    with _session(client) as session:
+        DocumentRepository(session).save_document(project_id, saved)
+        session.commit()
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    restored = page.find("ol", attrs={"data-node-id": "faq-questions"})
+    assert restored is not None
+    restored_span = restored.find("span")
+    assert restored_span is not None
+    assert restored_span.get("style") == (
+        "color:green;font-family:Arial;font-size:18px;"
+        "font-style:italic;font-weight:700"
+    )
+
+
+def test_workspace_save_restores_list_item_style_from_document_data(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={
+                        "items": [
+                            "Вопрос: Первый Ответ: Первый",
+                            "Вопрос: Второй Ответ: Второй",
+                        ]
+                    },
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": (
+                '<ol class="faq-question-list" data-node-id="faq-questions" '
+                'data-kind="list" data-section-title="Общие вопросы">'
+                '<li style="color:green;font-style:italic">'
+                "<strong>Вопрос:</strong> Первый<br><strong>Ответ:</strong> Первый"
+                "</li>"
+                "<li><strong>Вопрос:</strong> Второй<br><strong>Ответ:</strong> Второй</li>"
+                "</ol>"
+            ),
+            "revision": 1,
+        },
+    )
+    assert response.status_code == 200
+    saved = _stored_document(client, project_id)
+
+    with _session(client) as session:
+        DocumentRepository(session).save_document(project_id, saved)
+        session.commit()
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    restored_items = page.select('ol[data-node-id="faq-questions"] > li')
+    assert len(restored_items) == 2
+    assert restored_items[0].get("style") == "color:green;font-style:italic"
+    assert restored_items[1].get("style") is None
+
+
+def test_workspace_save_preserves_chat_applied_list_style_after_render_round_trip(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={
+                        "items": ["Вопрос: Первый Ответ: Первый"],
+                        "style": {"color": "green", "font-style": "italic"},
+                    },
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    canvas = page.find(id="docgen2DocumentCanvas")
+    assert canvas is not None
+    rendered_list = canvas.find("ol", attrs={"data-node-id": "faq-questions"})
+    assert rendered_list is not None
+    assert rendered_list.get("style") == "color:green;font-style:italic"
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": canvas.decode_contents(),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_id).nodes[0]
+    assert saved.data["style"] == {"color": "green", "font-style": "italic"}
+
+
+def test_workspace_save_response_applies_list_style_to_items(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="FAQ")
+        session.add(project)
+        session.flush()
+        document = WorkingDocument(
+            title="FAQ по материалам источников",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    id="faq-questions",
+                    kind=NodeKind.LIST,
+                    text="Общие вопросы",
+                    data={
+                        "items": ["Вопрос: Первый Ответ: Первый"],
+                        "style": {"color": "green", "font-style": "italic"},
+                    },
+                )
+            ],
+        )
+        DocumentRepository(session).save_document(project.id, document)
+        session.commit()
+        project_id = project.id
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": (
+                '<ol class="faq-question-list" data-node-id="faq-questions" '
+                'data-kind="list" data-section-title="Общие вопросы">'
+                "<li><strong>Вопрос:</strong> Первый<br><strong>Ответ:</strong> Первый</li>"
+                "</ol>"
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    returned_html = BeautifulSoup(response.json()["html"], "html.parser")
+    returned_list = returned_html.find("ol", attrs={"data-node-id": "faq-questions"})
+    assert returned_list is not None
+    assert returned_list.get("style") == "color:green;font-style:italic"
+    returned_item = returned_list.find("li")
+    assert returned_item is not None
+    assert returned_item.get("style") == "color:green;font-style:italic"
+
+
+def test_workspace_save_keeps_existing_style_when_workspace_html_has_no_style(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        nodes = [
+            node.model_copy(
+                update={"data": {"style": {"color": "green", "font-style": "italic"}}}
+            )
+            if node.id == "p1"
+            else node
+            for node in document.nodes
+        ]
+        DocumentRepository(session).save_document(
+            project_with_document.id,
+            document.model_copy(update={"nodes": nodes}),
+        )
+        session.commit()
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": '<p data-node-id="p1">Абзац без inline style</p>',
+            "revision": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id).nodes[0]
+    assert saved.data["style"] == {"color": "green", "font-style": "italic"}
+
+
+def test_workspace_save_response_restores_existing_style_to_returned_html(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        nodes = [
+            node.model_copy(
+                update={"data": {"style": {"color": "green", "font-style": "italic"}}}
+            )
+            if node.id == "p1"
+            else node
+            for node in document.nodes
+        ]
+        DocumentRepository(session).save_document(
+            project_with_document.id,
+            document.model_copy(update={"nodes": nodes}),
+        )
+        session.commit()
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": '<p data-node-id="p1">Абзац без inline style</p>',
+            "revision": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    returned_html = BeautifulSoup(response.json()["html"], "html.parser")
+    paragraph = returned_html.find("p", attrs={"data-node-id": "p1"})
+    assert paragraph is not None
+    assert paragraph.get("style") == "color:green;font-style:italic"
+
+
+def test_workspace_save_preserves_browser_rgb_color_and_italic_style(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "RGB style",
+            "html": (
+                '<p data-node-id="p1" '
+                'style="color: rgb(0, 128, 0); font-style: italic;">'
+                "Зелёный курсив"
+                "</p>"
+            ),
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id).nodes[0]
+    assert saved.data["style"] == {
+        "color": "rgb(0, 128, 0)",
+        "font-style": "italic",
+    }
+    returned_html = BeautifulSoup(response.json()["html"], "html.parser")
+    paragraph = returned_html.find("p", attrs={"data-node-id": "p1"})
+    assert paragraph is not None
+    assert paragraph.get("style") == "color:rgb(0, 128, 0);font-style:italic"
+
+
+def test_project_detail_after_workspace_save_keeps_existing_style_in_workspace_html(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        nodes = [
+            node.model_copy(
+                update={"data": {"style": {"color": "green", "font-style": "italic"}}}
+            )
+            if node.id == "p1"
+            else node
+            for node in document.nodes
+        ]
+        DocumentRepository(session).save_document(
+            project_with_document.id,
+            document.model_copy(update={"nodes": nodes}),
+        )
+        session.commit()
+
+    saved = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "FAQ по материалам источников",
+            "html": '<p data-node-id="p1">Абзац без inline style</p>',
+            "revision": 2,
+        },
+    )
+    assert saved.status_code == 200
+
+    response = client.get(f"/projects/{project_with_document.id}")
+
+    assert response.status_code == 200
+    page = BeautifulSoup(response.text, "html.parser")
+    paragraph = page.find("p", attrs={"data-node-id": "p1"})
+    assert paragraph is not None
+    assert paragraph.get("style") == "color:green;font-style:italic"
+
+
+def test_workspace_save_restores_rich_paragraph_html_from_document_data(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Rich paragraph",
+            "html": (
+                '<p data-node-id="p1">'
+                '<font color="green" face="Arial">'
+                "<b><i><u>Formatted paragraph</u></i></b>"
+                "</font>"
+                "</p>"
+            ),
+            "revision": 1,
+        },
+    )
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id)
+
+    with _session(client) as session:
+        DocumentRepository(session).save_document(project_with_document.id, saved)
+        session.commit()
+
+    page = BeautifulSoup(
+        client.get(f"/projects/{project_with_document.id}").text,
+        "html.parser",
+    )
+    paragraph = page.find("p", attrs={"data-node-id": "p1"})
+    assert paragraph is not None
+    span = paragraph.find("span")
+    assert span is not None
+    assert span.get("style") == "color:green;font-family:Arial"
+    assert span.find("b") is not None
+    assert span.find("i") is not None
+    assert span.find("u") is not None
 
 
 def test_no_op_workspace_save_preserves_generated_document_title(

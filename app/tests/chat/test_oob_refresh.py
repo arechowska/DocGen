@@ -80,3 +80,30 @@ def test_chat_response_includes_oob_editor_refresh(
     assert 'id="docgen2Editor"' in response.text
     assert 'hx-swap-oob="outerHTML"' in response.text
     assert 'style="color:blue;font-weight:700"' in response.text
+
+
+def test_chat_oob_editor_uses_chat_result_instead_of_stale_workspace_html(
+    client: TestClient, project_with_document: Project
+) -> None:
+    session = client.app.state.session_factory()
+    try:
+        document = DocumentRepository(session).get_document(project_with_document.id)
+        assert document is not None
+        DocumentRepository(session).save_workspace(
+            project_with_document.id,
+            expected_revision=1,
+            document=document,
+            html='<p data-node-id="n1">Plain saved snapshot</p>',
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/chat",
+        data={"message": "style edit", "revision": "2"},
+    )
+
+    assert response.status_code == 200
+    assert "Plain saved snapshot" not in response.text
+    assert 'style="color:blue;font-weight:700"' in response.text

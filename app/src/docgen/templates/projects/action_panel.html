@@ -28,12 +28,13 @@
   <form
     id="chatForm"
     class="chat-form"
+    data-chat-form
     action="/projects/{{ project_id }}/chat"
     method="post"
   >
-    <textarea id="chatInput" name="message" rows="1" maxlength="4000" placeholder="Напишите, что изменить..." {% if not document %}disabled{% endif %}></textarea>
+    <textarea id="chatInput" data-chat-input name="message" rows="1" maxlength="4000" placeholder="Напишите, что изменить..." {% if not document %}disabled{% endif %}></textarea>
     <input type="hidden" name="revision" value="{{ revision }}">
-    <button id="sendButton" class="send-button" type="submit" title="Отправить" aria-label="Отправить" {% if not document %}disabled{% endif %}>
+    <button id="sendButton" data-chat-submit class="send-button" type="submit" title="Отправить" aria-label="Отправить" {% if not document %}disabled{% endif %}>
       <span class="send-icon" aria-hidden="true"></span>
     </button>
   </form>

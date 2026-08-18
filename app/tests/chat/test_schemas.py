@@ -9,6 +9,25 @@ def test_chat_edit_plan_accepts_bare_operation_list_as_noop_plan() -> None:
     assert plan.operations == []
 
 
+def test_chat_edit_plan_accepts_bare_update_data_operation_list() -> None:
+    plan = ChatEditPlan.model_validate(
+        [
+            {
+                "kind": "update_data",
+                "node_id": "n1",
+                "data": {"style": {"color": "green", "font-style": "italic"}},
+            }
+        ]
+    )
+
+    assert plan.summary
+    operation = plan.operations[0].operation
+    assert isinstance(operation, UpdateData)
+    assert operation.node_id == "n1"
+    assert operation.data == {"style": {"color": "green", "font-style": "italic"}}
+    assert plan.operations[0].evidence_block_ids == []
+
+
 def test_chat_edit_plan_accepts_dotted_data_style_update() -> None:
     plan = ChatEditPlan.model_validate(
         {

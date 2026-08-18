@@ -84,7 +84,11 @@ def post_chat(
             "project": ProjectRepository(session).get(project_id),
             "project_id": project_id,
             "document": result.document,
-            "workspace_html": DocumentRepository(session).get_workspace_html(project_id),
+            "workspace_html": (
+                DocumentRepository(session).get_workspace_html(project_id)
+                if result.revision == revision
+                else None
+            ),
             "editor_oob": True,
         },
     )

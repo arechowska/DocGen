@@ -22,7 +22,11 @@ from docgen.documents.operations import (
 )
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
-from docgen.documents.style import normalized_style, normalized_style_attribute
+from docgen.documents.style import (
+    ALLOWED_STYLE_PROPERTIES,
+    normalized_style,
+    normalized_style_attribute,
+)
 from docgen.editor.validation import ImagePayload, ListPayload, TablePayload
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
@@ -523,7 +527,13 @@ ALLOWED_WORKSPACE_ATTRIBUTES = {
     "td": {"colspan", "rowspan"},
     "th": {"colspan", "rowspan"},
 }
-WORKSPACE_NODE_ATTRIBUTES = {"data-node-id", "data-kind", "data-section-id"}
+WORKSPACE_NODE_ATTRIBUTES = {
+    "data-node-id",
+    "data-kind",
+    "data-section-id",
+    "data-section-title",
+}
+WORKSPACE_ALLOWED_CLASSES = {"faq-question-list"}
 WORKSPACE_BLOCK_TAGS = {
     "blockquote",
     "div",
@@ -551,19 +561,28 @@ def _sanitize_workspace_html(html: str) -> str:
         if tag.name in {"script", "style", "template"}:
             tag.decompose()
             continue
+        if tag.name == "font":
+            _normalize_font_tag(tag)
         if tag.name not in ALLOWED_WORKSPACE_TAGS:
             tag.unwrap()
             continue
         allowed_attributes = (
             ALLOWED_WORKSPACE_ATTRIBUTES.get(tag.name, set())
             | WORKSPACE_NODE_ATTRIBUTES
-            | {"style"}
+            | {"class", "style"}
         )
         for attribute in list(tag.attrs):
             if attribute not in allowed_attributes:
                 del tag.attrs[attribute]
                 continue
             value = tag.attrs.get(attribute)
+            if attribute == "class":
+                sanitized_class = _normalized_workspace_class(value)
+                if sanitized_class:
+                    tag.attrs[attribute] = sanitized_class
+                else:
+                    del tag.attrs[attribute]
+                continue
             if attribute == "style":
                 sanitized_style = normalized_style_attribute(str(value))
                 if sanitized_style:
@@ -574,6 +593,20 @@ def _sanitize_workspace_html(html: str) -> str:
             if attribute in {"href", "src"} and not _is_safe_workspace_url(value):
                 del tag.attrs[attribute]
     return "".join(str(item) for item in soup.contents).strip()
+
+
+def _normalized_workspace_class(value) -> list[str]:
+    if isinstance(value, str):
+        classes = value.split()
+    elif isinstance(value, list):
+        classes = [str(item) for item in value]
+    else:
+        classes = []
+    return [
+        class_name
+        for class_name in classes
+        if class_name in WORKSPACE_ALLOWED_CLASSES
+    ]
 
 
 def _is_safe_workspace_url(value) -> bool:
@@ -619,6 +652,8 @@ def _workspace_document_and_html(
         existing = current_nodes.get(str(claimed_id)) if claimed_id else None
         node = _workspace_node(element, existing)
         _set_workspace_node_attributes(element, node)
+        _set_workspace_style_attribute(element, node)
+        _set_workspace_list_item_style_attributes(element, node)
         nodes.append(node)
     document = current.model_copy(update={"title": title, "nodes": nodes})
     normalized_html = "".join(str(item) for item in soup.contents).strip()
@@ -657,9 +692,19 @@ def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode
     text: str | None = None
     if kind in {NodeKind.HEADING, NodeKind.PARAGRAPH}:
         text = element.get_text(" ", strip=True)
+        _update_workspace_rich_html_data(data, element)
+        if kind is NodeKind.HEADING:
+            data["level"] = _heading_level(element)
         _update_workspace_style_data(data, element)
     elif kind is NodeKind.LIST:
-        data["items"] = [item.get_text(" ", strip=True) for item in element.find_all("li")]
+        items = element.find_all("li", recursive=False)
+        data["items"] = [item.get_text(" ", strip=True) for item in items]
+        data["items_html"] = [_inner_html(item) for item in items]
+        item_styles = [_workspace_item_style_attribute(item) for item in items]
+        if any(item_styles):
+            data["item_styles"] = item_styles
+        else:
+            data.pop("item_styles", None)
         _update_workspace_style_data(data, element)
     elif kind is NodeKind.TABLE:
         headers, rows = _workspace_table_data(element)
@@ -719,13 +764,100 @@ def _workspace_table_data(element: Tag) -> tuple[list[str], list[list[str]]]:
 
 
 def _update_workspace_style_data(data: dict, element: Tag) -> None:
+    style = _workspace_element_style(element)
+    if style:
+        data["style"] = style
+
+
+def _update_workspace_rich_html_data(data: dict, element: Tag) -> None:
+    html = _inner_html(element)
+    if html and html != element.get_text(" ", strip=True):
+        data["html"] = html
+    else:
+        data.pop("html", None)
+
+
+def _inner_html(element: Tag) -> str:
+    return "".join(str(item) for item in element.contents).strip()
+
+
+def _workspace_item_style_attribute(element: Tag) -> str:
+    return normalized_style_attribute(str(element.get("style", "")))
+
+
+def _workspace_element_style(element: Tag) -> dict[str, str]:
     style = normalized_style(
         {"style": dict(_style_declarations(str(element.get("style", ""))))}
     )
     if style:
-        data["style"] = style
+        return style
+    if element.name in {"ol", "ul"}:
+        return _common_list_item_style(element)
+    inline = _single_styled_inline_child(element)
+    if inline is None:
+        return {}
+    return _inline_style(inline)
+
+
+def _common_list_item_style(element: Tag) -> dict[str, str]:
+    styles = [
+        _workspace_element_style(item)
+        for item in element.find_all("li", recursive=False)
+    ]
+    if not styles or any(not style for style in styles):
+        return {}
+    first = styles[0]
+    return first if all(style == first for style in styles) else {}
+
+
+def _single_styled_inline_child(element: Tag) -> Tag | None:
+    meaningful_children = [
+        child
+        for child in element.contents
+        if not isinstance(child, NavigableString) or str(child).strip()
+    ]
+    if len(meaningful_children) != 1 or not isinstance(meaningful_children[0], Tag):
+        return None
+    child = meaningful_children[0]
+    if child.name not in {"b", "em", "i", "s", "span", "strong", "u"}:
+        return None
+    if child.get_text(" ", strip=True) != element.get_text(" ", strip=True):
+        return None
+    style = _inline_style(child)
+    return child if style else None
+
+
+def _inline_style(element: Tag) -> dict[str, str]:
+    style = normalized_style(
+        {"style": dict(_style_declarations(str(element.get("style", ""))))}
+    )
+    if element.name in {"b", "strong"}:
+        style["font-weight"] = "700"
+    if element.name in {"em", "i"}:
+        style["font-style"] = "italic"
+    if element.name == "u":
+        style["text-decoration"] = "underline"
+    if element.name == "s":
+        style["text-decoration"] = "line-through"
+    return style
+
+
+def _normalize_font_tag(tag: Tag) -> None:
+    style = dict(_style_declarations(str(tag.get("style", ""))))
+    if color := tag.get("color"):
+        style["color"] = str(color)
+    if face := tag.get("face"):
+        style["font-family"] = str(face)
+    tag.name = "span"
+    tag.attrs.pop("color", None)
+    tag.attrs.pop("face", None)
+    style_attribute = normalized_style_attribute(
+        ";".join(f"{property_name}:{value}" for property_name, value in style.items())
+    )
+    if style_attribute:
+        tag["style"] = style_attribute
     else:
-        data.pop("style", None)
+        tag.attrs.pop("style", None)
 
 
 def _style_declarations(value: str):
@@ -750,6 +882,12 @@ def _workspace_node_kind(element: Tag) -> NodeKind:
     return NodeKind.PARAGRAPH
 
 
+def _heading_level(element: Tag) -> int:
+    if element.name not in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return 2
+    return int(element.name[1])
+
+
 def _set_workspace_node_attributes(element: Tag, node: DocumentNode) -> None:
     element["data-node-id"] = node.id
     element["data-kind"] = node.kind.value
@@ -757,6 +895,40 @@ def _set_workspace_node_attributes(element: Tag, node: DocumentNode) -> None:
         element["data-section-id"] = node.section_id
     else:
         element.attrs.pop("data-section-id", None)
+
+
+def _set_workspace_style_attribute(element: Tag, node: DocumentNode) -> None:
+    style = _style_attribute_from_data(node.data)
+    if style:
+        element["style"] = style
+    else:
+        element.attrs.pop("style", None)
+
+
+def _set_workspace_list_item_style_attributes(element: Tag, node: DocumentNode) -> None:
+    if node.kind is not NodeKind.LIST or element.name not in {"ol", "ul"}:
+        return
+    list_style = _style_attribute_from_data(node.data)
+    item_styles = node.data.get("item_styles")
+    for index, item in enumerate(element.find_all("li", recursive=False)):
+        style = ""
+        if isinstance(item_styles, list) and index < len(item_styles):
+            style = str(item_styles[index] or "")
+        if not style:
+            style = list_style
+        if style:
+            item["style"] = style
+        else:
+            item.attrs.pop("style", None)
+
+
+def _style_attribute_from_data(data: dict) -> str:
+    style = normalized_style(data)
+    return ";".join(
+        f"{property_name}:{style[property_name]}"
+        for property_name in ALLOWED_STYLE_PROPERTIES
+        if property_name in style
+    )
 
 
 def _new_node(kind: str) -> DocumentNode:

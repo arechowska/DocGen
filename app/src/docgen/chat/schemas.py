@@ -17,9 +17,11 @@ class ChatEditOperation(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def accept_dotted_update_data_fields(cls, value: object) -> object:
+    def accept_bare_and_dotted_operations(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
+        if "operation" not in value and isinstance(value.get("kind"), str):
+            value = {"operation": value, "evidence_block_ids": []}
         raw_operation = value.get("operation")
         if not isinstance(raw_operation, dict) or raw_operation.get("kind") != "update_data":
             return value

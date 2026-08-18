@@ -141,6 +141,49 @@ def test_chat_applies_formatting_command_when_model_returns_noop(
     }
 
 
+def test_chat_adds_user_text_as_manual_paragraph_when_model_returns_noop(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(
+            message="добавь вопрос как пройти в библиотеку ответ прямо и направо",
+            expected_revision=2,
+        ),
+    )
+
+    assert result.summary == "Добавлен текст пользователя"
+    assert result.revision == 3
+    inserted = result.document.nodes[-1]
+    assert inserted.kind is NodeKind.PARAGRAPH
+    assert inserted.text == "Вопрос: как пройти в библиотеку\nОтвет: прямо и направо"
+    assert inserted.flags == ["manual-edit"]
+
+
+def test_chat_adds_user_text_at_document_start_when_requested(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(
+            message="допиши в начало документа: я поэт зовусь незнайка от меня вам балалайка",
+            expected_revision=2,
+        ),
+    )
+
+    inserted = result.document.nodes[0]
+    assert inserted.kind is NodeKind.PARAGRAPH
+    assert inserted.text == "я поэт зовусь незнайка от меня вам балалайка"
+    assert result.document.nodes[1].id == "actor"
+    assert result.document.nodes[2].id == "limit"
+
+
 def test_chat_rejects_unknown_evidence(
     chat_service: ChatService, fake_model: FakeModel
 ) -> None:

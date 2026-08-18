@@ -35,6 +35,21 @@
     templateSource.addEventListener("change", synchronizeTemplate);
   }
 
+  const applySanitizedInlineStyles = (root) => {
+    root?.querySelectorAll?.("[style]").forEach((element) => {
+      const rawStyle = element.getAttribute("style");
+      if (!rawStyle) return;
+      element.removeAttribute("style");
+      rawStyle.split(";").forEach((declaration) => {
+        const separator = declaration.indexOf(":");
+        if (separator < 0) return;
+        const property = declaration.slice(0, separator).trim();
+        const value = declaration.slice(separator + 1).trim();
+        if (property && value) element.style.setProperty(property, value);
+      });
+    });
+  };
+
   const initializeChat = () => {
     const form = document.querySelector("#chatForm");
     if (!form || form.dataset.chatInitialized === "true") return;
@@ -114,8 +129,9 @@
   const tableRows = editor.querySelector("[data-table-rows]");
   const tableColumns = editor.querySelector("[data-table-columns]");
   const saveButton = editor.querySelector("[data-editor-save]");
-  const saveStatus = editor.querySelector("[data-editor-save-status]");
+    const saveStatus = editor.querySelector("[data-editor-save-status]");
     if (!canvas) return;
+    applySanitizedInlineStyles(canvas);
     editor.dataset.editorInitialized = "true";
   let lastTableContext = null;
 
@@ -182,6 +198,7 @@
       }
       editor.dataset.revision = String(result.revision);
       canvas.innerHTML = result.html;
+      applySanitizedInlineStyles(canvas);
       document.querySelectorAll('input[name="revision"]').forEach((input) => {
         input.value = String(result.revision);
       });

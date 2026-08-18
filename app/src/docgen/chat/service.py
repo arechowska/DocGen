@@ -7,8 +7,9 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
-from docgen.ai.client import TextModel
+from docgen.ai.client import ModelError, TextModel
 from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest, ChatEditResult
 from docgen.documents.edit_service import DocumentEditService
 from docgen.documents.operations import (
@@ -70,15 +71,37 @@ class ChatService:
             raise ChatValidationError("Документ уже изменён")
 
         source_blocks = self._source_blocks(project_id)
-        plan = self._model.generate_json(
-            system=CHAT_SYSTEM_PROMPT,
-            user=_serialized_context(document, source_blocks, message),
-            schema=ChatEditPlan,
-        )
+        manual_insert_operations = _manual_text_insertion_operations(document, message)
+        try:
+            plan = self._model.generate_json(
+                system=CHAT_SYSTEM_PROMPT,
+                user=_serialized_context(document, source_blocks, message),
+                schema=ChatEditPlan,
+            )
+        except ModelError:
+            if not manual_insert_operations:
+                raise
+            result = DocumentEditService(self._documents).apply(
+                project_id,
+                request.expected_revision,
+                manual_insert_operations,
+            )
+            return ChatEditResult(
+                summary="Добавлен текст пользователя",
+                document=result.document,
+                revision=result.revision,
+            )
         _validate_plan(document, source_blocks, plan)
         fallback_operations: list[DocumentOperation] = []
+        fallback_summary = ""
         if not plan.operations:
-            fallback_operations = _fallback_formatting_operations(document, message)
+            if manual_insert_operations:
+                fallback_operations = manual_insert_operations
+                fallback_summary = "Добавлен текст пользователя"
+            else:
+                fallback_operations = _fallback_formatting_operations(document, message)
+                if fallback_operations:
+                    fallback_summary = "Применено форматирование"
         if not plan.operations and not fallback_operations:
             return ChatEditResult(
                 summary=plan.summary,
@@ -92,7 +115,7 @@ class ChatService:
             operations,
         )
         return ChatEditResult(
-            summary="Применено форматирование" if fallback_operations else plan.summary,
+            summary=fallback_summary if fallback_operations else plan.summary,
             document=result.document,
             revision=result.revision,
         )
@@ -163,6 +186,68 @@ def _fallback_formatting_operations(
     if node is None:
         return []
     return [UpdateData(node_id=node.id, data=_merged_data(node.data, {"style": style}))]
+
+
+_MANUAL_ADD_PATTERN = re.compile(
+    r"^\s*(?:добавь|добавить|вставь|вставить|допиши|дописать)\s+(?P<text>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_QUESTION_ANSWER_PATTERN = re.compile(
+    r"\bвопрос\b\s*:?\s*(?P<question>.+?)\s+\bответ\b\s*:?\s*(?P<answer>.+)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_START_POSITION_PATTERN = re.compile(
+    r"^\s*в\s+начало(?:\s+документа)?\s*[:;,.—-]?\s*(?P<text>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _manual_text_insertion_operations(
+    document: WorkingDocument,
+    message: str,
+) -> list[DocumentOperation]:
+    text, index = _manual_insert_text_and_index(message, len(document.nodes))
+    if not text:
+        return []
+    return [
+        InsertNode(
+            parent_id=None,
+            index=index,
+            node=DocumentNode(
+                id=f"manual-{uuid4()}",
+                kind=NodeKind.PARAGRAPH,
+                text=text,
+                flags=["manual-edit"],
+            ),
+        )
+    ]
+
+
+def _manual_insert_text_and_index(message: str, default_index: int) -> tuple[str, int]:
+    match = _MANUAL_ADD_PATTERN.match(message)
+    if match is None:
+        return "", default_index
+    text = _clean_manual_text(match.group("text"))
+    if not text:
+        return "", default_index
+    index = default_index
+    start_position = _START_POSITION_PATTERN.match(text)
+    if start_position is not None:
+        index = 0
+        text = _clean_manual_text(start_position.group("text"))
+        if not text:
+            return "", default_index
+    question_answer = _QUESTION_ANSWER_PATTERN.search(text)
+    if question_answer is not None:
+        question = _clean_manual_text(question_answer.group("question"))
+        answer = _clean_manual_text(question_answer.group("answer"))
+        if question and answer:
+            return f"Вопрос: {question}\nОтвет: {answer}", index
+    return text, index
+
+
+def _clean_manual_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" \t\r\n:;,.")
 
 
 def _style_from_message(message: str) -> dict[str, str]:

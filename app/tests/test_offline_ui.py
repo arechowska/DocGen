@@ -599,6 +599,60 @@ if (revisions.some((input) => input.value !== "2")) {{
 
 
 @_requires_node
+def test_chat_submit_shows_user_message_and_pending_state(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const listeners = new Map();
+const messages = {{
+  children: [],
+  appendChild(node) {{ this.children.push(node); }},
+}};
+const textarea = {{ value: "  Проверь формулировку  ", disabled: false }};
+const button = {{ disabled: false }};
+const form = {{
+  dataset: {{ chatForm: "true" }},
+  querySelector(selector) {{
+    if (selector === "[data-chat-input]") return textarea;
+    if (selector === "[data-chat-submit]") return button;
+    return null;
+  }},
+}};
+globalThis.document = {{
+  createElement(tagName) {{
+    return {{
+      tagName,
+      className: "",
+      textContent: "",
+      dataset: {{}},
+      remove() {{ this.removed = true; }},
+    }};
+  }},
+  querySelector(selector) {{
+    if (selector === "#chat-messages") return messages;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener(type, listener) {{ listeners.set(type, listener); }},
+}};
+globalThis.CSS = {{ escape(value) {{ return value; }} }};
+{script.text}
+listeners.get("htmx:beforeRequest")({{ detail: {{ elt: form }} }});
+if (messages.children.length !== 2) throw new Error(`expected user and pending messages, got ${{messages.children.length}}`);
+if (messages.children[0].textContent !== "Проверь формулировку") throw new Error("user message was not appended");
+if (!messages.children[1].textContent.includes("Отправляю")) throw new Error("pending message was not appended");
+if (textarea.value !== "") throw new Error("chat input was not cleared");
+if (!textarea.disabled || !button.disabled) throw new Error("chat controls were not disabled");
+listeners.get("htmx:afterRequest")({{ detail: {{ elt: form }} }});
+if (messages.children[1].removed !== true) throw new Error("pending message was not removed");
+if (textarea.disabled || button.disabled) throw new Error("chat controls were not restored");
+"""
+
+    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
+
+
+@_requires_node
 def test_stale_editor_save_tells_user_to_refresh(client: TestClient) -> None:
     script = client.get("/static/js/docgen2-editor.js")
     assert script.status_code == 200
