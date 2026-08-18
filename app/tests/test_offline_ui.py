@@ -498,7 +498,9 @@ const editor = element({{
 }});
 let currentEditor = null;
 let posted = null;
+let exportRefresh = null;
 globalThis.document = {{
+  body: {{}},
   querySelector(selector) {{
     if (selector === "#docgen2Editor") return currentEditor;
     return null;
@@ -507,7 +509,12 @@ globalThis.document = {{
   addEventListener(type, listener) {{ documentListeners.set(type, listener); }},
   execCommand() {{}},
 }};
-globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.window = {{
+  getSelection() {{ return null; }},
+  htmx: {{
+    trigger(target, name, detail) {{ exportRefresh = {{ target, name, detail }}; }},
+  }},
+}};
 globalThis.setTimeout = (callback, delay) => {{
   if (delay === 0) {{ callback(); return 0; }}
   if (delay !== 2000) throw new Error(`unexpected save-status timeout: ${{delay}}`);
@@ -532,6 +539,13 @@ await new Promise((resolve) => setTimeout(resolve, 0));
 if (posted?.url !== "/projects/p1/editor/save") throw new Error("save was not posted");
 if (posted.payload.revision !== 1) throw new Error("revision was not posted");
 if (editor.dataset.revision !== "2") throw new Error("revision was not updated");
+if (
+  exportRefresh?.target !== document.body ||
+  exportRefresh?.name !== "docgen:document-updated" ||
+  exportRefresh?.detail?.revision !== 2
+) {{
+  throw new Error("export refresh was not triggered after save");
+}}
 if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
   throw new Error("normalized html was not applied");
 }}

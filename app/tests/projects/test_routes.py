@@ -366,6 +366,9 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     assert stylesheet.status_code == 200
     assert ".chat-result-spacer{min-height:0}" in stylesheet.text
     assert "minmax(0,1fr) auto auto minmax(0,1fr) auto" in stylesheet.text
+    assert ".chat-panel>.chat-form{grid-row:4}" in stylesheet.text
+    assert ".chat-panel>.chat-result-spacer{grid-row:5}" in stylesheet.text
+    assert ".chat-panel>.result-panel{grid-row:6}" in stylesheet.text
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

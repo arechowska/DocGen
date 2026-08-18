@@ -4,7 +4,7 @@
     disabled
   {% else %}
     hx-post="/projects/{{ project_id }}/export"
-    hx-trigger="load, change, docgen:document-ready from:body"
+    hx-trigger="load, change, docgen:document-ready from:body, docgen:document-updated from:body"
     hx-include="#export-form"
     hx-target="#export-result"
     hx-swap="innerHTML"

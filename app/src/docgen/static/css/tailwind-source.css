@@ -882,6 +882,13 @@
   min-height: 0;
 }
 
+.chat-panel > .chat-heading { grid-row: 1; }
+.chat-panel > .messages { grid-row: 2; }
+.chat-panel > .error-banner { grid-row: 3; }
+.chat-panel > .chat-form { grid-row: 4; }
+.chat-panel > .chat-result-spacer { grid-row: 5; }
+.chat-panel > .result-panel { grid-row: 6; }
+
 .status-badge,
 .readonly-badge {
   display: inline-flex;

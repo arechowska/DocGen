@@ -185,6 +185,11 @@
       document.querySelectorAll('input[name="revision"]').forEach((input) => {
         input.value = String(result.revision);
       });
+      window.htmx?.trigger?.(
+        document.body,
+        "docgen:document-updated",
+        {revision: result.revision},
+      );
       markDocumentReady();
       setSaveStatus("Сохранено в проекте", "saved");
     } catch (error) {
