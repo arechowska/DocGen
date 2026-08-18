@@ -29,7 +29,7 @@
   {% endif %}
 
   {% if is_active %}
-    <progress class="mt-4 h-2 w-full overflow-hidden rounded-full" max="100" value="{{ job.progress }}">{{ job.progress }}%</progress>
+    <progress class="generation-progress mt-4 h-2 w-full overflow-hidden rounded-full" max="100" value="{{ job.progress }}">{{ job.progress }}%</progress>
     <p class="mt-2 text-sm text-[#5f6873]">{{ job.progress }}%</p>
     <form action="/projects/{{ job.project_id }}/jobs/{{ job.id }}/cancel" method="post" data-action="cancel-job" class="mt-4" hx-post="/projects/{{ job.project_id }}/jobs/{{ job.id }}/cancel" hx-target="#generation-status" hx-swap="outerHTML">
       <button class="docgen-secondary-button" type="submit">Отменить</button>

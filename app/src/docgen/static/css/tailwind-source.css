@@ -1218,9 +1218,44 @@
   background: #eaf1fa;
 }
 
+.generation-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  background-color: var(--formatta-border);
+}
+
+.generation-progress::-webkit-progress-bar {
+  background-color: var(--formatta-border);
+  border-radius: inherit;
+}
+
+.generation-progress::-webkit-progress-value {
+  background-color: var(--formatta-accent);
+  border-radius: inherit;
+  transition: width 300ms ease;
+}
+
+.generation-progress::-moz-progress-bar {
+  background-color: var(--formatta-accent);
+  border-radius: inherit;
+}
+
 .tool-button.is-active {
+  position: relative;
   color: #fff;
   background: var(--lk-primary);
+}
+
+.tool-button.is-active::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--formatta-accent);
 }
 
 .save-tool-group {
