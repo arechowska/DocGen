@@ -240,7 +240,7 @@ def test_workspace_topbar_keeps_template_and_format_equally_wide(client: TestCli
     topbar = css[css.index(".topbar{") : css.index("}", css.index(".topbar{"))]
 
     assert (
-        "grid-template-columns:auto minmax(300px,1fr) minmax(300px,1fr) "
+        "grid-template-columns:minmax(150px,auto) minmax(300px,1fr) minmax(300px,1fr) "
         "minmax(220px,.65fr) auto"
     ) in topbar
     assert ".topbar-export-form{display:contents" in css

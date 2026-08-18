@@ -111,6 +111,7 @@
   --formatta-muted: #5f6873;
   --formatta-bg: #f4f7fa;
   --formatta-border: #d6e5f8;
+  --formatta-accent: #ff6a3d;
   --lk-bg: var(--formatta-bg);
   --lk-surface: #fff;
   --lk-surface-soft: var(--formatta-bg);
@@ -147,7 +148,7 @@
 .topbar {
   min-height: 88px;
   display: grid;
-  grid-template-columns: auto minmax(300px, 1fr) minmax(300px, 1fr) minmax(220px, .65fr) auto;
+  grid-template-columns: minmax(150px, auto) minmax(300px, 1fr) minmax(300px, 1fr) minmax(220px, .65fr) auto;
   align-items: center;
   gap: 24px;
   margin: 0 calc(-1 * var(--formatta-gutter));
@@ -157,10 +158,22 @@
 }
 
 .brand {
+  position: relative;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.brand::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -9px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--formatta-accent);
 }
 
 .brand-mark {
@@ -173,6 +186,11 @@
   border-radius: 12px;
   font-size: 21px;
   font-weight: 700;
+}
+
+.brand-mark svg {
+  width: 24px;
+  height: 24px;
 }
 
 .brand-copy {
@@ -1764,7 +1782,7 @@
 
 @media (max-width: 1180px) {
   .topbar {
-    grid-template-columns: auto minmax(200px, 1fr) minmax(200px, 1fr) minmax(160px, .65fr) auto;
+    grid-template-columns: minmax(150px, auto) minmax(200px, 1fr) minmax(200px, 1fr) minmax(160px, .65fr) auto;
     gap: 15px;
   }
 

@@ -37,7 +37,7 @@ def test_projects_page_lists_projects_and_create_button(
     assert soup.find(class_="app-shell") is not None
     topbar = soup.find(class_="topbar")
     assert topbar is not None
-    assert topbar.find(class_="brand-mark").get_text(strip=True) == "F"
+    assert topbar.find(class_="brand-mark").find("svg") is not None
     assert topbar.find(class_="projects-hero") is None
     projects_panel = soup.find(class_="projects-panel")
     assert projects_panel is not None
