@@ -26,8 +26,12 @@ def test_ui_uses_local_assets_and_restrictive_csp(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert 'src="/static/vendor/htmx-2.0.8.min.js"' in response.text
-    assert 'src="/static/js/docgen2-editor.js"' in response.text
-    assert 'href="/static/css/docgen.css?v=' in response.text
+    page = BeautifulSoup(response.text, "html.parser")
+    stylesheet_url = page.find("link", rel="stylesheet")["href"]
+    editor_script_url = page.find("script", src=re.compile(r"docgen2-editor\.js"))["src"]
+    assert stylesheet_url.startswith("/static/css/docgen.css?v=")
+    assert editor_script_url.startswith("/static/js/docgen2-editor.js?v=")
+    assert stylesheet_url.rsplit("?v=", 1)[1] == editor_script_url.rsplit("?v=", 1)[1]
     assert "https://cdn.tailwindcss.com" not in response.text
     assert "unpkg.com" not in response.text
     csp = response.headers["content-security-policy"]
