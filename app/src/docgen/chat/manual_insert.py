@@ -124,7 +124,7 @@ def parse_manual_insert(message: str) -> ManualInsertIntent | None:
     position = _POSITION_PATTERN.match(body)
     if position is not None:
         ordinal = _parse_ordinal(position.group("ordinal"))
-        relation = position.group("relation").casefold()
+        relation = " ".join(position.group("relation").casefold().split())
         anchor = (
             InsertAnchor.BEFORE_VISUAL
             if relation == "перед" or relation == "в начало"
@@ -148,6 +148,8 @@ def manual_insert_operations(
     target = _visual_target(document, intent.ordinal)
     if target.list_item_index is not None:
         return _list_insert_operations(target, intent.anchor, paragraph)
+    if intent.anchor is InsertAnchor.AFTER_VISUAL and target.node.children:
+        return [InsertNode(parent_id=target.node.id, index=0, node=paragraph)]
 
     index = (
         target.node_index
@@ -208,6 +210,8 @@ def _list_insert_operations(
     if boundary == 0:
         return [InsertNode(parent_id=target.parent_id, index=target.node_index, node=paragraph)]
     if boundary == len(items):
+        if target.node.children:
+            return [InsertNode(parent_id=target.node.id, index=0, node=paragraph)]
         return [InsertNode(parent_id=target.parent_id, index=target.node_index + 1, node=paragraph)]
 
     left_list, right_list = _split_list_node(target.node, boundary)

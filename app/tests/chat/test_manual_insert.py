@@ -95,6 +95,31 @@ def test_visual_numbering_skips_non_text_nodes_and_inserts_with_nested_target() 
     assert result.nodes[3].text == "Последний"
 
 
+@pytest.mark.parametrize("kind", [NodeKind.HEADING, NodeKind.PARAGRAPH])
+def test_insert_after_visual_node_precedes_its_children(kind: NodeKind) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                id="target",
+                kind=kind,
+                text="Целевой",
+                children=[
+                    DocumentNode(id="descendant", kind=NodeKind.PARAGRAPH, text="Потомок"),
+                ],
+            ),
+            DocumentNode(id="following", kind=NodeKind.PARAGRAPH, text="Следующий"),
+        ],
+    )
+    intent = ManualInsertIntent("Новый", InsertAnchor.AFTER_VISUAL, 1, True)
+
+    result = apply_operations(document, manual_insert_operations(document, intent))
+
+    assert [node.id for node in result.nodes] == ["target", "following"]
+    assert [child.text for child in result.nodes[0].children] == ["Новый", "Потомок"]
+
+
 def _list_node() -> DocumentNode:
     return DocumentNode(
         id="steps",
@@ -169,6 +194,30 @@ def test_insert_at_list_boundary_does_not_split_list(
     assert preserved.data == list_node.data
 
 
+def test_insert_after_last_list_item_precedes_list_children() -> None:
+    list_node = _list_node().model_copy(
+        update={
+            "children": [
+                DocumentNode(id="list-child", kind=NodeKind.PARAGRAPH, text="Потомок списка"),
+            ]
+        }
+    )
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[
+            list_node,
+            DocumentNode(id="following", kind=NodeKind.PARAGRAPH, text="Следующий"),
+        ],
+    )
+    intent = ManualInsertIntent("Новый", InsertAnchor.AFTER_VISUAL, 3, True)
+
+    result = apply_operations(document, manual_insert_operations(document, intent))
+
+    assert [node.id for node in result.nodes] == ["steps", "following"]
+    assert [child.text for child in result.nodes[0].children] == ["Новый", "Потомок списка"]
+
+
 def test_mixed_visual_order_counts_each_list_item() -> None:
     document = WorkingDocument(
         title="Документ",
@@ -232,6 +281,19 @@ def test_mixed_visual_order_counts_each_list_item() -> None:
 )
 def test_parse_manual_insert(message: str, expected: ManualInsertIntent) -> None:
     assert parse_manual_insert(message) == expected
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "допиши  в  начало   второго абзаца: Новый текст",
+        "допиши\nв\nначало второго абзаца: Новый текст",
+    ],
+)
+def test_parse_manual_insert_normalizes_whitespace_in_before_relation(message: str) -> None:
+    assert parse_manual_insert(message) == ManualInsertIntent(
+        "Новый текст", InsertAnchor.BEFORE_VISUAL, 2, True
+    )
 
 
 @pytest.mark.parametrize(

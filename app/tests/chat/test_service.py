@@ -190,11 +190,24 @@ def test_chat_adds_user_text_at_document_start_when_requested(
     assert result.document.nodes[2].id == "limit"
 
 
-def test_chat_positioned_manual_insert_bypasses_model(
-    chat_service: ChatService,
+def test_chat_positioned_manual_insert_bypasses_model_and_source_lookup(
+    session: Session,
     fake_model: FakeModel,
 ) -> None:
-    result = chat_service.edit(
+    source_lookup_calls = 0
+
+    def source_blocks(project_id: str) -> list[NormalizedBlock]:
+        nonlocal source_lookup_calls
+        source_lookup_calls += 1
+        return _source_blocks(project_id)
+
+    service = ChatService(
+        documents=DocumentRepository(session),
+        model=fake_model,
+        source_blocks=source_blocks,
+    )
+
+    result = service.edit(
         "p1",
         ChatEditRequest(
             message="допиши перед вторым абзацем: Новый текст",
@@ -203,12 +216,45 @@ def test_chat_positioned_manual_insert_bypasses_model(
     )
 
     assert fake_model.calls == 0
+    assert source_lookup_calls == 0
     assert [node.text for node in result.document.nodes] == [
         "Оператор",
         "Новый текст",
         "Лимит",
     ]
     assert result.summary == "Добавлен текст пользователя"
+
+
+def test_chat_rejects_empty_authored_text_without_model_or_source_lookup(
+    session: Session,
+    fake_model: FakeModel,
+) -> None:
+    source_lookup_calls = 0
+
+    def source_blocks(project_id: str) -> list[NormalizedBlock]:
+        nonlocal source_lookup_calls
+        source_lookup_calls += 1
+        return _source_blocks(project_id)
+
+    service = ChatService(
+        documents=DocumentRepository(session),
+        model=fake_model,
+        source_blocks=source_blocks,
+    )
+
+    with pytest.raises(ChatValidationError, match="Укажите текст для добавления"):
+        service.edit(
+            "p1",
+            ChatEditRequest(message="допиши в начало документа:", expected_revision=2),
+        )
+
+    assert fake_model.calls == 0
+    assert source_lookup_calls == 0
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None
+    document, revision = stored
+    assert revision == 2
+    assert [node.text for node in document.nodes] == ["Оператор", "Лимит"]
 
 
 def test_chat_missing_visual_target_preserves_document(
