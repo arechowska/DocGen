@@ -874,7 +874,7 @@
   min-height: 0;
   align-self: stretch;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, calc(2cm - 24px)) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, calc(1cm - 12px)) auto auto;
   row-gap: 12px;
 }
 
@@ -883,7 +883,7 @@
 }
 
 .chat-result-divider {
-  height: 5px;
+  height: 3px;
   margin: 0 26px;
   background: var(--formatta-accent);
   border-radius: 999px;
@@ -1801,8 +1801,8 @@
 }
 
 .result-actions .button {
-  width: 100%;
-  min-width: 0;
+  width: fit-content;
+  min-width: 180px;
   min-height: 40px;
   padding: 6px 12px;
   font-size: 13px;
