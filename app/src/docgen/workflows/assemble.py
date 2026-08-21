@@ -83,7 +83,12 @@ class AssembleWorkflow:
             document = WorkingDocument.model_validate(raw_document)
         except ValidationError as exc:
             raise WorkflowError(_DOCUMENT_SCHEMA_ERROR) from exc
-        document = document.model_copy(update={"template_id": template.id})
+        document = document.model_copy(
+            update={
+                "title": _compact_document_title(document.title),
+                "template_id": template.id,
+            }
+        )
         document = _add_missing_required_sections(document, template)
 
         _validate_document_structure(document, template)
@@ -244,6 +249,9 @@ def _json_rules(template: SemanticTemplate) -> str:
     section_ids = ", ".join(section.id for section in template.sections)
     return (
         f"Верните только объект WorkingDocument: title, template_id='{template.id}', nodes. "
+        "Поле title должно быть коротким названием темы документа: не более 60 символов, "
+        "без фраз вроде 'Вопросы и ответы по модулю' или 'Документ по материалам источников'. "
+        "Используйте название продукта, модуля или процесса и только при необходимости его роль. "
         f"В nodes должен быть ровно один верхнеуровневый node для каждого section_id: "
         f"{section_ids}. не добавляйте section_id вне этого списка и не дублируйте section_id. "
         "Если section_id можно заполнить фактами из источников, node не должен быть kind='gap'. "
@@ -253,6 +261,14 @@ def _json_rules(template: SemanticTemplate) -> str:
         "обязан иметь provenance с source_id, locator и quote, где quote является точной подстрокой "
         "соответствующего исходного блока."
     )
+
+
+def _compact_document_title(title: str) -> str:
+    compact = " ".join(title.split()).strip()
+    if len(compact) <= 60:
+        return compact or "Документ"
+    shortened = compact[:60].rsplit(" ", 1)[0].rstrip(" ,:;—-\"")
+    return shortened or compact[:60].rstrip()
 
 
 def _format_example(template: SemanticTemplate) -> str:

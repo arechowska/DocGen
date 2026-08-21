@@ -1178,7 +1178,7 @@
 }
 
 .document-title {
-  width: min(680px, 70vw);
+  width: min(100%, 1000px);
   margin-top: 2px;
   padding: 0;
   color: var(--lk-title);
@@ -1187,6 +1187,11 @@
   font-size: 24px;
   line-height: 28px;
   font-weight: 300;
+}
+
+.editor-topline > div {
+  min-width: 0;
+  flex: 1;
 }
 
 .document-title:focus {

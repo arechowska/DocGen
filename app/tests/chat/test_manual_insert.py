@@ -310,6 +310,20 @@ def test_parse_manual_insert_ignores_non_manual_commands(message: str) -> None:
 @pytest.mark.parametrize(
     "message",
     [
+        "добавь больше вопросов по источникам",
+        "добавь вопросы из источников",
+        "добавь раздел на основе источников",
+    ],
+)
+def test_parse_manual_insert_does_not_capture_grounded_generation_requests(
+    message: str,
+) -> None:
+    assert parse_manual_insert(message) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "допиши в начало документа:",
         "добавь после второго абзаца:",
         "вставь перед нулевым абзацем: Текст",

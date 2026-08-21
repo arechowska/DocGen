@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-from docgen.ai.client import ModelError, TextModel
+from docgen.ai.client import ModelError, ModelResponseFormatError, TextModel
 from docgen.chat.manual_insert import (
     ManualInsertError,
     manual_insert_operations,
@@ -42,6 +42,12 @@ CHAT_SYSTEM_PROMPT = """
 Если подтверждения в источниках нет, верните пустой список operations.
 Если правок нет, верните JSON-объект {"summary":"Нет правок","operations":[]}, а не отдельный список.
 Не удаляйте содержимое сверх прямого запроса пользователя.
+""".strip()
+
+CHAT_RETRY_PROMPT = """
+Предыдущий ответ не принят: верни только один валидный JSON-объект по схеме ChatEditPlan.
+Не пиши пояснений, Markdown, префиксов и текста вне JSON. Используй пустой operations,
+если не можешь обосновать правку источниками.
 """.strip()
 
 
@@ -95,6 +101,12 @@ class ChatService:
         try:
             plan = self._model.generate_json(
                 system=CHAT_SYSTEM_PROMPT,
+                user=_serialized_context(document, source_blocks, message),
+                schema=ChatEditPlan,
+            )
+        except ModelResponseFormatError:
+            plan = self._model.generate_json(
+                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_RETRY_PROMPT}",
                 user=_serialized_context(document, source_blocks, message),
                 schema=ChatEditPlan,
             )

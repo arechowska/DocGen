@@ -22,6 +22,10 @@ class ModelError(RuntimeError):
     """A user-safe error returned by a local model adapter."""
 
 
+class ModelResponseFormatError(ModelError):
+    """The model response could not be parsed into the requested schema."""
+
+
 class ModelConfigurationError(ValueError):
     """Raised when a production model adapter cannot be configured."""
 
@@ -93,7 +97,9 @@ class _OpenAICompatibleModel:
             print(content)
             return schema.model_validate_json(_unwrap_json_fence(content))
         except (IndexError, KeyError, TypeError, UnicodeDecodeError, ValidationError, json.JSONDecodeError) as exc:
-            raise ModelError("Модель вернула некорректный структурированный ответ") from exc
+            raise ModelResponseFormatError(
+                "Модель вернула некорректный структурированный ответ"
+            ) from exc
 
     def _post(self, payload: dict[str, object]) -> bytes:
         payload_bytes = json.dumps(

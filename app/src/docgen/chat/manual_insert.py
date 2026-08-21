@@ -42,6 +42,12 @@ _MANUAL_COMMAND_PATTERN = re.compile(
     r"^\s*(?:добавь|добавить|вставь|вставить|допиши|дописать)\b(?P<body>.*?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+_GENERATIVE_REQUEST_PATTERN = re.compile(
+    r"^\s*(?:больше\s+)?(?:вопрос(?:ы|ов)|ответ(?:ы|ов)|пример(?:ы|ов)|"
+    r"раздел(?:ы|ов)|пункт(?:ы|ов)|шаг(?:и|ов)|страниц(?:ы|у)?)\b"
+    r"|\b(?:из|по|на\s+основе)\s+источник(?:а|ов|ами)?\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _QUESTION_ANSWER_PATTERN = re.compile(
     r"\bвопрос\b\s*:?\s*(?P<question>.+?)\s+\bответ\b\s*:?\s*(?P<answer>.+)\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -131,6 +137,9 @@ def parse_manual_insert(message: str) -> ManualInsertIntent | None:
             else InsertAnchor.AFTER_VISUAL
         )
         return _intent(position.group("text"), anchor, ordinal, True)
+
+    if _GENERATIVE_REQUEST_PATTERN.search(body):
+        return None
 
     return _intent(body, InsertAnchor.DOCUMENT_END, None, False)
 
