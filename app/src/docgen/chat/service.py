@@ -36,6 +36,7 @@ CHAT_SYSTEM_PROMPT = """
 Каждую операцию верните в объекте с полями operation и evidence_block_ids.
 Каждое фактическое добавление должно иметь в своём объекте evidence_block_ids из источников проекта.
 Нефактические правки форматирования, шрифта, цвета, выравнивания и отступов не требуют evidence_block_ids.
+Структурные команды (разделить на разделы, сгруппировать, переставить блоки) не добавляют новых фактов и не требуют evidence_block_ids. Для них сохраняйте текст блоков, используйте MoveNode и при необходимости InsertNode с заголовками; не возвращайте пустой operations, если документ можно перестроить.
 Для таких команд используйте operation.kind="update_data" по существующему node_id и сохраняйте прежние data-поля узла.
 Форматирование задавайте внутри поля operation.data.style только безопасными CSS-ключами: color, background-color, font-family, font-size, font-style, font-weight, line-height, margin-left, margin-right, margin-top, margin-bottom, text-align, text-decoration, text-indent.
 Пример operation: {"kind":"update_data","node_id":"...","data":{"style":{"color":"blue","font-weight":"700","margin-left":"24px"}}}. Не используйте отдельное поле "data.style".
@@ -49,6 +50,14 @@ CHAT_RETRY_PROMPT = """
 Не пиши пояснений, Markdown, префиксов и текста вне JSON. Используй пустой operations,
 если не можешь обосновать правку источниками.
 """.strip()
+
+CHAT_STRUCTURAL_RETRY_PROMPT = """
+Пользователь запросил структурирование существующего документа. Выполни команду: верни хотя бы одну операцию MoveNode или InsertNode, если документ содержит блоки для перестановки или группировки. Это не добавление фактов, поэтому evidence_block_ids оставь пустым. Не меняй текст существующих блоков и не возвращай пустой operations.
+""".strip()
+
+_STRUCTURAL_REQUEST_PATTERN = re.compile(
+    r"\b(?:раздел(?:и|ить)|разбей|структурир|сгруппир|перестав|перемест|упорядоч)"
+)
 
 
 class ChatGroundingError(ValueError):
@@ -118,6 +127,12 @@ class ChatService:
                 request.expected_revision,
                 manual_operations,
             )
+        if not plan.operations and _is_structural_request(message):
+            plan = self._model.generate_json(
+                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_STRUCTURAL_RETRY_PROMPT}",
+                user=_serialized_context(document, source_blocks, message),
+                schema=ChatEditPlan,
+            )
         _validate_plan(document, source_blocks, plan)
         if not plan.operations:
             if manual_operations:
@@ -128,6 +143,10 @@ class ChatService:
                 )
             fallback_operations = _fallback_formatting_operations(document, message)
             if not fallback_operations:
+                if _is_structural_request(message):
+                    raise ChatValidationError(
+                        "Не удалось определить разделы документа. Уточните, по каким темам его разделить"
+                    )
                 return ChatEditResult(
                     summary=plan.summary,
                     document=document,
@@ -181,6 +200,10 @@ def _validated_message(message: str) -> str:
     if len(normalized) > 4000:
         raise ChatValidationError("Сообщение слишком длинное")
     return normalized
+
+
+def _is_structural_request(message: str) -> bool:
+    return _STRUCTURAL_REQUEST_PATTERN.search(message.casefold()) is not None
 
 
 def _serialized_context(
@@ -300,6 +323,8 @@ def _validate_operation_evidence(
     evidence_by_id: dict[str, NormalizedBlock],
     item: ChatEditOperation,
 ) -> None:
+    if _is_non_factual_structural_operation(item.operation):
+        return
     try:
         cited_blocks = [evidence_by_id[block_id] for block_id in item.evidence_block_ids]
     except KeyError as error:
@@ -316,6 +341,12 @@ def _validate_operation_evidence(
         allow_grounded_synthesis=_allows_grounded_synthesis(document, item.operation),
     ):
         raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
+
+
+def _is_non_factual_structural_operation(operation: DocumentOperation) -> bool:
+    return isinstance(operation, MoveNode) or (
+        isinstance(operation, InsertNode) and operation.node.kind is NodeKind.HEADING
+    )
 
 
 def _allows_grounded_synthesis(

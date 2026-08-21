@@ -21,14 +21,19 @@ class FakeModel:
         self.calls = 0
         self.error: ModelError | None = None
         self.result: ChatEditPlan | None = None
+        self.results: list[ChatEditPlan] = []
+        self.systems: list[str] = []
 
     def generate_json(self, system: str, user: str, schema):
         self.calls += 1
+        self.systems.append(system)
         assert "русском языке" in system
         assert "Оператор" in user
         assert schema is ChatEditPlan
         if self.error is not None:
             raise self.error
+        if self.results:
+            return self.results.pop(0)
         assert self.result is not None
         return self.result
 
@@ -121,6 +126,45 @@ def test_chat_noop_plan_preserves_document_revision(
     assert stored is not None
     _, persisted_revision = stored
     assert persisted_revision == 2
+
+
+def test_chat_retries_structural_request_after_noop(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.results = [
+        ChatEditPlan(summary="Нет правок", operations=[]),
+        ChatEditPlan(
+            summary="Блоки переставлены",
+            operations=[
+                ChatEditOperation(operation=MoveNode(node_id="limit", index=0)),
+            ],
+        ),
+    ]
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="раздели на разделы", expected_revision=2),
+    )
+
+    assert fake_model.calls == 2
+    assert "структурирование" in fake_model.systems[-1]
+    assert [node.id for node in result.document.nodes] == ["limit", "actor"]
+
+
+def test_chat_reports_structural_noop_as_error(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
+
+    with pytest.raises(ChatValidationError, match="Не удалось определить разделы"):
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(message="раздели на разделы", expected_revision=2),
+        )
+
+    assert fake_model.calls == 2
 
 
 def test_chat_applies_formatting_command_when_model_returns_noop(
@@ -628,6 +672,7 @@ def test_chat_prompt_documents_formatting_operations() -> None:
     assert "update_data" in CHAT_SYSTEM_PROMPT
     assert "font-weight" in CHAT_SYSTEM_PROMPT
     assert "margin-left" in CHAT_SYSTEM_PROMPT
+    assert "Структурные команды" in CHAT_SYSTEM_PROMPT
 
 
 def _source_blocks(project_id: str) -> list[NormalizedBlock]:

@@ -119,6 +119,7 @@ def test_colvir_pdf_has_valid_header_and_expected_text(
     text = _open_pdf_text(rendered.content)
     assert "Заголовок" in text
     assert "Colvir" in text
+    assert "Оглавление" in text
 
 
 def test_pdf_filename_and_media_type(pdf_template: FormattingTemplate) -> None:

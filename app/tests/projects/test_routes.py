@@ -340,10 +340,7 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     assert "Оформление" not in result_panel.get_text(" ")
     result_actions = soup.find(class_="result-actions")
     assert result_actions is not None
-    open_button = result_actions.find(id="openButton")
-    assert open_button is not None
-    assert open_button.get_text(strip=True).startswith("Открыть")
-    assert open_button.find(class_="external-icon") is None
+    assert result_actions.find(id="openButton") is None
     export_result = result_actions.find(id="export-result")
     assert export_result is not None
     assert "Скачать" in export_result.get_text(" ")
@@ -360,15 +357,20 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     spacer = chat_form.find_next_sibling()
     assert spacer is not None
     assert "chat-result-spacer" in spacer.get("class", [])
-    assert spacer.find_next_sibling().get("id") == "resultPanel"
+    divider = spacer.find_next_sibling()
+    assert divider is not None
+    assert "chat-result-divider" in divider.get("class", [])
+    assert divider.find_next_sibling().get("id") == "resultPanel"
 
     stylesheet = client.get("/static/css/docgen.css")
     assert stylesheet.status_code == 200
     assert ".chat-result-spacer{min-height:0}" in stylesheet.text
-    assert "minmax(0,1fr) auto auto minmax(0,calc(2cm - 24px)) auto" in stylesheet.text
+    assert ".chat-result-divider{height:5px" in stylesheet.text
+    assert "minmax(0,1fr) auto auto minmax(0,calc(2cm - 24px)) auto auto" in stylesheet.text
     assert ".chat-panel>.chat-form{grid-row:4}" in stylesheet.text
     assert ".chat-panel>.chat-result-spacer{grid-row:5}" in stylesheet.text
-    assert ".chat-panel>.result-panel{grid-row:6}" in stylesheet.text
+    assert ".chat-panel>.chat-result-divider{grid-row:6}" in stylesheet.text
+    assert ".chat-panel>.result-panel{grid-row:7}" in stylesheet.text
 
 
 def test_missing_project_returns_404(client: TestClient) -> None:

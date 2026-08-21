@@ -182,6 +182,41 @@ def download_export(
     )
 
 
+@router.get("/{project_id}/exports/{job_id}/open")
+def open_html_export(
+    project_id: str,
+    job_id: str,
+    session: SessionDependency,
+    request: Request,
+) -> Response:
+    """Open the exact completed HTML export in a browser tab."""
+    job = _owned_export_job_or_404(session, project_id, job_id)
+    if job.status is not JobStatus.SUCCEEDED or job.export_format is not OutputFormat.HTML:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    if job.export_relative_path is None or job.export_filename is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE, detail=_EXPORT_FILE_MISSING_MESSAGE
+        )
+
+    storage = ExportStorage(request.app.state.settings.data_dir)
+    try:
+        path = storage.resolve(job.export_relative_path)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE, detail=_EXPORT_FILE_MISSING_MESSAGE
+        ) from error
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE, detail=_EXPORT_FILE_MISSING_MESSAGE
+        )
+    return FileResponse(
+        path,
+        media_type=_MEDIA_TYPES[OutputFormat.HTML],
+        filename=job.export_filename,
+        content_disposition_type="inline",
+    )
+
+
 def _project_or_404(session: Session, project_id: str) -> Project:
     project = ProjectRepository(session).get(project_id)
     if project is None:

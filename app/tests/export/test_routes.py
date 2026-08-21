@@ -234,6 +234,25 @@ def test_export_status_reports_success_with_download_link(
 
     assert response.status_code == 200
     assert f"/exports/{completed_export_job.id}/download" in response.text
+    assert f"/exports/{completed_export_job.id}/open" not in response.text
+
+
+def test_export_status_reports_html_open_link(
+    client: TestClient, project_with_document: Project
+) -> None:
+    job = _make_export_job(
+        client,
+        project_with_document.id,
+        state="succeeded",
+        export_format=OutputFormat.HTML,
+        filename="document.html",
+    )
+
+    response = client.get(f"/projects/{project_with_document.id}/exports/{job.id}/status")
+
+    assert response.status_code == 200
+    assert f"/exports/{job.id}/open" in response.text
+    assert f"/exports/{job.id}/download" not in response.text
 
 
 def test_export_status_reports_failure(
@@ -338,6 +357,35 @@ def test_download_encodes_cyrillic_filenames_per_rfc5987(
     assert "filename*=utf-8''" in response.headers["content-disposition"]
 
 
+def test_open_html_export_returns_the_saved_html_inline(
+    client: TestClient, project_with_document: Project
+) -> None:
+    job = _make_export_job(
+        client,
+        project_with_document.id,
+        state="succeeded",
+        export_format=OutputFormat.HTML,
+        filename="Документ.html",
+    )
+
+    response = client.get(f"/projects/{project_with_document.id}/exports/{job.id}/open")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "inline" in response.headers["content-disposition"]
+    assert response.content == b"<html><body>saved export</body></html>"
+
+
+def test_open_endpoint_rejects_non_html_export(
+    client: TestClient, project_with_document: Project, completed_export_job: Job
+) -> None:
+    response = client.get(
+        f"/projects/{project_with_document.id}/exports/{completed_export_job.id}/open"
+    )
+
+    assert response.status_code == 404
+
+
 # --- fixtures/helpers ----------------------------------------------------------------
 
 
@@ -378,6 +426,7 @@ def _make_export_job(
     state: str,
     write_file: bool = True,
     filename: str = "document.docx",
+    export_format: OutputFormat = OutputFormat.DOCX,
 ) -> Job:
     with _session(client) as session:
         repository = JobRepository(session, worker_id="route-test-worker")
@@ -385,7 +434,7 @@ def _make_export_job(
             project_id,
             JobKind.EXPORT,
             "docgen-light",
-            export_format=OutputFormat.DOCX,
+            export_format=export_format,
             requested_document_revision=1,
         )
         if state == "queued":
@@ -409,12 +458,18 @@ def _make_export_job(
             return failed
         if state == "succeeded":
             storage = ExportStorage(client.app.state.settings.data_dir)
-            rendered = RenderedFile(
-                filename=filename,
-                media_type=_DOCX_MEDIA_TYPE,
-                content=b"PK\x03\x04fake-docx-bytes",
+            content = (
+                b"<html><body>saved export</body></html>"
+                if export_format is OutputFormat.HTML
+                else b"PK\x03\x04fake-docx-bytes"
             )
-            stored = storage.save(project_id, OutputFormat.DOCX, "docgen-light", rendered)
+            media_type = (
+                "text/html; charset=utf-8"
+                if export_format is OutputFormat.HTML
+                else _DOCX_MEDIA_TYPE
+            )
+            rendered = RenderedFile(filename=filename, media_type=media_type, content=content)
+            stored = storage.save(project_id, export_format, "docgen-light", rendered)
             if not write_file:
                 storage.resolve(stored.relative_path).unlink()
             result = ExportResult(

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 from docx import Document as OpenDocx
+from docx.enum.text import WD_TAB_ALIGNMENT
 from docx.oxml.ns import qn
+from docx.shared import Cm, Pt
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.docx import DocxExporter, local_storage_image_loader
@@ -71,8 +73,10 @@ def test_docx_uses_template_styles_headers_and_tables(docx_template: FormattingT
     assert package.core_properties.title == document.title
 
 
-def test_docx_preserves_template_header_and_footer(docx_template: FormattingTemplate) -> None:
-    """The template's real header/footer must survive untouched."""
+def test_docx_reflows_template_header_and_preserves_footer(
+    docx_template: FormattingTemplate,
+) -> None:
+    """The header must fit the printable width in Word and LibreOffice."""
     document = WorkingDocument(title="Документ", template_id="colvir-docx", nodes=[])
 
     rendered = DocxExporter().render(document, docx_template)
@@ -80,12 +84,16 @@ def test_docx_preserves_template_header_and_footer(docx_template: FormattingTemp
 
     header_text = package.sections[0].header.paragraphs[0].text
     assert "Colvir Banking System" in header_text
+    assert header_text.endswith("\tДокумент")
+    tab_stops = package.sections[0].header.paragraphs[0].paragraph_format.tab_stops
+    assert len(tab_stops) == 1
+    assert tab_stops[0].alignment is WD_TAB_ALIGNMENT.RIGHT
     footer_text = "\n".join(p.text for p in package.sections[0].footer.paragraphs)
     assert "Руководство" in footer_text
 
 
-def test_docx_clears_template_sample_body(docx_template: FormattingTemplate) -> None:
-    """The template's own sample/placeholder content must not leak through."""
+def test_docx_replaces_template_sample_body_with_contents(docx_template: FormattingTemplate) -> None:
+    """The template sample is removed and its TOC page is regenerated."""
     document = WorkingDocument(title="Документ", template_id="colvir-docx", nodes=[])
 
     rendered = DocxExporter().render(document, docx_template)
@@ -94,7 +102,30 @@ def test_docx_clears_template_sample_body(docx_template: FormattingTemplate) -> 
     full_text = "\n".join(p.text for p in package.paragraphs)
     assert "Введите название документа" not in full_text
     assert "Введите заголовок первого уровня" not in full_text
-    assert "Оглавление" not in full_text
+    assert "Оглавление" in full_text
+
+
+def test_docx_contents_uses_document_headings(docx_template: FormattingTemplate) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="colvir-docx",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text="Общие вопросы", data={"level": 2}),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Настройки",
+                data={"level": 3},
+            ),
+        ],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    contents = [p for p in package.paragraphs if p.text == "Общие вопросы"]
+    assert len(contents) == 2
+    assert contents[0].style.name == "Colvir_Абзац"
+    assert contents[0].paragraph_format.left_indent.twips == Cm(0.6).twips
 
 
 def test_docx_sets_title_paragraph_and_metadata(docx_template: FormattingTemplate) -> None:
@@ -140,7 +171,11 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
     )
     assert title.text == "«Главная Книга» Colvir Banking System"
 
-    heading = next(p for p in package.paragraphs if p.text == "Общие вопросы")
+    heading = next(
+        p
+        for p in package.paragraphs
+        if p.text == "Общие вопросы" and p.style.name == "Colvir_Подзаголовок"
+    )
     assert heading.style.name == "Colvir_Подзаголовок"
     assert heading.paragraph_format.page_break_before is False
 
@@ -151,6 +186,8 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
     assert question.runs[0].bold is True
     assert answer.runs[0].bold is True
     assert question._p.pPr.find(qn("w:numPr")) is None
+    assert question.paragraph_format.space_after.twips == Pt(8).twips
+    assert answer.paragraph_format.space_after.twips == Pt(14).twips
 
 
 # --- heading level mapping --------------------------------------------------
@@ -173,8 +210,8 @@ def test_docx_heading_level_maps_to_style(
     package = _open(rendered.content)
 
     matching = [p for p in package.paragraphs if p.text == "Раздел"]
-    assert len(matching) == 1
-    assert matching[0].style.name == expected_style
+    assert len(matching) == 2
+    assert matching[-1].style.name == expected_style
 
 
 def test_docx_heading_level_is_clamped(docx_template: FormattingTemplate) -> None:
@@ -190,7 +227,7 @@ def test_docx_heading_level_is_clamped(docx_template: FormattingTemplate) -> Non
     package = _open(rendered.content)
 
     matching = [p for p in package.paragraphs if p.text == "Слишком глубоко"]
-    assert matching[0].style.name == "Heading 6"
+    assert matching[-1].style.name == "Heading 6"
 
 
 # --- tables: header-less / rows-less edge cases -----------------------------
@@ -446,8 +483,8 @@ def test_docx_empty_list_renders_nothing(docx_template: FormattingTemplate) -> N
     rendered = DocxExporter().render(document, docx_template)
     package = _open(rendered.content)
 
-    # Only the title paragraph should exist.
-    assert len([p for p in package.paragraphs if p.text.strip()]) == 1
+    # The cover title and the generated contents title are the only text.
+    assert len([p for p in package.paragraphs if p.text.strip()]) == 2
 
 
 # --- nested children on every node kind -------------------------------------

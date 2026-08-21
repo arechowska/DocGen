@@ -10,13 +10,16 @@ writes back to it -- the shared template file is never mutated in place.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import docx
+from docx.enum.text import WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
+from docx.shared import Cm, Pt
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export._naming import make_safe_filename
@@ -111,7 +114,10 @@ class DocxExporter:
 
         docx_document = docx.Document(BytesIO(base_bytes))
         self._prepare_template_body(docx_document, _cover_title(document.title))
+        self._prepare_headers(docx_document, _cover_title(document.title))
         docx_document.core_properties.title = document.title
+        self._render_contents(docx_document, document)
+        docx_document.add_page_break()
 
         list_num_ids: dict[bool, int] = {}
         for node in document.nodes:
@@ -189,6 +195,46 @@ class DocxExporter:
         for child in list(body):
             if child is not sect_pr and child not in cover_elements:
                 body.remove(child)
+
+    def _prepare_headers(
+        self, docx_document: docx.document.Document, title: str
+    ) -> None:
+        """Keep the template header inside the printable area for PDF export."""
+        for section in docx_document.sections:
+            for paragraph in section.header.paragraphs:
+                if "Colvir Banking System" not in paragraph.text:
+                    continue
+                paragraph.paragraph_format.tab_stops.clear_all()
+                paragraph.paragraph_format.tab_stops.add_tab_stop(
+                    section.page_width - section.left_margin - section.right_margin,
+                    WD_TAB_ALIGNMENT.RIGHT,
+                )
+                paragraph.text = f"Colvir Banking System\t{title}"
+
+    def _render_contents(
+        self, docx_document: docx.document.Document, document: WorkingDocument
+    ) -> None:
+        """Fill the template's dedicated post-cover page with a contents list.
+
+        A Word TOC field relies on a client-side field update and therefore
+        becomes empty in automated LibreOffice conversion. Building the entries
+        from the same document nodes makes Word and PDF deterministic.
+        """
+        title = docx_document.add_paragraph("Оглавление", style=_SECTION_STYLE)
+        title.paragraph_format.page_break_before = False
+
+        for heading, level in self._iter_headings(document.nodes):
+            entry = docx_document.add_paragraph(heading, style=_PARAGRAPH_STYLE)
+            entry.paragraph_format.left_indent = Cm(0.6 * max(0, level - 1))
+
+    def _iter_headings(
+        self, nodes: list[DocumentNode]
+    ) -> Iterator[tuple[str, int]]:
+        for node in nodes:
+            if node.kind is NodeKind.HEADING and node.text:
+                level = node.data.get("level", 1)
+                yield node.text, level if isinstance(level, int) else 1
+            yield from self._iter_headings(node.children)
 
     # --- node dispatch ---------------------------------------------------
 
@@ -280,6 +326,7 @@ class DocxExporter:
             paragraph = docx_document.add_paragraph(style=_PARAGRAPH_STYLE)
             paragraph.add_run(f"{label}: ").bold = True
             paragraph.add_run(value)
+            paragraph.paragraph_format.space_after = Pt(8 if label == "Вопрос" else 14)
 
     def _render_table(
         self, docx_document: docx.document.Document, node: DocumentNode

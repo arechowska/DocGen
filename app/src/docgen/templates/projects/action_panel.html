@@ -39,6 +39,7 @@
     </button>
   </form>
   <div class="chat-result-spacer" aria-hidden="true"></div>
+  <div class="chat-result-divider" aria-hidden="true"></div>
   <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle">
     <div class="result-heading">
       <h2 id="resultTitle">Результат</h2>
@@ -54,9 +55,6 @@
           </div>
         </div>
         <div class="result-actions">
-          <a id="openButton" class="button secondary" href="/projects/{{ project.id }}/document" target="_blank" rel="noopener">
-            <span>Открыть</span>
-          </a>
           <div id="export-result" class="export-result">
             <button class="button primary" type="button" disabled>
               <span>Скачать</span>
