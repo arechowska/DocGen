@@ -110,12 +110,55 @@ def test_docx_sets_title_paragraph_and_metadata(docx_template: FormattingTemplat
     assert any(p.text == "Заголовок пакета" for p in title_paragraphs)
 
 
+def test_docx_uses_short_cover_title_and_faq_paragraphs(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Вопросы и ответы по модулю «Главная Книга» Colvir Banking System",
+        template_id="colvir-docx",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text="Общие вопросы", data={"level": 2}),
+            DocumentNode(
+                kind=NodeKind.LIST,
+                data={
+                    "items": [
+                        (
+                            "Вопрос: Для чего предназначен модуль? "
+                            "Ответ: Для ведения Главной Книги."
+                        )
+                    ]
+                },
+            ),
+        ],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    title = next(
+        p for p in package.paragraphs if p.style.name == "Colvir_Обложка_Название"
+    )
+    assert title.text == "«Главная Книга» Colvir Banking System"
+
+    heading = next(p for p in package.paragraphs if p.text == "Общие вопросы")
+    assert heading.style.name == "Colvir_Подзаголовок"
+    assert heading.paragraph_format.page_break_before is False
+
+    question = next(p for p in package.paragraphs if p.text.startswith("Вопрос:"))
+    answer = next(p for p in package.paragraphs if p.text.startswith("Ответ:"))
+    assert question.style.name == "Colvir_Абзац"
+    assert answer.style.name == "Colvir_Абзац"
+    assert question.runs[0].bold is True
+    assert answer.runs[0].bold is True
+    assert question._p.pPr.find(qn("w:numPr")) is None
+
+
 # --- heading level mapping --------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "level,expected_style",
-    [(1, "Heading 1"), (2, "Heading 2"), (3, "Heading 3"), (6, "Heading 6")],
+    [(1, "Heading 1"), (2, "Colvir_Подзаголовок"), (3, "Heading 3"), (6, "Heading 6")],
 )
 def test_docx_heading_level_maps_to_style(
     docx_template: FormattingTemplate, level: int, expected_style: str
@@ -365,7 +408,7 @@ def test_docx_unordered_list_applies_bullet_numbering(docx_template: FormattingT
     item_paragraphs = [p for p in package.paragraphs if p.text in ("Первый", "Второй")]
     assert len(item_paragraphs) == 2
     for paragraph in item_paragraphs:
-        assert paragraph.style.name == "Colvir_Абзац"
+        assert paragraph.style.name == "Colvir_Стиль_М1"
         num_pr = paragraph._p.pPr.find(qn("w:numPr"))
         assert num_pr is not None
 

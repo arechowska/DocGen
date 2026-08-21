@@ -1,21 +1,20 @@
-"""PDF exporter for rendering WorkingDocuments as print-styled PDF files.
+"""PDF exporter for rendering WorkingDocuments as PDF files.
 
-Reuses HtmlExporter's safe node-rendering (the same `render_node` Jinja
-macro and image-resolution contract used by html.py) to build a
-print-specific HTML document, then rasterizes it to PDF with WeasyPrint.
-docgen-light-pdf.html.j2 imports the `render_node` macro straight out of
-docgen-light.html.j2 rather than re-implementing node dispatch, so this
-exporter never duplicates HTML-escaping or table/gap/image edge-case
-handling -- it only supplies a different template/CSS pair and a
-print-specific rasterization step.
+HTML/CSS templates retain the existing WeasyPrint pipeline. Templates based
+on a real DOCX asset are rendered by :class:`DocxExporter` first and converted
+with LibreOffice, which keeps the supplied corporate Word layout intact.
 """
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from docgen.documents.schemas import WorkingDocument
 from docgen.export._naming import make_safe_filename
+from docgen.export.docx import DocxExporter
 from docgen.export.html import HtmlExporter, ImageAsset, ImageLoader, local_storage_image_loader
 from docgen.export.protocol import ExportError, RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
@@ -34,15 +33,11 @@ _MEDIA_TYPE = "application/pdf"
 
 
 class PdfExporter:
-    """Exports WorkingDocuments to print-styled PDF (.pdf) files.
+    """Exports WorkingDocuments to PDF.
 
-    Delegates all node rendering to an internal HtmlExporter (same
-    image-resolution contract: an unresolvable/missing src always falls
-    back to the standard placeholder, never fabricated or fetched
-    externally) configured with the PDF template's `.html.j2`/`.css`
-    assets, then feeds the resulting self-contained HTML string to
-    WeasyPrint. Rendering happens fully in memory; a WeasyPrint engine
-    failure is mapped to ExportError and never touches project state.
+    HTML/CSS templates use the existing WeasyPrint renderer. DOCX templates
+    are rendered through the same DOCX exporter used for Word downloads and
+    converted with LibreOffice, so Word and PDF have one source of layout.
     """
 
     def __init__(
@@ -55,11 +50,11 @@ class PdfExporter:
         Args:
             image_loader: Resolves a node's image src to bytes + MIME type.
                 When None (the default), all images render as placeholders.
-            templates_dir: Directory containing the `.html.j2`/`.css` assets
-                named by a FormattingTemplate's `assets` list. Defaults to
-                the built-in formatting/templates catalog directory.
+            templates_dir: Directory containing the assets named by a
+                FormattingTemplate. Defaults to the built-in catalog.
         """
         self._templates_dir = (templates_dir or _TEMPLATES_DIR).resolve()
+        self._image_loader = image_loader
         self._html_exporter = HtmlExporter(
             image_loader=image_loader, templates_dir=self._templates_dir
         )
@@ -71,16 +66,19 @@ class PdfExporter:
 
         Args:
             document: The WorkingDocument to render.
-            template: The FormattingTemplate naming the `.html.j2` and
-                `.css` print assets to use.
+            template: The FormattingTemplate naming either HTML/CSS or DOCX
+                assets.
 
         Returns:
             RenderedFile with the PDF content.
 
         Raises:
-            ExportError: If the WeasyPrint engine fails to rasterize the
-                rendered HTML. Nothing is written to disk in that case.
+            ExportError: If the selected rendering engine fails. Nothing is
+                written to project storage in that case.
         """
+        if any(asset.endswith(".docx") for asset in template.assets):
+            return self._render_from_docx_template(document, template)
+
         html_rendered = self._html_exporter.render(document, template)
         html = html_rendered.content.decode("utf-8")
 
@@ -99,6 +97,58 @@ class PdfExporter:
             pdf_bytes = HTML(string=html, base_url=str(self._templates_dir)).write_pdf()
         except Exception as exc:
             raise ExportError("Не удалось сформировать PDF") from exc
+
+        return RenderedFile(
+            filename=make_safe_filename(
+                document.title, ".pdf", reserved_suffix=f"-{template.id}"
+            ),
+            media_type=_MEDIA_TYPE,
+            content=pdf_bytes,
+        )
+
+    def _render_from_docx_template(
+        self, document: WorkingDocument, template: FormattingTemplate
+    ) -> RenderedFile:
+        """Convert the Word-template render so PDF matches its source layout."""
+        office = shutil.which("soffice") or shutil.which("libreoffice")
+        if office is None:
+            raise ExportError("Не найден LibreOffice для формирования PDF")
+
+        rendered_docx = DocxExporter(
+            image_loader=self._image_loader,
+            templates_dir=self._templates_dir,
+        ).render(document, template)
+        with TemporaryDirectory(prefix="docgen-pdf-") as temporary_directory:
+            workspace = Path(temporary_directory)
+            docx_path = workspace / "document.docx"
+            output_dir = workspace / "output"
+            profile_dir = workspace / "profile"
+            output_dir.mkdir()
+            profile_dir.mkdir()
+            docx_path.write_bytes(rendered_docx.content)
+            try:
+                subprocess.run(
+                    [
+                        office,
+                        "--headless",
+                        f"-env:UserInstallation={profile_dir.as_uri()}",
+                        "--convert-to",
+                        "pdf:writer_pdf_Export",
+                        "--outdir",
+                        str(output_dir),
+                        str(docx_path),
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=90,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ExportError("Не удалось сформировать PDF из Word-шаблона") from exc
+            pdf_path = output_dir / "document.pdf"
+            if not pdf_path.is_file():
+                raise ExportError("Не удалось сформировать PDF из Word-шаблона")
+            pdf_bytes = pdf_path.read_bytes()
 
         return RenderedFile(
             filename=make_safe_filename(

@@ -9,6 +9,7 @@ writes back to it -- the shared template file is never mutated in place.
 
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ _HEADING_STYLE_NAMES = {
 }
 _TITLE_STYLE = "Colvir_Обложка_Название"
 _PARAGRAPH_STYLE = "Colvir_Абзац"
+_SECTION_STYLE = "Colvir_Подзаголовок"
+_LIST_STYLE = "Colvir_Стиль_М1"
 _GAP_STYLE = "Colvir_Внимание"
 _CAPTION_STYLE = "Colvir_Рисунок_Подпись"
 _TABLE_STYLE = "Colvir_сетка_таблицы"
@@ -57,6 +60,10 @@ _TABLE_BODY_CELL_STYLE = "Colvir_Таблица_текст"
 
 _LIST_INDENT_LEFT_TWIPS = 720
 _LIST_INDENT_HANGING_TWIPS = 360
+_FAQ_ITEM_PATTERN = re.compile(
+    r"^\s*Вопрос\s*:\s*(?P<question>.+?)\s+Ответ\s*:\s*(?P<answer>.+?)\s*$",
+    re.DOTALL,
+)
 
 
 class DocxExporter:
@@ -103,10 +110,8 @@ class DocxExporter:
         base_bytes = self._read_asset_bytes(asset_name)
 
         docx_document = docx.Document(BytesIO(base_bytes))
-        self._clear_body(docx_document)
+        self._prepare_template_body(docx_document, _cover_title(document.title))
         docx_document.core_properties.title = document.title
-
-        docx_document.add_paragraph(document.title, style=_TITLE_STYLE)
 
         list_num_ids: dict[bool, int] = {}
         for node in document.nodes:
@@ -148,21 +153,41 @@ class DocxExporter:
 
     # --- body setup ----------------------------------------------------
 
-    def _clear_body(self, docx_document: docx.document.Document) -> None:
-        """Strip the template's sample/placeholder body content.
+    def _prepare_template_body(
+        self, docx_document: docx.document.Document, title: str
+    ) -> None:
+        """Retain the corporate cover and remove only template sample content.
 
-        colvir.docx's body is not a single blank placeholder paragraph --
-        it's a full sample document (cover page fields, a TOC field, and
-        sample headings/paragraphs demonstrating each style). All of that
-        is instructional filler for a human author and must be removed
-        before appending generated content. The trailing `w:sectPr` (page
-        size/margins, header/footer references) is preserved so the
-        template's header/footer keep working.
+        The Colvir template is a designed document, not a blank style
+        container. Its first cover paragraphs establish the visual identity;
+        the remainder is demonstration text and a sample table of contents.
+        Keeping the cover lets the exported DOCX preserve the supplied layout,
+        page setup, header and footer rather than recreating an approximation.
         """
+        paragraphs = list(docx_document.paragraphs)
+        title_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if paragraph.style.name == _TITLE_STYLE
+            ),
+            None,
+        )
+        if title_index is None:
+            raise ValueError("В шаблоне Colvir не найден стиль названия обложки")
+
+        # The supplied template's cover consists of two title lines, the
+        # title itself, a subtitle and an introductory paragraph.
+        cover_paragraphs = paragraphs[: title_index + 3]
+        cover_elements = set()
+        for paragraph in cover_paragraphs:
+            cover_elements.add(paragraph._p)
+            paragraph.text = title if paragraph.style.name == _TITLE_STYLE else ""
+
         body = docx_document.element.body
         sect_pr = body.find(qn("w:sectPr"))
         for child in list(body):
-            if child is not sect_pr:
+            if child is not sect_pr and child not in cover_elements:
                 body.remove(child)
 
     # --- node dispatch ---------------------------------------------------
@@ -203,12 +228,21 @@ class DocxExporter:
         if not isinstance(level, int):
             level = 1
         level = max(1, min(6, level))
-        docx_document.add_paragraph(node.text or "", style=_HEADING_STYLE_NAMES[level])
+        # FAQ sections are authored as h2 blocks in the editor. The template's
+        # Heading 2 carries outline numbering, while its corporate subtitle is
+        # the blue, unnumbered visual used by the supplied FAQ layout.
+        style = _SECTION_STYLE if level == 2 else _HEADING_STYLE_NAMES[level]
+        paragraph = docx_document.add_paragraph(node.text or "", style=style)
+        if level == 2:
+            # The cover uses this style as a page-level block. FAQ sections
+            # need the same typography without starting a blank page first.
+            paragraph.paragraph_format.page_break_before = False
 
     def _render_paragraph(
         self, docx_document: docx.document.Document, node: DocumentNode
     ) -> None:
-        docx_document.add_paragraph(node.text or "", style=_PARAGRAPH_STYLE)
+        paragraph = docx_document.add_paragraph(node.text or "", style=_PARAGRAPH_STYLE)
+        self._apply_node_style(paragraph, node)
 
     def _render_list(
         self,
@@ -221,12 +255,31 @@ class DocxExporter:
             items = []
         if not items:
             return
+        if node.text:
+            section = docx_document.add_paragraph(node.text, style=_SECTION_STYLE)
+            self._apply_node_style(section, node)
         ordered = bool(node.data.get("ordered", False))
         num_id = self._ensure_list_num_id(docx_document, ordered, list_num_ids)
-        for item in items:
+        item_styles = node.data.get("item_styles")
+        for index, item in enumerate(items):
             text = item if isinstance(item, str) else str(item)
-            paragraph = docx_document.add_paragraph(text, style=_PARAGRAPH_STYLE)
+            faq_item = _FAQ_ITEM_PATTERN.match(text)
+            if faq_item is not None:
+                self._render_faq_item(docx_document, faq_item)
+                continue
+            paragraph = docx_document.add_paragraph(text, style=_LIST_STYLE)
+            self._apply_node_style(paragraph, node)
+            if isinstance(item_styles, list) and index < len(item_styles):
+                self._apply_style_attribute(paragraph, item_styles[index])
             self._apply_list_numbering(paragraph, num_id)
+
+    def _render_faq_item(
+        self, docx_document: docx.document.Document, match: re.Match[str]
+    ) -> None:
+        for label, value in (("Вопрос", match.group("question")), ("Ответ", match.group("answer"))):
+            paragraph = docx_document.add_paragraph(style=_PARAGRAPH_STYLE)
+            paragraph.add_run(f"{label}: ").bold = True
+            paragraph.add_run(value)
 
     def _render_table(
         self, docx_document: docx.document.Document, node: DocumentNode
@@ -309,6 +362,40 @@ class DocxExporter:
         """
         docx_document.add_paragraph(_GAP_MESSAGE, style=_GAP_STYLE)
 
+    def _apply_node_style(self, paragraph: Any, node: DocumentNode) -> None:
+        self._apply_style_mapping(paragraph, node.data.get("style"))
+
+    def _apply_style_attribute(self, paragraph: Any, value: object) -> None:
+        if not isinstance(value, str):
+            return
+        style = {
+            property_name.strip(): property_value.strip()
+            for declaration in value.split(";")
+            if ":" in declaration
+            for property_name, property_value in [declaration.split(":", 1)]
+        }
+        self._apply_style_mapping(paragraph, style)
+
+    def _apply_style_mapping(self, paragraph: Any, value: object) -> None:
+        if not isinstance(value, dict):
+            return
+        style = value
+        if style.get("font-weight") in {"700", "bold"}:
+            for run in paragraph.runs:
+                run.bold = True
+        if style.get("font-style") == "italic":
+            for run in paragraph.runs:
+                run.italic = True
+        if style.get("text-decoration") == "underline":
+            for run in paragraph.runs:
+                run.underline = True
+        if style.get("text-align") in {"left", "center", "right", "justify"}:
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+            paragraph.alignment = getattr(
+                WD_ALIGN_PARAGRAPH, str(style["text-align"]).upper()
+            )
+
     # --- images ------------------------------------------------------
 
     def _resolve_image(self, src: object) -> ImageAsset | None:
@@ -371,7 +458,7 @@ class DocxExporter:
         named "List Bullet"/"List Number" styles into a Cyrillic-branded
         template, this creates a dedicated bullet/decimal numbering
         definition at render time and applies it directly to
-        Colvir_Абзац paragraphs via `w:numPr` -- real Word-native list
+        Colvir_Стиль_М1 paragraphs via `w:numPr` -- real Word-native list
         numbering, scoped to this render's in-memory document only.
         """
         if ordered in cache:
@@ -424,3 +511,15 @@ class DocxExporter:
         num_pr.append(num_id_element)
         p_pr.append(num_pr)
 
+
+def _cover_title(title: str) -> str:
+    normalized = " ".join(title.split()).strip()
+    lowered = normalized.casefold()
+    for prefix in ("вопросы и ответы по модулю", "faq по модулю", "faq"):
+        if lowered.startswith(prefix):
+            normalized = normalized[len(prefix) :].lstrip(" :—-")
+            break
+    if len(normalized) <= 42:
+        return normalized or "Документ"
+    shortened = normalized[:42].rsplit(" ", 1)[0].rstrip(" ,:;—-")
+    return shortened or normalized[:42].rstrip()

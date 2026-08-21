@@ -51,6 +51,12 @@ def test_dockerfile_installs_weasyprint_system_dependencies() -> None:
     assert "rm -rf /var/lib/apt/lists/*" in dockerfile
 
 
+def test_dockerfile_installs_libreoffice_for_template_pdf_export() -> None:
+    dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "libreoffice-writer" in dockerfile
+
+
 def test_docker_compose_runs_web_and_worker_from_one_image() -> None:
     compose = yaml.safe_load((REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 

@@ -39,13 +39,13 @@ def pdf_template() -> FormattingTemplate:
 
 @pytest.fixture
 def colvir_pdf_template() -> FormattingTemplate:
-    """The real Colvir-branded PDF template/CSS pair, loaded from the catalog dir."""
+    """The real Colvir Word template, converted to PDF by LibreOffice."""
     return FormattingTemplate(
         id="colvir",
         name="Фирменный стиль Colvir",
         format=OutputFormat.PDF,
         renderer=OutputFormat.PDF,
-        assets=["colvir-pdf.html.j2", "colvir-pdf.css"],
+        assets=["colvir.docx"],
     )
 
 

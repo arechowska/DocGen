@@ -24,6 +24,7 @@ RUN apt-get update \
         libpangoft2-1.0-0 \
         libharfbuzz-subset0 \
         fonts-dejavu-core \
+        libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app/pyproject.toml ./pyproject.toml
