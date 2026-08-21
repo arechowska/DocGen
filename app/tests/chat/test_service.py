@@ -7,7 +7,7 @@ from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest
 from docgen.chat.service import ChatGroundingError, ChatService, ChatValidationError
 from docgen.db import Base
 from docgen.documents.models import ProjectArtifact
-from docgen.documents.operations import MoveNode, UpdateData, UpdateText, find_node
+from docgen.documents.operations import InsertNode, MoveNode, UpdateData, UpdateText, find_node
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock
@@ -477,6 +477,37 @@ def test_chat_allows_non_factual_structural_operation_without_evidence(
     )
 
     assert [node.id for node in result.document.nodes] == ["limit", "actor"]
+
+
+def test_chat_allows_grounded_generated_questions_from_source(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Добавлены вопросы",
+        operations=[
+            ChatEditOperation(
+                operation=InsertNode(
+                    index=2,
+                    node=DocumentNode(
+                        id="questions",
+                        kind=NodeKind.LIST,
+                        data={"items": ["Как оператор подтверждает заявку?"]},
+                    ),
+                ),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="Добавь больше вопросов", expected_revision=2),
+    )
+
+    assert result.document.nodes[-1].data["items"] == [
+        "Как оператор подтверждает заявку?"
+    ]
 
 
 def test_chat_allows_style_only_data_operation_without_evidence(

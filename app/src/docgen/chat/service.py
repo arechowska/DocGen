@@ -301,8 +301,25 @@ def _validate_operation_evidence(
     if not cited_blocks or not _tokens_supported(
         changed_tokens,
         _tokens(" ".join(block.text for block in cited_blocks)),
+        allow_grounded_synthesis=_allows_grounded_synthesis(document, item.operation),
     ):
         raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
+
+
+def _allows_grounded_synthesis(
+    document: WorkingDocument,
+    operation: DocumentOperation,
+) -> bool:
+    if isinstance(operation, InsertNode):
+        return True
+    if not isinstance(operation, UpdateData):
+        return False
+    node = find_node(document, operation.node_id)
+    if node is None:
+        return False
+    return node.kind is NodeKind.LIST or any(
+        key in operation.data for key in ("items", "items_html")
+    )
 
 
 _WORD_PATTERN = re.compile(r"[^\W\d_]+", re.UNICODE)
@@ -480,7 +497,12 @@ def _normalized_numeric_unit(value: str) -> str:
     return _CURRENCY_ALIASES.get(normalized, normalized)
 
 
-def _tokens_supported(changed: list[str], evidence: list[str]) -> bool:
+def _tokens_supported(
+    changed: list[str],
+    evidence: list[str],
+    *,
+    allow_grounded_synthesis: bool = False,
+) -> bool:
     # MVP policy: every complete numeric fact must occur in the cited operation-level
     # evidence with the same multiplicity. Remaining words use conservative lexical
     # support so grounded Russian inflections/paraphrases are not forced to be exact.
@@ -488,6 +510,9 @@ def _tokens_supported(changed: list[str], evidence: list[str]) -> bool:
     evidence_numbers = Counter(token for token in evidence if _is_numeric_token(token))
     if numeric - evidence_numbers:
         return False
+
+    if allow_grounded_synthesis:
+        return bool(changed)
 
     words = [token for token in changed if not _is_numeric_token(token)]
     evidence_words = [token for token in evidence if not _is_numeric_token(token)]
