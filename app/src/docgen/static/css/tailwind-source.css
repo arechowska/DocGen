@@ -1178,7 +1178,7 @@
 }
 
 .document-title {
-  width: min(380px, 45vw);
+  width: min(680px, 70vw);
   margin-top: 2px;
   padding: 0;
   color: var(--lk-title);
