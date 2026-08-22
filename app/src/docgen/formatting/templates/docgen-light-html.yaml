@@ -1,5 +1,5 @@
 id: docgen-light
-name: Без шаблона
+name: Облегченный HTML
 format: html
 renderer: html
 assets:

@@ -33,7 +33,7 @@ def formatting_catalog_dir(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (directory / "docgen-light-html.yaml").write_text(
-        "id: docgen-light\nname: Без шаблона\nformat: html\nrenderer: html\n",
+        "id: docgen-light\nname: Облегченный HTML\nformat: html\nrenderer: html\n",
         encoding="utf-8",
     )
     (directory / "docgen-light-markdown.yaml").write_text(
@@ -78,10 +78,10 @@ def test_format_selection_returns_only_matching_templates(
     assert 'value="docgen-light"' in response.text
     assert 'hx-include="#export-form"' in response.text
     assert "docgen:document-updated from:body" in response.text
-    assert "Без шаблона" not in response.text
+    assert "Облегченный HTML" not in response.text
 
 
-def test_html_format_has_only_template_free_conversion(
+def test_html_format_exposes_single_lightweight_formatting_option(
     client: TestClient, project_with_document: Project
 ) -> None:
     response = client.get(
@@ -91,7 +91,7 @@ def test_html_format_has_only_template_free_conversion(
     assert response.status_code == 200
     assert response.text.count("<option") == 1
     assert 'value="docgen-light"' in response.text
-    assert "Без шаблона" in response.text
+    assert "Облегченный HTML" in response.text
 
 
 def test_format_selection_rejects_invalid_format(

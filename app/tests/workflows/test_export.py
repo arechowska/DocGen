@@ -95,7 +95,7 @@ def catalog_dir(tmp_path: Path) -> Path:
     directory.mkdir()
     (directory / "docgen-light-html.yaml").write_text(
         "id: docgen-light\n"
-        "name: Без шаблона\n"
+        "name: Облегченный HTML\n"
         "format: html\n"
         "renderer: html\n",
         encoding="utf-8",
