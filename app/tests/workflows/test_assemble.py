@@ -661,7 +661,8 @@ def test_assemble_batches_blocks_and_merges_list_items_across_calls() -> None:
     job = _job(JobKind.ASSEMBLE)
     job.template_id = "faq"
 
-    document = workflow.run(job, ProgressSpy(events))
+    progress = ProgressSpy(events)
+    document = workflow.run(job, progress)
 
     section = next(node for node in document.nodes if node.section_id == "general_questions")
     assert section.data["items"] == [
@@ -669,6 +670,8 @@ def test_assemble_batches_blocks_and_merges_list_items_across_calls() -> None:
         "Вопрос: Можно ли отменить заказ? Ответ: Да, до отгрузки.",
     ]
     assert events.count("text") == 2
+    assert 94 in progress.values
+    assert 98 in progress.values
     assert documents.get_document("p1") == document
 
 

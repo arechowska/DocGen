@@ -268,9 +268,20 @@ def _run_batched_assembly(
 ) -> WorkingDocument:
     batches = _batch_blocks(blocks, batch_chars)
     documents: list[WorkingDocument] = []
-    for batch in batches:
+    total_batches = len(batches)
+    for batch_number, batch in enumerate(batches, start=1):
         cancellation_checkpoint(progress)
+        if total_batches > 1:
+            progress(
+                90 + (batch_number - 1) * 8 // total_batches,
+                f"Сборка документа: пакет {batch_number} из {total_batches}",
+            )
         documents.append(_assemble_batch(text_model, template, batch))
+        if total_batches > 1:
+            progress(
+                90 + batch_number * 8 // total_batches,
+                f"Собран пакет {batch_number} из {total_batches}",
+            )
     return _merge_batches(documents, template)
 
 
