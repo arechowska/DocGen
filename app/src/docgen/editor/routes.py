@@ -30,6 +30,7 @@ from docgen.documents.style import (
 from docgen.editor.validation import ImagePayload, ListPayload, TablePayload
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
+from docgen.templates_catalog.loader import NO_TEMPLATE_ID
 from docgen.web import templates
 
 router = APIRouter(prefix="/projects")
@@ -40,7 +41,7 @@ SessionDependency = Annotated[Session, Depends(get_session)]
 class Docgen2SavePayload(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     html: str = Field(max_length=500_000)
-    revision: int = Field(ge=1)
+    revision: int | None = Field(default=None, ge=1)
 
 
 @router.post("/{project_id}/editor/save")
@@ -60,10 +61,37 @@ def save_docgen2_workspace(
     repository = DocumentRepository(session)
     stored = repository.get_document_with_revision(project_id)
     if stored is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Документ не найден",
+        if payload.revision is not None:
+            session.rollback()
+            return JSONResponse(
+                {"detail": "Документ уже изменён"},
+                status_code=status.HTTP_409_CONFLICT,
+            )
+        empty_document = WorkingDocument(
+            title=title,
+            template_id=NO_TEMPLATE_ID,
+            nodes=[],
         )
+        try:
+            document, html = _workspace_document_and_html(
+                empty_document,
+                title,
+                html,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(error),
+            ) from error
+        revision = repository.create_workspace(project_id, document, html)
+        if revision is None:
+            session.rollback()
+            return JSONResponse(
+                {"detail": "Документ уже создан"},
+                status_code=status.HTTP_409_CONFLICT,
+            )
+        session.commit()
+        return JSONResponse({"revision": revision, "title": title, "html": html})
     current, current_revision = stored
     if current_revision != payload.revision:
         session.rollback()

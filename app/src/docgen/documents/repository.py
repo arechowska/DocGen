@@ -99,6 +99,27 @@ class DocumentRepository:
         self._session.flush()
         return expected_revision + 1
 
+    def create_workspace(
+        self,
+        project_id: str,
+        document: WorkingDocument,
+        html: str,
+    ) -> int | None:
+        """Create revision one unless the project already has a document."""
+        artifact = self._session.get(ProjectArtifact, project_id)
+        if artifact is None:
+            artifact = ProjectArtifact(project_id=project_id)
+            self._session.add(artifact)
+        elif artifact.document_json is not None or artifact.document_revision != 0:
+            return None
+        artifact.document_json = document.model_dump_json()
+        artifact.workspace_html = html
+        artifact.document_revision = 1
+        artifact.report_json = None
+        artifact.report_revision = None
+        self._session.flush()
+        return 1
+
     def save_report(
         self,
         project_id: str,

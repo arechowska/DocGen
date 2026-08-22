@@ -191,6 +191,36 @@ def test_workspace_save_preserves_semantic_metadata(
     assert saved.nodes[0].flags == original.nodes[0].flags
 
 
+def test_workspace_save_creates_first_document_for_empty_project(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Пустой проект")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    response = client.post(
+        f"/projects/{project_id}/editor/save",
+        json={
+            "title": "Первый документ",
+            "html": "<h1>Заголовок</h1><p>Текст документа</p>",
+            "revision": None,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["revision"] == 1
+    saved = _stored_document(client, project_id)
+    assert saved.title == "Первый документ"
+    assert saved.template_id == "no-template"
+    assert [node.kind for node in saved.nodes] == [
+        NodeKind.HEADING,
+        NodeKind.PARAGRAPH,
+    ]
+    assert all(node.flags == ["manual-edit"] for node in saved.nodes)
+
+
 def test_workspace_save_updates_order_lists_tables_and_new_manual_nodes(
     client: TestClient, project_with_document: Project
 ) -> None:
