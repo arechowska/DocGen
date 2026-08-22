@@ -552,7 +552,7 @@ def test_assemble_validates_model_schema_before_saving(
     assert documents.get_document("p1") is None
 
 
-def test_assemble_rejects_document_that_leaves_a_source_block_uncovered(
+def test_assemble_saves_document_and_reports_uncovered_source_block_as_warning(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:
     workflow, model, documents, progress, _events = assembled
@@ -578,10 +578,10 @@ def test_assemble_rejects_document_that_leaves_a_source_block_uncovered(
         ],
     )
 
-    with pytest.raises(WorkflowError, match="не отражены все содержательные исходные блоки"):
-        workflow.run(_job(JobKind.ASSEMBLE), progress)
+    document = workflow.run(_job(JobKind.ASSEMBLE), progress)
 
-    assert documents.get_document("p1") is None
+    assert documents.get_document("p1") == document
+    assert any("image-block" in warning for warning in progress.warnings)
 
 
 def test_assemble_batches_blocks_and_merges_list_items_across_calls() -> None:

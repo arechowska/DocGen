@@ -37,7 +37,6 @@ _DOCUMENT_LENGTH_ERROR = (
     "Ответ модели превышает допустимую длину даже для одного исходного блока"
 )
 _GROUNDING_ERROR = "Результат не прошёл проверку по источникам"
-_COVERAGE_ERROR = "В документе не отражены все содержательные исходные блоки"
 _DEFAULT_ASSEMBLY_BATCH_CHARS = 40_000
 
 
@@ -110,8 +109,9 @@ class AssembleWorkflow:
         )
         if grounding_errors:
             raise WorkflowError(_GROUNDING_ERROR)
-        if _validate_coverage(document, blocks):
-            raise WorkflowError(_COVERAGE_ERROR)
+        coverage_warnings = _validate_coverage(document, blocks)
+        if coverage_warnings:
+            _report_warnings(progress, coverage_warnings)
 
         progress(100, "Сохранение документа")
         self._documents.save_document(job.project_id, document)
@@ -217,6 +217,12 @@ def cancellation_checkpoint(progress: ProgressSink) -> None:
     checkpoint = getattr(progress, "checkpoint", None)
     if callable(checkpoint):
         checkpoint()
+
+
+def _report_warnings(progress: ProgressSink, warnings: list[str]) -> None:
+    report_warnings = getattr(progress, "report_warnings", None)
+    if callable(report_warnings):
+        report_warnings(warnings)
 
 
 def public_blocks(blocks: list[NormalizedBlock]) -> list[dict[str, object]]:

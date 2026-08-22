@@ -748,6 +748,15 @@
   cursor: pointer;
 }
 
+.url-row .icon-button {
+  color: #fff;
+  background: var(--lk-primary);
+}
+
+.url-row .icon-button:hover {
+  background: var(--lk-primary-hover);
+}
+
 .arrow-icon {
   width: 10px;
   height: 10px;
