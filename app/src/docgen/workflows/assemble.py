@@ -37,6 +37,8 @@ _DOCUMENT_LENGTH_ERROR = (
     "Ответ модели превышает допустимую длину даже для одного исходного блока"
 )
 _GROUNDING_ERROR = "Результат не прошёл проверку по источникам"
+_ALL_SOURCES_UNAVAILABLE_ERROR = "Не удалось получить ни один источник для сборки"
+_SKIPPED_CONFLUENCE_WARNING_PREFIX = "Источник Confluence пропущен:"
 _DEFAULT_ASSEMBLY_BATCH_CHARS = 40_000
 
 
@@ -76,6 +78,11 @@ class AssembleWorkflow:
             raise WorkflowError(_PROJECT_NOT_FOUND)
 
         normalized = normalize_sources(self._normalization, job.project_id, progress)
+        if not normalized.blocks and any(
+            warning.startswith(_SKIPPED_CONFLUENCE_WARNING_PREFIX)
+            for warning in normalized.warnings
+        ):
+            raise WorkflowError(_ALL_SOURCES_UNAVAILABLE_ERROR)
         if job.template_id == NO_TEMPLATE_ID:
             document = _document_without_template(
                 normalized.blocks, getattr(project, "name", "Документ")

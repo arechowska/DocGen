@@ -220,6 +220,17 @@ def test_unauthorized_is_user_safe(mock_401_transport: httpx.MockTransport) -> N
         ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
 
 
+def test_server_error_reports_http_status() -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(503))
+
+    with pytest.raises(ExtractionError, match="Confluence вернул HTTP 503"):
+        ConfluenceClient(
+            api_base="https://wiki.example.test/rest/api",
+            token="secret",
+            transport=transport,
+        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+
 def test_oversized_confluence_response_is_rejected(
     mock_oversized_transport: httpx.MockTransport,
 ) -> None:

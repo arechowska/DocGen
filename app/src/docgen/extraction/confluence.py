@@ -229,7 +229,9 @@ class ConfluenceClient:
                     if response.status_code == 404:
                         raise ExtractionError(not_found_message)
                     if response.is_error or response.is_redirect:
-                        raise ExtractionError(_RETRIEVAL_ERROR)
+                        raise ExtractionError(
+                            f"Confluence вернул HTTP {response.status_code}"
+                        )
                     response_limit = (
                         max_bytes if max_bytes is not None else self._max_response_bytes
                     )
@@ -237,6 +239,8 @@ class ConfluenceClient:
                     return self._read_limited_body(response, response_limit, oversized_message)
         except ExtractionError:
             raise
+        except httpx.TimeoutException as error:
+            raise ExtractionError("Превышено время ожидания ответа Confluence") from error
         except httpx.HTTPError as error:
             raise ExtractionError(_RETRIEVAL_ERROR) from error
 

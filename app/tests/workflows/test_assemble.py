@@ -436,6 +436,22 @@ def test_assemble_publishes_normalization_warnings_before_model_call(
     assert events.index("extract") < events.index("text")
 
 
+def test_assemble_stops_when_all_sources_are_unavailable(
+    assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, model, documents, progress, _events = assembled
+    workflow._normalization.blocks = []  # type: ignore[attr-defined]
+    workflow._normalization.warnings = [  # type: ignore[attr-defined]
+        "Источник Confluence пропущен: Confluence вернул HTTP 503"
+    ]
+
+    with pytest.raises(WorkflowError, match="Не удалось получить ни один источник"):
+        workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert model.user_prompt == ""
+    assert documents.get_document("p1") is None
+
+
 def test_assemble_saves_model_document_without_strict_grounding(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
     grounded_document: WorkingDocument,
