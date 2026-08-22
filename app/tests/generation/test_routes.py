@@ -14,11 +14,13 @@ from docgen.documents.schemas import (
     CheckFinding,
     CheckReport,
     DocumentNode,
+    DocumentOrigin,
     NodeKind,
     Severity,
     WorkingDocument,
 )
-from docgen.extraction.registry import ExtractorRegistry
+from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
+from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner
@@ -388,7 +390,7 @@ def test_check_rejects_raster_source_as_target(
     assert _jobs_for_project(client, project_with_source.id) == []
 
 
-def test_setup_lists_supported_file_targets_but_excludes_raster_and_confluence(
+def test_setup_lists_documents_and_confluence_but_excludes_raster(
     client: TestClient, project_with_source: Project
 ) -> None:
     text_response = client.post(
@@ -411,6 +413,11 @@ def test_setup_lists_supported_file_targets_but_excludes_raster_and_confluence(
     assert confluence_response.status_code == 200
     markdown_id = _source_id(client, project_with_source.id, "case.md")
     image_id = _source_id(client, project_with_source.id, "diagram.png")
+    confluence_id = _source_id(
+        client,
+        project_with_source.id,
+        "https://wiki.example.test/pages/42",
+    )
 
     response = client.get(f"/projects/{project_with_source.id}")
 
@@ -421,7 +428,8 @@ def test_setup_lists_supported_file_targets_but_excludes_raster_and_confluence(
     assert f'value="{markdown_id}"' in target_select
     assert "case.md" in target_select
     assert f'value="{image_id}"' not in target_select
-    assert "wiki.example.test" not in target_select
+    assert f'value="{confluence_id}"' in target_select
+    assert "wiki.example.test" in target_select
 
 
 def test_second_active_job_for_project_is_rejected_atomically(
@@ -992,7 +1000,9 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     with _session(client) as session:
         saved_document = DocumentRepository(session).get_document(project_with_source.id)
     assert saved_document is not None
-    assert saved_document.template_id == "use-case"
+    assert saved_document.template_id == "no-template"
+    assert saved_document.build_template_id is None
+    assert saved_document.source_id == target_source_id
     assert saved_document.nodes[0].kind is NodeKind.HEADING
     assert saved_document.nodes[0].text == "Case"
 
@@ -1045,6 +1055,113 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
         )
         assert repeat_runner.run_once() is True
     assert _job(client, repeat_job.id).status.value == "succeeded"
+
+
+def test_confluence_document_can_be_checked_by_two_profiles_without_assembly(
+    client: TestClient, configured_text_model: None
+) -> None:
+    project = _create_project(client, "Confluence use case")
+    source_response = client.post(
+        f"/projects/{project.id}/sources/confluence",
+        data={"url": "https://wiki.example.test/pages/42"},
+        headers={"HX-Request": "true"},
+    )
+    assert source_response.status_code == 200
+    source_id = _source_id(client, project.id, "https://wiki.example.test/pages/42")
+    settings = client.app.state.settings
+    settings.confluence_api_base = "https://wiki.example.test/rest/api"
+    settings.confluence_token = "configured-secret"
+    settings.trusted_integration_hosts = ("text-model.test", "wiki.example.test")
+
+    first_response = client.post(
+        f"/projects/{project.id}/jobs/check",
+        data={"template_id": "use-case", "target_source_id": source_id},
+    )
+    assert first_response.status_code == 202
+    first_job = _jobs_for_project(client, project.id)[0]
+    confluence = _StaticConfluenceClient()
+    catalog = TemplateCatalog()
+    with _session(client) as session:
+        runner = JobRunner(
+            JobRepository(session, worker_id="confluence-check-worker"),
+            {
+                JobKind.CHECK: CheckWorkflow(
+                    projects=ProjectRepository(session),
+                    normalization=NormalizationWorkflow(
+                        SourceRepository(session),
+                        LocalStorage(settings.data_dir),
+                        ExtractorRegistry.default(),
+                        confluence,
+                    ),
+                    templates=catalog,
+                    text_model=_ProfileCheckModel(),
+                    vision_model=_NoImageVisionModel(),
+                    grounding=GroundingValidator(),
+                    documents=DocumentRepository(session),
+                )
+            },
+        )
+        assert runner.run_once() is True
+
+    assert _job(client, first_job.id).status.value == "succeeded"
+    with _session(client) as session:
+        repository = DocumentRepository(session)
+        imported, revision = repository.get_document_with_revision(project.id) or (None, 0)
+        assert imported is not None
+        assert imported.origin is DocumentOrigin.IMPORTED
+        assert imported.source_id == source_id
+        assert imported.build_template_id is None
+        assert imported.nodes[0].text == "Открытие цифрового счёта"
+        assert [item.check_profile_id for item in repository.list_check_reports(project.id)] == [
+            "use-case"
+        ]
+
+    second_response = client.post(
+        f"/projects/{project.id}/jobs/check",
+        data={"template_id": "faq"},
+    )
+    assert second_response.status_code == 202
+    second_job = next(
+        job for job in _jobs_for_project(client, project.id) if job.id != first_job.id
+    )
+    with _session(client) as session:
+        runner = JobRunner(
+            JobRepository(session, worker_id="second-profile-worker"),
+            {
+                JobKind.CHECK: CheckWorkflow(
+                    projects=ProjectRepository(session),
+                    normalization=NormalizationWorkflow(
+                        SourceRepository(session),
+                        LocalStorage(settings.data_dir),
+                        ExtractorRegistry.default(),
+                        confluence,
+                    ),
+                    templates=catalog,
+                    text_model=_ProfileCheckModel(),
+                    vision_model=_NoImageVisionModel(),
+                    grounding=GroundingValidator(),
+                    documents=DocumentRepository(session),
+                )
+            },
+        )
+        assert runner.run_once() is True
+
+    assert _job(client, second_job.id).status.value == "succeeded"
+    with _session(client) as session:
+        repository = DocumentRepository(session)
+        unchanged, unchanged_revision = repository.get_document_with_revision(project.id) or (
+            None,
+            0,
+        )
+        assert unchanged == imported
+        assert unchanged_revision == revision
+        assert [
+            item.check_profile_id
+            for item in repository.list_check_reports(
+                project.id, document_revision=revision
+            )
+        ] == ["use-case", "faq"]
+    assert confluence.calls == 2
 
 
 def test_missing_project_is_rejected_on_start(client: TestClient) -> None:
@@ -1126,6 +1243,63 @@ class _StaticCheckModel:
         assert user
         assert schema is CheckReport
         return CheckReport(template_id="use-case", unchecked_rules=self._unchecked_rules)
+
+
+class _ProfileCheckModel:
+    def generate_json(self, system: str, user: str, schema: type[Any]) -> CheckReport:
+        import json
+
+        assert system
+        assert schema is CheckReport
+        payload = json.loads(user)
+        profile_id = payload["формат_ответа"]["template_id"]
+        return CheckReport(
+            template_id=profile_id,
+            passed_rule_ids=tuple(rule["id"] for rule in payload["правила"]),
+        )
+
+
+class _StaticConfluenceClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch(self, url: str, *, before_external_call: Any = None) -> ExtractionResult:
+        assert url == "https://wiki.example.test/pages/42"
+        if before_external_call is not None:
+            before_external_call()
+        self.calls += 1
+        return ExtractionResult(
+            blocks=[
+                NormalizedBlock(
+                    id="confluence-heading",
+                    kind=BlockKind.HEADING,
+                    text="Открытие цифрового счёта",
+                    provenance=[
+                        Provenance(
+                            source_id="confluence:42",
+                            locator="heading:1",
+                            quote="Открытие цифрового счёта",
+                        )
+                    ],
+                    confidence=1.0,
+                ),
+                NormalizedBlock(
+                    id="confluence-body",
+                    kind=BlockKind.TEXT,
+                    text="Клиент заполняет заявку, после чего система открывает счёт.",
+                    provenance=[
+                        Provenance(
+                            source_id="confluence:42",
+                            locator="paragraph:1",
+                            quote="Клиент заполняет заявку",
+                        )
+                    ],
+                    confidence=1.0,
+                ),
+            ],
+            page_units=1,
+            warnings=[],
+        )
 
 
 class _NoImageVisionModel:

@@ -1,8 +1,20 @@
-from sqlalchemy import update
+from dataclasses import dataclass
+
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .models import ProjectArtifact
+from .models import CheckReportRecord, ProjectArtifact
 from .schemas import CheckReport, WorkingDocument
+
+
+@dataclass(frozen=True)
+class StoredCheckReport:
+    id: int
+    project_id: str
+    document_revision: int
+    check_profile_id: str
+    target_source_id: str | None
+    report: CheckReport
 
 
 class DocumentRepository:
@@ -126,6 +138,7 @@ class DocumentRepository:
         report: CheckReport,
         *,
         expected_document_revision: int | None = None,
+        target_source_id: str | None = None,
     ) -> int:
         artifact = self._get_or_create(project_id)
         if artifact.document_json is None or artifact.document_revision <= 0:
@@ -149,6 +162,12 @@ class DocumentRepository:
         if result.rowcount != 1:
             self._session.expire_all()
             raise ValueError("Документ был изменён во время проверки")
+        self._append_check_report(
+            project_id,
+            expected_document_revision,
+            report,
+            target_source_id=target_source_id,
+        )
         self._session.flush()
         self._session.expire(artifact)
         return expected_document_revision
@@ -166,6 +185,12 @@ class DocumentRepository:
         artifact.report_json = report.model_dump_json()
         artifact.report_revision = artifact.document_revision
         artifact.report_generation = (artifact.report_generation or 0) + 1
+        self._append_check_report(
+            project_id,
+            artifact.document_revision,
+            report,
+            target_source_id=document.source_id,
+        )
         self._session.flush()
         return artifact.document_revision
 
@@ -218,6 +243,57 @@ class DocumentRepository:
         if artifact is None:
             return None
         return artifact.document_revision, artifact.report_revision
+
+    def list_check_reports(
+        self,
+        project_id: str,
+        *,
+        document_revision: int | None = None,
+        check_profile_id: str | None = None,
+    ) -> list[StoredCheckReport]:
+        statement = select(CheckReportRecord).where(
+            CheckReportRecord.project_id == project_id
+        )
+        if document_revision is not None:
+            statement = statement.where(
+                CheckReportRecord.document_revision == document_revision
+            )
+        if check_profile_id is not None:
+            statement = statement.where(
+                CheckReportRecord.check_profile_id == check_profile_id
+            )
+        records = self._session.scalars(
+            statement.order_by(CheckReportRecord.id)
+        ).all()
+        return [
+            StoredCheckReport(
+                id=record.id,
+                project_id=record.project_id,
+                document_revision=record.document_revision,
+                check_profile_id=record.check_profile_id,
+                target_source_id=record.target_source_id,
+                report=CheckReport.model_validate_json(record.report_json),
+            )
+            for record in records
+        ]
+
+    def _append_check_report(
+        self,
+        project_id: str,
+        document_revision: int,
+        report: CheckReport,
+        *,
+        target_source_id: str | None,
+    ) -> None:
+        self._session.add(
+            CheckReportRecord(
+                project_id=project_id,
+                document_revision=document_revision,
+                check_profile_id=report.check_profile_id or report.template_id,
+                target_source_id=target_source_id,
+                report_json=report.model_dump_json(),
+            )
+        )
 
     def _get_or_create(self, project_id: str) -> ProjectArtifact:
         artifact = self._session.get(ProjectArtifact, project_id)

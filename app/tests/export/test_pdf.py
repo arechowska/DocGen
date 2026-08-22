@@ -1,4 +1,5 @@
 import base64
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -120,6 +121,58 @@ def test_colvir_pdf_has_valid_header_and_expected_text(
     assert "Заголовок" in text
     assert "Colvir" in text
     assert "Оглавление" in text
+
+
+def test_colvir_pdf_preserves_complete_use_case_form_and_separate_flow_items(
+    colvir_pdf_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Открытие счёта",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="preconditions",
+                text="Предусловия",
+                children=[DocumentNode(kind=NodeKind.GAP)],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="main-flow",
+                text="Основной поток",
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.LIST,
+                        data={
+                            "ordered": True,
+                            "items": [
+                                "Клиент отправляет заявление",
+                                "Система открывает счёт",
+                            ],
+                        },
+                    )
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="result",
+                text="Результат",
+                children=[DocumentNode(kind=NodeKind.GAP)],
+            ),
+        ],
+    )
+
+    rendered = PdfExporter().render(document, colvir_pdf_template)
+    text = _open_pdf_text(rendered.content)
+
+    assert rendered.content.startswith(b"%PDF-")
+    assert "Код документа" in text
+    assert "Область действия" in text
+    assert "Предусловия" in text
+    assert "Основной поток" in text
+    assert re.search(r"Клиент\s+отправляет\s+заявление", text)
+    assert re.search(r"Система\s+открывает\s+счёт", text)
+    assert "Нет данных в источниках" not in text
 
 
 def test_pdf_filename_and_media_type(pdf_template: FormattingTemplate) -> None:

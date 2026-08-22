@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from docgen.db import Base
-from docgen.documents.models import ProjectArtifact
+from docgen.documents.models import CheckReportRecord, ProjectArtifact
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, DocumentNode, NodeKind, WorkingDocument
 from docgen.jobs.models import Job
@@ -17,14 +17,26 @@ def artifact_session() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(
         engine,
-        tables=(Project.__table__, Source.__table__, ProjectArtifact.__table__, Job.__table__),
+        tables=(
+            Project.__table__,
+            Source.__table__,
+            ProjectArtifact.__table__,
+            CheckReportRecord.__table__,
+            Job.__table__,
+        ),
     )
     session = Session(engine)
     yield session
     session.close()
     Base.metadata.drop_all(
         engine,
-        tables=(Job.__table__, ProjectArtifact.__table__, Source.__table__, Project.__table__),
+        tables=(
+            Job.__table__,
+            CheckReportRecord.__table__,
+            ProjectArtifact.__table__,
+            Source.__table__,
+            Project.__table__,
+        ),
     )
     engine.dispose()
 
@@ -69,6 +81,37 @@ def test_replacing_document_increments_revision_and_invalidates_report(
 
     assert repository.get_document(project.id) == latest
     assert repository.get_report(project.id) is None
+
+
+def test_repository_keeps_independent_check_history_for_two_profiles(
+    artifact_session: Session,
+) -> None:
+    project = ProjectRepository(artifact_session).create("Проект")
+    repository = DocumentRepository(artifact_session)
+    document = WorkingDocument(
+        title="Импортированный документ",
+        template_id="no-template",
+        nodes=[DocumentNode(id="n1", kind=NodeKind.PARAGRAPH, text="Текст")],
+    )
+    repository.save_document(project.id, document)
+
+    repository.save_report(
+        project.id,
+        CheckReport(template_id="use-case", passed_rule_ids=["uc-rule"]),
+        expected_document_revision=1,
+        target_source_id="source-1",
+    )
+    repository.save_report(
+        project.id,
+        CheckReport(template_id="faq", passed_rule_ids=["faq-rule"]),
+        expected_document_revision=1,
+        target_source_id="source-1",
+    )
+
+    history = repository.list_check_reports(project.id, document_revision=1)
+    assert [item.check_profile_id for item in history] == ["use-case", "faq"]
+    assert history[0].report.passed_rule_ids == ("uc-rule",)
+    assert history[1].report.passed_rule_ids == ("faq-rule",)
 
 
 def test_workspace_save_uses_revision_and_stores_html(

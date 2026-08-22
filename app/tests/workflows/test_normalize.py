@@ -201,6 +201,53 @@ def test_normalization_delegates_each_confluence_request_gate_to_client() -> Non
     assert events == ["gate", "request"]
 
 
+def test_normalization_rebinds_confluence_provenance_to_stored_source_id() -> None:
+    source = Source(
+        id="stored-source-id",
+        project_id="p1",
+        kind=SourceKind.CONFLUENCE,
+        display_name="https://wiki.example.test/pages/42",
+        url="https://wiki.example.test/pages/42",
+        status="linked",
+    )
+
+    class ConfluencePage:
+        def fetch(self, url: str, *, before_external_call=None) -> ExtractionResult:
+            del url, before_external_call
+            return ExtractionResult(
+                blocks=[
+                    NormalizedBlock(
+                        id="wiki-block",
+                        kind=BlockKind.TEXT,
+                        text="Содержимое Wiki",
+                        provenance=[
+                            Provenance(
+                                source_id="confluence:42",
+                                locator="confluence:42#paragraph-1",
+                            )
+                        ],
+                        confidence=1.0,
+                    )
+                ],
+                page_units=1,
+                warnings=[],
+            )
+
+    workflow = NormalizationWorkflow(
+        StaticSources(source),
+        StaticStorage(Path("unused")),
+        ExtractorRegistry.default(),
+        ConfluencePage(),
+    )
+
+    result = workflow.run("p1")
+
+    assert result.blocks[0].provenance[0].source_id == "stored-source-id"
+    assert result.blocks[0].provenance[0].locator == (
+        "confluence:42#paragraph-1"
+    )
+
+
 def test_normalization_skips_inaccessible_confluence_and_keeps_file_sources() -> None:
     confluence_source = Source(
         id="confluence-1",
@@ -257,6 +304,7 @@ def test_normalization_skips_inaccessible_confluence_and_keeps_file_sources() ->
     assert result.warnings == [
         "Источник Confluence пропущен: Нет доступа к странице Confluence"
     ]
+    assert result.unavailable_source_ids == ("confluence-1",)
 
 
 def test_normalization_includes_source_warnings_and_adds_long_processing_warning(

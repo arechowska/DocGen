@@ -73,6 +73,120 @@ def test_docx_uses_template_styles_headers_and_tables(docx_template: FormattingT
     assert package.core_properties.title == document.title
 
 
+def test_docx_assembled_use_case_uses_full_corporate_form_with_empty_fields(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Открытие счёта",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="main-flow",
+                text="Основной поток",
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.LIST,
+                        data={
+                            "ordered": True,
+                            "items": [
+                                "Клиент отправляет заявление",
+                                "Система открывает счёт",
+                            ],
+                        },
+                    )
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="preconditions",
+                text="Предусловия",
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.GAP,
+                        flags=["missing-source-data"],
+                    )
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="result",
+                text="Результат",
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.GAP,
+                        flags=["missing-source-data"],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    assert len(package.tables) == 5
+    assert package.tables[0].cell(0, 0).text == "Код документа"
+    assert package.tables[0].cell(0, 1).text == ""
+    assert package.tables[1].cell(0, 0).text == "Область действия"
+    assert package.tables[2].cell(0, 0).text == "Наименование"
+    assert package.tables[3].cell(0, 0).text == "Ссылка"
+    assert package.tables[4].cell(0, 0).text == "Версия документа"
+    assert all(table.style.name == "Colvir_сетка_таблицы" for table in package.tables)
+    full_text = "\n".join(paragraph.text for paragraph in package.paragraphs)
+    assert "Нет данных в источниках" not in full_text
+    numbered = [
+        paragraph
+        for paragraph in package.tables[1].cell(10, 1).paragraphs
+        if paragraph.text
+    ]
+    assert [paragraph.text for paragraph in numbered] == [
+        "Клиент отправляет заявление",
+        "Система открывает счёт",
+    ]
+    assert all(
+        paragraph._p.pPr is not None and paragraph._p.pPr.numPr is not None
+        for paragraph in numbered
+    )
+
+
+def test_docx_rejects_structurally_invalid_assembled_use_case(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Склеенный сценарий",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="preconditions",
+                text="Предусловия",
+                children=[DocumentNode(kind=NodeKind.GAP)],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="main-flow",
+                text="Основной поток",
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.PARAGRAPH,
+                        text="1. Клиент отправляет заявку. 2. Система открывает счёт.",
+                    )
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="result",
+                text="Результат",
+                children=[DocumentNode(kind=NodeKind.GAP)],
+            ),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="нумерованным списком"):
+        DocxExporter().render(document, docx_template)
+
+
 def test_docx_reflows_template_header_and_preserves_footer(
     docx_template: FormattingTemplate,
 ) -> None:

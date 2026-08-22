@@ -12,6 +12,7 @@ from docgen.documents.schemas import (
     CheckFinding,
     CheckReport,
     DocumentNode,
+    DocumentOrigin,
     NodeKind,
     Severity,
     WorkingDocument,
@@ -20,16 +21,20 @@ from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import CheckTargetKind, Job, JobKind
 from docgen.jobs.runner import ProgressSink
 from docgen.projects.repository import ProjectRepository
-from docgen.templates_catalog.loader import TemplateCatalog
+from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticTemplate
 
-from .assemble import WorkflowError, enrich_images, normalize_sources, public_blocks
+from .assemble import enrich_images, normalize_sources, public_blocks
+from .errors import WorkflowError
 from .normalize import NormalizationWorkflow
 
 _CHECK_KIND_ERROR = "Некорректный тип задания для проверки"
 _PROJECT_NOT_FOUND = "Проект не найден"
 _DOCUMENT_NOT_FOUND = "Документ для проверки не найден"
-_DOCUMENT_TEMPLATE_ERROR = "Документ создан для другого шаблона"
+_SOURCE_UNAVAILABLE_ERROR = (
+    "Не удалось получить выбранный источник; проверьте доступ и повторите проверку"
+)
+_SOURCE_EMPTY_ERROR = "В выбранном источнике нет извлекаемого содержимого"
 _REPORT_SCHEMA_ERROR = "Модель вернула некорректный отчёт"
 _REPORT_TEMPLATE_ERROR = "Модель вернула отчёт для другого шаблона"
 _DOCUMENT_GROUNDING_ERROR = "Документ не прошёл проверку по источникам"
@@ -69,24 +74,38 @@ class CheckWorkflow:
             if job.target_source_id is not None
             else CheckTargetKind.CURRENT
         )
+        current = self._documents.get_document_with_revision(job.project_id)
         document_revision: int | None = None
         document = None
-        if target_kind is CheckTargetKind.CURRENT:
-            current = self._documents.get_document_with_revision(job.project_id)
-            if current is not None:
-                document, document_revision = current
-        if target_kind is CheckTargetKind.CURRENT:
-            if document is None:
-                raise WorkflowError(_DOCUMENT_NOT_FOUND)
-            if document.template_id != template.id:
-                raise WorkflowError(_DOCUMENT_TEMPLATE_ERROR)
+        if current is not None:
+            current_document, current_revision = current
+            if target_kind is CheckTargetKind.CURRENT or (
+                target_kind is CheckTargetKind.SOURCE
+                and current_document.origin is DocumentOrigin.IMPORTED
+                and current_document.source_id == job.target_source_id
+            ):
+                document, document_revision = current_document, current_revision
+        if target_kind is CheckTargetKind.CURRENT and document is None:
+            raise WorkflowError(_DOCUMENT_NOT_FOUND)
 
         normalized = normalize_sources(self._normalization, job.project_id, progress)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
+        evidence_blocks = blocks
         if target_kind is CheckTargetKind.SOURCE:
             if job.target_source_id is None:
                 raise WorkflowError(_DOCUMENT_NOT_FOUND)
-            document = _target_document(job.target_source_id, template.id, blocks)
+            target_blocks = _blocks_for_source(job.target_source_id, blocks)
+            if not target_blocks:
+                if job.target_source_id in normalized.unavailable_source_ids:
+                    raise WorkflowError(_SOURCE_UNAVAILABLE_ERROR)
+                raise WorkflowError(_SOURCE_EMPTY_ERROR)
+            evidence_blocks = target_blocks
+            if document is None:
+                document = _target_document(
+                    job.target_source_id,
+                    template.id,
+                    evidence_blocks,
+                )
         assert document is not None
         if self._grounding.validate(document, {block.id: block for block in blocks}):
             raise WorkflowError(_DOCUMENT_GROUNDING_ERROR)
@@ -94,7 +113,7 @@ class CheckWorkflow:
         progress(90, "Проверка документа моделью")
         raw_report = self._text_model.generate_json(
             CHECK_SYSTEM_PROMPT,
-            _check_prompt(template, blocks, document),
+            _check_prompt(template, evidence_blocks, document),
             CheckReport,
         )
         try:
@@ -105,7 +124,7 @@ class CheckWorkflow:
 
         progress(100, "Сохранение отчёта")
         progress.checkpoint()
-        if target_kind is CheckTargetKind.SOURCE:
+        if target_kind is CheckTargetKind.SOURCE and document_revision is None:
             self._documents.save_document_and_report(job.project_id, document, report)
         else:
             assert document_revision is not None
@@ -113,6 +132,7 @@ class CheckWorkflow:
                 job.project_id,
                 report,
                 expected_document_revision=document_revision,
+                target_source_id=job.target_source_id,
             )
         return report
 
@@ -122,13 +142,8 @@ def _target_document(
     template_id: str,
     blocks: list[NormalizedBlock],
 ) -> WorkingDocument:
-    target_blocks = [
-        block
-        for block in blocks
-        if any(item.source_id == target_source_id for item in block.provenance)
-    ]
-    if not target_blocks:
-        raise WorkflowError(_DOCUMENT_NOT_FOUND)
+    del template_id
+    target_blocks = _target_blocks(target_source_id, blocks)
     title = next(
         (
             block.text
@@ -139,9 +154,32 @@ def _target_document(
     )
     return WorkingDocument(
         title=title,
-        template_id=template_id,
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id=target_source_id,
         nodes=[_node_from_block(block) for block in target_blocks],
     )
+
+
+def _target_blocks(
+    target_source_id: str,
+    blocks: list[NormalizedBlock],
+) -> list[NormalizedBlock]:
+    target_blocks = _blocks_for_source(target_source_id, blocks)
+    if not target_blocks:
+        raise WorkflowError(_DOCUMENT_NOT_FOUND)
+    return target_blocks
+
+
+def _blocks_for_source(
+    target_source_id: str,
+    blocks: list[NormalizedBlock],
+) -> list[NormalizedBlock]:
+    return [
+        block
+        for block in blocks
+        if any(item.source_id == target_source_id for item in block.provenance)
+    ]
 
 
 def _node_from_block(block: NormalizedBlock) -> DocumentNode:
@@ -157,6 +195,8 @@ def _node_from_block(block: NormalizedBlock) -> DocumentNode:
         for key, value in block.data.items()
         if key not in {"content_base64", "storage_path"}
     }
+    if block.kind is BlockKind.LIST and "items" not in safe_data:
+        safe_data["items"] = [block.text]
     locators = [item.locator for item in block.provenance] or [block.id]
     return DocumentNode(
         id=f"document-node:{block.id}",

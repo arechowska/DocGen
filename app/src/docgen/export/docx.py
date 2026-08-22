@@ -61,6 +61,37 @@ _TABLE_STYLE = "Colvir_сетка_таблицы"
 _TABLE_HEADER_CELL_STYLE = "Colvir_Таблица_заголовок"
 _TABLE_BODY_CELL_STYLE = "Colvir_Таблица_текст"
 
+_USE_CASE_METADATA_FIELDS = (
+    "Код документа",
+    "Наименование",
+    "Версия документа",
+    "Статус документа",
+    "Модуль",
+    "Номер задачи ТС",
+    "Полезность",
+    "Страна",
+    "Кастомизация",
+    "Аналитик",
+)
+_USE_CASE_DESCRIPTION_ROWS = (
+    ("Область действия", "scope"),
+    ("Уровень цели", "goal-level"),
+    ("Основное действующее лицо", "primary-actor"),
+    ("Цель основного действующего лица", "actor-goal"),
+    ("Участники и интересы", None),
+    ("Участники и интересы", "actors"),
+    ("Участники и интересы", None),
+    ("Предусловия", "preconditions"),
+    ("Минимальные гарантии", "minimum-guarantees"),
+    ("Инициируется", "trigger"),
+    ("Основной сценарий", "main-flow"),
+    ("Результат основного сценария", "result"),
+    ("Альтернативный вариант", "alternative-flow"),
+    ("Список изменений в технологиях и данных", None),
+    ("Показатели назначения", None),
+    ("Открытые вопросы", "open-questions"),
+)
+
 _LIST_INDENT_LEFT_TWIPS = 720
 _LIST_INDENT_HANGING_TWIPS = 360
 _FAQ_ITEM_PATTERN = re.compile(
@@ -120,8 +151,11 @@ class DocxExporter:
         docx_document.add_page_break()
 
         list_num_ids: dict[bool, int] = {}
-        for node in document.nodes:
-            self._render_node(docx_document, node, list_num_ids)
+        if document.build_template_id == "use-case":
+            self._render_use_case_form(docx_document, document, list_num_ids)
+        else:
+            for node in document.nodes:
+                self._render_node(docx_document, node, list_num_ids)
 
         buffer = BytesIO()
         docx_document.save(buffer)
@@ -237,6 +271,239 @@ class DocxExporter:
             yield from self._iter_headings(node.children)
 
     # --- node dispatch ---------------------------------------------------
+
+    def _render_use_case_form(
+        self,
+        docx_document: docx.document.Document,
+        document: WorkingDocument,
+        list_num_ids: dict[bool, int],
+    ) -> None:
+        self._validate_use_case_form(document)
+        sections = {
+            node.section_id: node
+            for node in document.nodes
+            if node.kind is NodeKind.HEADING and node.section_id
+        }
+        self._add_form_heading(docx_document, "Общие сведения")
+        metadata = docx_document.add_table(
+            rows=len(_USE_CASE_METADATA_FIELDS),
+            cols=2,
+        )
+        metadata.style = _TABLE_STYLE
+        for row_index, label in enumerate(_USE_CASE_METADATA_FIELDS):
+            self._set_cell_text(
+                metadata.cell(row_index, 0),
+                label,
+                _TABLE_HEADER_CELL_STYLE,
+            )
+            self._set_cell_text(
+                metadata.cell(row_index, 1),
+                "",
+                _TABLE_BODY_CELL_STYLE,
+            )
+
+        self._add_form_heading(docx_document, "Краткое описание")
+        self._render_section_value_paragraph(
+            docx_document,
+            sections.get("overview"),
+        )
+        self._add_form_heading(docx_document, "Диаграмма деятельности")
+        docx_document.add_paragraph("", style=_PARAGRAPH_STYLE)
+        self._add_form_heading(docx_document, "Описание")
+
+        description = docx_document.add_table(
+            rows=len(_USE_CASE_DESCRIPTION_ROWS),
+            cols=3,
+        )
+        description.style = _TABLE_STYLE
+        for row_index, (label, section_id) in enumerate(_USE_CASE_DESCRIPTION_ROWS):
+            self._set_cell_text(
+                description.cell(row_index, 0),
+                label,
+                _TABLE_HEADER_CELL_STYLE,
+            )
+            node = sections.get(section_id) if section_id else None
+            self._set_use_case_value_cell(
+                docx_document,
+                description.cell(row_index, 1),
+                node,
+                list_num_ids,
+            )
+            self._set_cell_text(
+                description.cell(row_index, 2),
+                "",
+                _TABLE_BODY_CELL_STYLE,
+            )
+
+        for heading in (
+            "Прототип интерфейса",
+            "Диаграмма последовательности",
+            "Тест-кейсы",
+        ):
+            self._add_form_heading(docx_document, heading)
+            docx_document.add_paragraph("", style=_PARAGRAPH_STYLE)
+
+        self._add_form_heading(docx_document, "Приложения: Технические спецификации")
+        self._add_empty_form_table(
+            docx_document,
+            ("Наименование", "Спецификация", "Примечание"),
+        )
+        self._add_form_heading(docx_document, "Ссылки")
+        self._add_empty_form_table(docx_document, ("Ссылка", "Примечание"))
+        self._add_form_heading(docx_document, "История изменений")
+        self._add_empty_form_table(
+            docx_document,
+            (
+                "Версия документа",
+                "Ссылка на версию документа",
+                "Дата",
+                "Изменил",
+                "Состав изменений",
+                "Версия АБС/ Номер патча",
+            ),
+            empty_rows=2,
+        )
+        self._add_form_heading(docx_document, "Термины и определения")
+        self._render_section_value_paragraph(docx_document, sections.get("terms"))
+
+    @staticmethod
+    def _validate_use_case_form(document: WorkingDocument) -> None:
+        sections: dict[str, DocumentNode] = {}
+        for node in document.nodes:
+            if (
+                node.kind is not NodeKind.HEADING
+                or not node.section_id
+                or not (node.text or "").strip()
+                or not node.children
+            ):
+                raise ValueError(
+                    "Use Case должен состоять из подписанных структурных разделов"
+                )
+            if node.section_id in sections:
+                raise ValueError(f"Дублируется раздел Use Case: {node.section_id}")
+            sections[node.section_id] = node
+
+        missing = {"preconditions", "main-flow", "result"} - sections.keys()
+        if missing:
+            raise ValueError(
+                "Use Case не содержит обязательные структурные разделы: "
+                + ", ".join(sorted(missing))
+            )
+
+        for node in sections.values():
+            for content in node.children:
+                if (
+                    content.kind is NodeKind.PARAGRAPH
+                    and (content.text or "").strip().casefold()
+                    == "нет данных в источниках"
+                ):
+                    raise ValueError(
+                        f"Раздел «{node.text}» содержит неструктурный gap"
+                    )
+
+        main_flow = sections["main-flow"].children
+        if len(main_flow) != 1 or main_flow[0].kind not in {
+            NodeKind.LIST,
+            NodeKind.GAP,
+        }:
+            raise ValueError(
+                "Основной поток должен быть нумерованным списком или gap"
+            )
+        if main_flow[0].kind is NodeKind.LIST:
+            items = main_flow[0].data.get("items")
+            if (
+                not main_flow[0].data.get("ordered")
+                or not isinstance(items, list)
+                or not items
+                or any(not isinstance(item, str) or not item.strip() for item in items)
+            ):
+                raise ValueError(
+                    "Основной поток должен содержать отдельные нумерованные шаги"
+                )
+
+    def _add_form_heading(
+        self,
+        docx_document: docx.document.Document,
+        text: str,
+    ) -> None:
+        paragraph = docx_document.add_paragraph(text, style=_SECTION_STYLE)
+        paragraph.paragraph_format.page_break_before = False
+
+    def _render_section_value_paragraph(
+        self,
+        docx_document: docx.document.Document,
+        section: DocumentNode | None,
+    ) -> None:
+        values = self._use_case_values(section)
+        docx_document.add_paragraph("\n".join(values), style=_PARAGRAPH_STYLE)
+
+    def _set_use_case_value_cell(
+        self,
+        docx_document: docx.document.Document,
+        cell: Any,
+        section: DocumentNode | None,
+        list_num_ids: dict[bool, int],
+    ) -> None:
+        values = self._use_case_values(section)
+        paragraph = cell.paragraphs[0]
+        paragraph.style = _TABLE_BODY_CELL_STYLE
+        if not values:
+            paragraph.text = ""
+            return
+        is_list = bool(
+            section
+            and any(child.kind is NodeKind.LIST for child in section.children)
+        )
+        num_id = (
+            self._ensure_list_num_id(docx_document, ordered=True, cache=list_num_ids)
+            if is_list
+            else None
+        )
+        for index, value in enumerate(values):
+            current = paragraph if index == 0 else cell.add_paragraph()
+            current.style = _TABLE_BODY_CELL_STYLE
+            current.text = value
+            if num_id is not None:
+                self._apply_list_numbering(current, num_id)
+
+    @staticmethod
+    def _use_case_values(section: DocumentNode | None) -> list[str]:
+        if section is None or not section.children:
+            return []
+        values: list[str] = []
+        for content in section.children:
+            if content.kind is NodeKind.GAP:
+                continue
+            if content.kind is NodeKind.LIST:
+                items = content.data.get("items", [])
+                if isinstance(items, list):
+                    values.extend(str(item) for item in items)
+            elif content.text:
+                values.append(content.text)
+        return values
+
+    def _add_empty_form_table(
+        self,
+        docx_document: docx.document.Document,
+        headers: tuple[str, ...],
+        *,
+        empty_rows: int = 1,
+    ) -> None:
+        table = docx_document.add_table(rows=1 + empty_rows, cols=len(headers))
+        table.style = _TABLE_STYLE
+        self._mark_header_row(table.rows[0])
+        for column, header in enumerate(headers):
+            self._set_cell_text(
+                table.cell(0, column),
+                header,
+                _TABLE_HEADER_CELL_STYLE,
+            )
+            for row in range(1, 1 + empty_rows):
+                self._set_cell_text(
+                    table.cell(row, column),
+                    "",
+                    _TABLE_BODY_CELL_STYLE,
+                )
 
     def _render_node(
         self,

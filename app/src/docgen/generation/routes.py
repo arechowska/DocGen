@@ -202,16 +202,6 @@ def _start_job(
                     422,
                     catalog=catalog,
                 )
-        if target_source_id is None and document.template_id != template.id:
-            return _setup_error(
-                request,
-                session,
-                project,
-                "Документ создан для другого шаблона",
-                422,
-                catalog=catalog,
-            )
-
     dependency_error = _dependency_error(
         request, sources, require_text_model=not without_template
     )

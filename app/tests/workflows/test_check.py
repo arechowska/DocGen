@@ -11,6 +11,7 @@ from docgen.documents.schemas import (
     CheckFinding,
     CheckReport,
     DocumentNode,
+    DocumentOrigin,
     NodeKind,
     Severity,
     WorkingDocument,
@@ -107,9 +108,11 @@ class FakeDocuments:
         report: CheckReport,
         *,
         expected_document_revision: int | None = None,
+        target_source_id: str | None = None,
     ) -> None:
         assert project_id == "p1"
         assert expected_document_revision == 1
+        del target_source_id
         self.events.append("save")
         self.report = report
 
@@ -440,7 +443,10 @@ def test_standalone_check_maps_target_blocks_and_saves_document_only_with_valida
     assert report.unchecked_rules == [rule.id for rule in semantic_template.rules]
     assert documents.document is not None
     assert documents.document.title == "Раздел"
-    assert documents.document.template_id == "use-case"
+    assert documents.document.template_id == "no-template"
+    assert documents.document.origin is DocumentOrigin.IMPORTED
+    assert documents.document.source_id == "source-1"
+    assert documents.document.build_template_id is None
     assert [node.kind for node in documents.document.nodes] == [
         NodeKind.HEADING,
         NodeKind.PARAGRAPH,
@@ -456,12 +462,12 @@ def test_standalone_check_maps_target_blocks_and_saves_document_only_with_valida
         node.provenance[0].source_id == block.id
         for node, block in zip(documents.document.nodes, blocks[:5], strict=True)
     )
-    assert "Контекст проекта" in model.user_prompt
+    assert "Контекст проекта" not in model.user_prompt
     assert events.index("model") < events.index("save-document")
     assert events[-3:] == ["checkpoint", "save-document", "save"]
 
 
-def test_standalone_check_rejects_target_not_found_in_project_before_model(
+def test_standalone_check_reports_selected_source_without_content_before_model(
     semantic_template: SemanticTemplate,
 ) -> None:
     events: list[str] = []
@@ -478,7 +484,7 @@ def test_standalone_check_rejects_target_not_found_in_project_before_model(
         documents=documents,
     )
 
-    with pytest.raises(WorkflowError, match="Документ для проверки не найден"):
+    with pytest.raises(WorkflowError, match="нет извлекаемого содержимого"):
         workflow.run(_job(target_source_id="other-source"), ProgressSpy(events))
 
     assert documents.document is None
@@ -497,6 +503,37 @@ def test_standalone_target_uses_source_provenance_not_block_id_prefix() -> None:
     document = _target_document("source-1", "use-case", [block])
 
     assert [node.text for node in document.nodes] == ["Описание из файла"]
+
+
+def test_standalone_check_reports_unavailable_selected_source(
+    semantic_template: SemanticTemplate,
+) -> None:
+    events: list[str] = []
+
+    class UnavailableNormalization:
+        def run(self, project_id: str, before_extract=None) -> NormalizedProject:
+            del project_id, before_extract
+            return NormalizedProject(
+                blocks=[],
+                total_pages=0,
+                warnings=["Источник Confluence пропущен: нет доступа"],
+                unavailable_source_ids=("source-1",),
+            )
+
+    workflow = CheckWorkflow(
+        projects=FakeProjects(),
+        normalization=UnavailableNormalization(),
+        templates=FakeCatalog(semantic_template),
+        text_model=FakeModel(CheckReport(template_id="use-case"), events),
+        vision_model=NoImageVision(),
+        grounding=GroundingValidator(),
+        documents=FakeDocuments(None, events),
+    )
+
+    with pytest.raises(WorkflowError, match="проверьте доступ"):
+        workflow.run(_job(target_source_id="source-1"), ProgressSpy(events))
+
+    assert "model" not in events
 
 
 def test_standalone_check_does_not_replace_current_document_when_report_is_invalid(
@@ -639,19 +676,16 @@ def test_check_emits_normalization_stage_once_when_project_has_no_sources(
     assert progress.values == [10, 35, 70, 90, 100]
 
 
-def test_check_rejects_saved_document_for_another_template_before_external_calls(
+def test_check_allows_current_document_to_use_another_semantic_profile(
     checking: tuple[CheckWorkflow, FakeModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:
     workflow, _model, documents, progress, events = checking
     documents.document = documents.document.model_copy(update={"template_id": "faq"})
-    previous = CheckReport(template_id="use-case", unchecked_rules=["previous"])
-    documents.report = previous
+    report = workflow.run(_job(), progress)
 
-    with pytest.raises(WorkflowError, match="Документ создан для другого шаблона"):
-        workflow.run(_job(), progress)
-
-    assert documents.get_report("p1") == previous
-    assert events == ["progress:10"]
+    assert report.template_id == "use-case"
+    assert documents.document.template_id == "faq"
+    assert events[-1] == "save"
 
 
 def _rule(rule_id: str, dimension: Any, severity: Any, instruction: str) -> SemanticRule:

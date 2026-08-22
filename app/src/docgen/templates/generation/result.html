@@ -8,7 +8,7 @@
       {% if node.text %}<h3 class="text-lg font-semibold">{{ node.text }}</h3>{% endif %}
       {% set items = node.data.get("items", []) %}
       {% if items is sequence and items is not string %}
-        {% if document.template_id == "faq" %}
+        {% if document.build_template_id == "faq" %}
           <ol class="mt-2 list-decimal space-y-3 pl-6">
             {% for item in items %}
               {% set answer_split = item.split("Ответ:", 1) %}

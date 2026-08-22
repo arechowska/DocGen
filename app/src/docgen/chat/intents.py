@@ -142,7 +142,7 @@ def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
 
     if _QUESTION_ACTION.search(normalized):
         query = _retrieval_query(normalized)
-        if document.template_id == "faq":
+        if document.build_template_id == "faq":
             return IntentDecision(
                 IntentKind.TEMPLATE_ACTION,
                 retrieval_query=query,

@@ -91,7 +91,7 @@
       <span>Документ для проверки</span>
       <select id="checkTargetSelect" name="target_source_id" form="checkForm" required>
         {% for source in check_targets %}
-          <option value="{{ source.id }}">Файл: {{ source.display_name }} (исходник как есть)</option>
+          <option value="{{ source.id }}">{% if source.kind.value == "confluence" %}Wiki{% else %}Файл{% endif %}: {{ source.display_name }} (исходник как есть)</option>
         {% endfor %}
       </select>
     </label>

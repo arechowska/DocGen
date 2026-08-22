@@ -19,7 +19,13 @@ from docgen.chat.service import ChatService
 from docgen.config import Settings
 from docgen.documents.operations import UpdateData
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import CheckReport, DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import (
+    CheckReport,
+    DocumentNode,
+    DocumentOrigin,
+    NodeKind,
+    WorkingDocument,
+)
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractorRegistry
 from docgen.extraction.schemas import NormalizedBlock, Provenance
@@ -176,7 +182,10 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
         report_page = restarted.get(f"{project_url}/report")
         assert report_page.status_code == 200
         source_result = _stored_document(restarted, project_id)
-        assert source_result.template_id == "faq"
+        assert source_result.template_id == "no-template"
+        assert source_result.build_template_id is None
+        assert source_result.origin is DocumentOrigin.IMPORTED
+        assert source_result.source_id == source_id
         assert source_result.title == "Formatta"
         assert source_result.nodes
         assert all(node.provenance for node in source_result.nodes)
@@ -368,7 +377,7 @@ class _JourneyModel:
             )
         if schema is CheckReport:
             rule_ids = tuple(rule["id"] for rule in payload["правила"])
-            assert payload["документ"]["template_id"] == "faq"
+            assert payload["документ"]["template_id"] in {"faq", "no-template"}
             return CheckReport(template_id="faq", passed_rule_ids=rule_ids)
         raise AssertionError(f"Unexpected schema: {schema}")
 

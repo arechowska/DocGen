@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -111,6 +112,7 @@ def test_startup_adds_check_target_column_to_existing_sqlite_database(
         "report_generation",
         "workspace_html",
     }.issubset(artifact_columns)
+    assert "check_report_history" in inspect(migrated_engine).get_table_names()
     assert migrated_target is None
 
 
@@ -158,11 +160,71 @@ def test_concurrent_first_start_serializes_all_schema_ddl(tmp_path: Path) -> Non
     assert ddl_without_lock == []
     inspected = create_engine(database_url)
     try:
-        assert {"projects", "sources", "project_artifacts", "jobs"}.issubset(
+        assert {
+            "projects",
+            "sources",
+            "project_artifacts",
+            "check_report_history",
+            "jobs",
+        }.issubset(
             inspect(inspected).get_table_names()
         )
     finally:
         inspected.dispose()
+
+
+def test_startup_moves_coherent_legacy_report_into_check_history(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'legacy-report.db'}"
+    legacy = create_engine(database_url)
+    report = {
+        "template_id": "use-case",
+        "findings": [],
+        "passed_rule_ids": ["use-case-structure"],
+        "unchecked_rules": [],
+    }
+    with legacy.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE projects (id VARCHAR(36) PRIMARY KEY, name VARCHAR(255) NOT NULL, "
+            "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO projects VALUES ('p1', 'Проект', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE project_artifacts (project_id VARCHAR(36) PRIMARY KEY, "
+            "document_json TEXT, workspace_html TEXT, report_json TEXT, "
+            "document_revision INTEGER NOT NULL, report_revision INTEGER, "
+            "report_generation INTEGER NOT NULL, updated_at DATETIME NOT NULL, "
+            "FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO project_artifacts VALUES "
+            "('p1', '{}', NULL, ?, 3, 3, 1, CURRENT_TIMESTAMP)",
+            (json.dumps(report),),
+        )
+    legacy.dispose()
+
+    factory = build_session_factory(database_url)
+    engine = factory.kw["bind"]
+    try:
+        initialize_database(engine)
+        initialize_database(engine)
+        with engine.connect() as connection:
+            rows = connection.exec_driver_sql(
+                "SELECT project_id, document_revision, check_profile_id, report_json "
+                "FROM check_report_history"
+            ).all()
+    finally:
+        engine.dispose()
+
+    assert len(rows) == 1
+    assert rows[0].project_id == "p1"
+    assert rows[0].document_revision == 3
+    assert rows[0].check_profile_id == "use-case"
+    assert json.loads(rows[0].report_json) == report
 
 
 def test_every_application_sqlite_connection_enforces_foreign_keys(tmp_path: Path) -> None:

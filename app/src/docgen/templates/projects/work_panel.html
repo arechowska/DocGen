@@ -173,7 +173,7 @@
             {% elif node.kind.value == "paragraph" %}
               <p data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% if node.data.get("html") %}{{ node.data.get("html") | safe }}{% else %}{{ node.text }}{% endif %}</p>
             {% elif node.kind.value == "list" %}
-              {% if document.template_id == "faq" %}
+              {% if document.build_template_id == "faq" %}
                 <ol data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{% if node.text %} data-section-title="{{ node.text }}"{% endif %} class="faq-question-list"{{ node_style_attribute(node) }}>
                   {% for item in node.data.get("items", []) %}
                     {% set item_style = "" %}

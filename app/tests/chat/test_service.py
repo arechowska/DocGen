@@ -965,7 +965,12 @@ def _set_template(session: Session, template_id: str) -> int:
     document, revision = stored
     repository.save_document(
         "p1",
-        document.model_copy(update={"template_id": template_id}),
+        document.model_copy(
+            update={
+                "template_id": template_id,
+                "build_template_id": template_id,
+            }
+        ),
     )
     session.commit()
     return revision + 1

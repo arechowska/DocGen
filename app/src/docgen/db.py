@@ -39,6 +39,7 @@ def initialize_database(engine: Engine) -> None:
         try:
             Base.metadata.create_all(connection)
             _migrate_project_artifacts(connection)
+            _migrate_check_report_history(connection)
             _migrate_jobs(connection)
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
             if violations:
@@ -125,6 +126,28 @@ def _migrate_project_artifacts(connection: Connection) -> None:
     connection.exec_driver_sql(
         "UPDATE project_artifacts SET report_json = NULL, report_revision = NULL "
         "WHERE report_revision IS NOT document_revision"
+    )
+
+
+def _migrate_check_report_history(connection: Connection) -> None:
+    tables = _table_names(connection)
+    if "project_artifacts" not in tables or "check_report_history" not in tables:
+        return
+    connection.exec_driver_sql(
+        "INSERT INTO check_report_history ("
+        "project_id, document_revision, check_profile_id, target_source_id, "
+        "report_json, created_at) "
+        "SELECT project_id, report_revision, "
+        "COALESCE(json_extract(report_json, '$.check_profile_id'), "
+        "json_extract(report_json, '$.template_id')), NULL, report_json, CURRENT_TIMESTAMP "
+        "FROM project_artifacts artifact "
+        "WHERE report_json IS NOT NULL AND report_revision IS NOT NULL "
+        "AND COALESCE(json_extract(report_json, '$.check_profile_id'), "
+        "json_extract(report_json, '$.template_id')) IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM check_report_history history "
+        "WHERE history.project_id = artifact.project_id "
+        "AND history.document_revision = artifact.report_revision "
+        "AND history.report_json = artifact.report_json)"
     )
 
 

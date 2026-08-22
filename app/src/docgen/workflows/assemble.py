@@ -23,12 +23,14 @@ from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind
-from docgen.jobs.runner import ProgressSink, UserSafeJobError
+from docgen.jobs.runner import ProgressSink
 from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticTemplate
 
+from .errors import WorkflowError
 from .normalize import NormalizationWorkflow, NormalizedProject
+from .structure import prepare_assembled_document
 
 _ASSEMBLE_KIND_ERROR = "Некорректный тип задания для сборки"
 _PROJECT_NOT_FOUND = "Проект не найден"
@@ -39,10 +41,6 @@ _DOCUMENT_LENGTH_ERROR = (
 _GROUNDING_ERROR = "Результат не прошёл проверку по источникам"
 _ALL_SOURCES_UNAVAILABLE_ERROR = "Не удалось получить ни один источник для сборки"
 _DEFAULT_ASSEMBLY_BATCH_CHARS = 40_000
-
-
-class WorkflowError(UserSafeJobError):
-    """A validation failure safe to show for an assemble/check job."""
 
 
 class AssembleWorkflow:
@@ -105,6 +103,7 @@ class AssembleWorkflow:
             }
         )
         document = _add_missing_required_sections(document, template)
+        document = prepare_assembled_document(document, template)
 
         _validate_document_structure(document, template)
         grounding_errors = self._grounding.validate(
@@ -438,7 +437,9 @@ def _json_rules(template: SemanticTemplate) -> str:
         "Если section_id можно заполнить фактами из источников, node не должен быть kind='gap'. "
         "Для kind='gap' используйте section_id из списка разделов, flags=['missing-source-data'], "
         "без text, data, children и provenance. Для kind='list' кладите элементы списка в data.items "
-        "как массив строк. Для kind='paragraph' кладите текст в поле text. Каждый негэповый node "
+        "как массив отдельных строк: один шаг или условие на элемент, без склеивания нескольких "
+        "нумерованных шагов в одну строку. Для основного потока задайте data.ordered=true. "
+        "Для kind='paragraph' кладите текст в поле text. Каждый негэповый node "
         "обязан иметь provenance с source_id, locator и quote, где quote является точной подстрокой "
         "соответствующего исходного блока."
     )
@@ -581,7 +582,13 @@ def _format_example(template: SemanticTemplate) -> str:
                     "kind": "list",
                     "section_id": "main-flow",
                     "text": "Основной поток",
-                    "data": {"items": ["1. Участник выполняет действие. 2. Система отвечает подтверждённым действием."]},
+                    "data": {
+                        "ordered": True,
+                        "items": [
+                            "Участник выполняет действие.",
+                            "Система отвечает подтверждённым действием.",
+                        ],
+                    },
                     "provenance": [
                         {
                             "source_id": "<id исходного блока>",

@@ -162,7 +162,7 @@ def grounded_document() -> WorkingDocument:
             DocumentNode(
                 id="n2",
                 kind=NodeKind.IMAGE,
-                section_id="main-flow",
+                section_id="overview",
                 text="Схема успешной оплаты",
                 provenance=[
                     Provenance(
@@ -171,6 +171,12 @@ def grounded_document() -> WorkingDocument:
                         quote="Схема подтверждает успешную оплату",
                     )
                 ],
+            ),
+            DocumentNode(
+                id="gap-main-flow",
+                kind=NodeKind.GAP,
+                section_id="main-flow",
+                flags=["missing-source-data"],
             ),
             DocumentNode(
                 id="gap-preconditions",
@@ -502,16 +508,22 @@ def test_assemble_saves_model_document_without_strict_grounding(
     assert documents.get_document("p1") == document
 
 
-def test_assemble_rejects_empty_document_before_save(
+def test_assemble_turns_empty_use_case_into_named_required_gaps(
     assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
 ) -> None:
     workflow, model, documents, progress, _events = assembled
     model.result = WorkingDocument(title="Пустой", template_id="use-case")
 
-    with pytest.raises(WorkflowError, match="обязательные разделы"):
-        workflow.run(_job(JobKind.ASSEMBLE), progress)
+    document = workflow.run(_job(JobKind.ASSEMBLE), progress)
 
-    assert documents.get_document("p1") is None
+    assert [node.section_id for node in document.nodes] == [
+        "preconditions",
+        "main-flow",
+        "result",
+    ]
+    assert all(node.kind is NodeKind.HEADING for node in document.nodes)
+    assert all(node.children[0].kind is NodeKind.GAP for node in document.nodes)
+    assert documents.get_document("p1") == document
 
 
 def test_assemble_adds_missing_required_sections_as_source_gaps(
@@ -551,8 +563,12 @@ def test_assemble_adds_missing_required_sections_as_source_gaps(
         "main-flow",
         "result",
     ]
-    assert [node.kind for node in document.nodes[1:]] == [NodeKind.GAP] * 3
-    assert all(node.flags == ["missing-source-data"] for node in document.nodes[1:])
+    assert [node.kind for node in document.nodes] == [NodeKind.HEADING] * 4
+    assert all(
+        node.children[0].kind is NodeKind.GAP
+        and node.children[0].flags == ["missing-source-data"]
+        for node in document.nodes[1:]
+    )
     assert documents.get_document("p1") == document
 
 

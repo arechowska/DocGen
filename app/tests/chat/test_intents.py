@@ -36,7 +36,9 @@ def test_router_recognizes_grounded_fact_edit(document: WorkingDocument) -> None
 
 
 def test_router_keeps_faq_action_template_specific(document: WorkingDocument) -> None:
-    faq = document.model_copy(update={"template_id": "faq"})
+    faq = document.model_copy(
+        update={"template_id": "faq", "build_template_id": "faq"}
+    )
 
     assert route_intent("Добавь вопрос о лимите", faq).kind is IntentKind.TEMPLATE_ACTION
     assert route_intent("Добавь вопрос о лимите", document).kind is IntentKind.CLARIFICATION

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, ExtractorRegistry
-from docgen.extraction.schemas import NormalizedBlock
+from docgen.extraction.schemas import NormalizedBlock, Provenance
 from docgen.models import Source, SourceKind
 from docgen.sources.repository import SourceRepository
 from docgen.sources.storage import LocalStorage
@@ -37,6 +37,7 @@ class NormalizedProject:
     blocks: list[NormalizedBlock]
     total_pages: int
     warnings: list[str]
+    unavailable_source_ids: tuple[str, ...] = ()
 
 
 class NormalizationWorkflow:
@@ -61,6 +62,7 @@ class NormalizationWorkflow:
         warnings: list[str] = []
         total_pages = 0
         block_ids: set[str] = set()
+        unavailable_source_ids: list[str] = []
 
         for source in self._sources.list_for_project(project_id):
             try:
@@ -69,6 +71,7 @@ class NormalizationWorkflow:
                 if source.kind is not SourceKind.CONFLUENCE:
                     raise
                 warnings.append(f"Источник Confluence пропущен: {error}")
+                unavailable_source_ids.append(source.id)
                 continue
             total_pages += extraction.page_units
             if total_pages > _MAX_PAGE_UNITS:
@@ -76,7 +79,19 @@ class NormalizationWorkflow:
 
             warnings.extend(extraction.warnings)
             for block in extraction.blocks:
-                normalized_block = block.model_copy(update={"id": f"{source.id}:{block.id}"})
+                normalized_block = block.model_copy(
+                    update={
+                        "id": f"{source.id}:{block.id}",
+                        "provenance": [
+                            Provenance(
+                                source_id=source.id,
+                                locator=item.locator,
+                                quote=item.quote,
+                            )
+                            for item in block.provenance
+                        ],
+                    }
+                )
                 if normalized_block.id in block_ids:
                     raise ValueError(f"Повторяющийся идентификатор блока: {normalized_block.id}")
                 block_ids.add(normalized_block.id)
@@ -85,7 +100,12 @@ class NormalizationWorkflow:
         if total_pages >= _LONG_PROCESSING_THRESHOLD:
             warnings.append(_LONG_PROCESSING_WARNING)
 
-        return NormalizedProject(blocks=blocks, total_pages=total_pages, warnings=warnings)
+        return NormalizedProject(
+            blocks=blocks,
+            total_pages=total_pages,
+            warnings=warnings,
+            unavailable_source_ids=tuple(unavailable_source_ids),
+        )
 
     def _extract(
         self,

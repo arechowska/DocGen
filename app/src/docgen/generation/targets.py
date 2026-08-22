@@ -6,6 +6,8 @@ _CHECK_TARGET_EXTENSIONS = frozenset({".docx", ".pdf", ".txt", ".md"})
 
 
 def is_supported_check_target(source: Source) -> bool:
+    if source.kind is SourceKind.CONFLUENCE:
+        return True
     return (
         source.kind is SourceKind.FILE
         and Path(source.display_name).suffix.lower() in _CHECK_TARGET_EXTENSIONS
