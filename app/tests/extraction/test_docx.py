@@ -127,6 +127,37 @@ def test_docx_uses_numbering_inherited_from_base_style(
     assert result.blocks[1].kind == BlockKind.LIST
 
 
+def test_docx_demotes_long_heading_styled_paragraph_to_text(tmp_path: Path) -> None:
+    path = tmp_path / "input.docx"
+    document = Document()
+    long_text = " ".join(["Слово"] * 25) + " составляют длинный абзац, а не заголовок."
+    document.add_paragraph(long_text, style="Heading 2")
+    document.save(path)
+
+    result = DocxExtractor().extract(make_source(), path)
+
+    assert result.blocks[0].kind == BlockKind.TEXT
+    assert result.blocks[0].text == long_text
+
+
+def test_docx_demotes_long_outline_level_paragraph_to_text(tmp_path: Path) -> None:
+    path = tmp_path / "input.docx"
+    document = Document()
+    outline_style = document.styles.add_style(
+        "Раздел проекта", WD_STYLE_TYPE.PARAGRAPH
+    )
+    outline_level = OxmlElement("w:outlineLvl")
+    outline_level.set(qn("w:val"), "3")
+    outline_style.element.get_or_add_pPr().append(outline_level)
+    long_text = " ".join(["Слово"] * 25) + " составляют длинный абзац, а не заголовок."
+    document.add_paragraph(long_text, style=outline_style)
+    document.save(path)
+
+    result = DocxExtractor().extract(make_source(), path)
+
+    assert result.blocks[0].kind == BlockKind.TEXT
+
+
 def test_docx_extraction_has_repeatable_block_ids(tmp_path: Path) -> None:
     path = tmp_path / "input.docx"
     document = Document()

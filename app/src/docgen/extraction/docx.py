@@ -24,6 +24,8 @@ from docgen.models import Source
 
 _HEADING_STYLE_ID = re.compile(r"^Heading([1-9])$", re.IGNORECASE)
 _LIST_STYLE_ID = re.compile(r"^List(?:Bullet|Number)(?:[1-9]\d*)?$", re.IGNORECASE)
+_MAX_HEADING_WORDS = 20
+_MAX_HEADING_CHARS = 150
 
 
 class DocxExtractor:
@@ -78,14 +80,15 @@ class DocxExtractor:
 
     @staticmethod
     def _paragraph_block(source: Source, paragraph: Paragraph, index: int) -> NormalizedBlock:
+        text = paragraph.text.strip()
         style_name = paragraph.style.name
         heading_match = _HEADING_STYLE_ID.match(paragraph.style.style_id)
-        if heading_match:
+        outline_level = _outline_level(paragraph)
+        if (heading_match or outline_level is not None) and _looks_like_heading(text):
             kind = BlockKind.HEADING
-            data = {"level": int(heading_match.group(1))}
-        elif (outline_level := _outline_level(paragraph)) is not None:
-            kind = BlockKind.HEADING
-            data = {"level": outline_level}
+            data = {
+                "level": int(heading_match.group(1)) if heading_match else outline_level
+            }
         elif _has_list_style_id(paragraph) or _has_numbering(paragraph):
             kind = BlockKind.LIST
             data = {"style": style_name}
@@ -93,9 +96,9 @@ class DocxExtractor:
             kind = BlockKind.TEXT
             data = {}
         return NormalizedBlock(
-            id=stable_block_id(source.id, kind, f"paragraph:{index}", paragraph.text.strip()),
+            id=stable_block_id(source.id, kind, f"paragraph:{index}", text),
             kind=kind,
-            text=paragraph.text.strip(),
+            text=text,
             data=data,
             provenance=[Provenance(source_id=source.id, locator=f"paragraph:{index}")],
             confidence=1.0,
@@ -117,6 +120,12 @@ class DocxExtractor:
             provenance=[Provenance(source_id=source.id, locator=f"table:{index}")],
             confidence=1.0,
         )
+
+
+def _looks_like_heading(text: str) -> bool:
+    if len(text) > _MAX_HEADING_CHARS:
+        return False
+    return len(text.split()) <= _MAX_HEADING_WORDS
 
 
 def _style_chain(paragraph: Paragraph) -> Iterator[BaseStyle]:
