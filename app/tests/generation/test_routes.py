@@ -110,7 +110,7 @@ def test_start_assemble_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 
-def test_start_assemble_without_template_does_not_require_models(
+def test_start_assemble_without_template_does_not_create_editor_document(
     client: TestClient, project_with_source: Project
 ) -> None:
     response = client.post(
@@ -118,13 +118,81 @@ def test_start_assemble_without_template_does_not_require_models(
         data={"template_id": "no-template"},
     )
 
-    assert response.status_code == 202
-    job = _jobs_for_project(client, project_with_source.id)[0]
-    assert job.kind is JobKind.ASSEMBLE
-    assert job.template_id == "no-template"
+    assert response.status_code == 422
+    assert "конвертацию" in response.text
+    assert _jobs_for_project(client, project_with_source.id) == []
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document(project_with_source.id) is None
 
 
-def test_start_assemble_without_template_requires_exactly_one_source(
+def test_template_free_html_conversion_opens_inline_without_changing_editor(
+    client: TestClient, project_with_source: Project
+) -> None:
+    original = _document()
+    _save_document(client, project_with_source.id, original)
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert b"Case" in response.content
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document_with_revision(
+            project_with_source.id
+        ) == (original, 1)
+
+
+def test_template_free_docx_conversion_downloads_without_creating_editor_document(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "docx", "formatting_template_id": "colvir"},
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK\x03\x04")
+    assert response.headers["content-disposition"].startswith("attachment;")
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document(project_with_source.id) is None
+
+
+def test_template_free_confluence_to_docx_is_direct_export(
+    client: TestClient, empty_project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = client.post(
+        f"/projects/{empty_project.id}/sources/confluence",
+        data={"url": "https://wiki.example.test/pages/42"},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    settings = client.app.state.settings
+    settings.confluence_api_base = "https://wiki.example.test/rest/api"
+    settings.confluence_token = "configured-secret"
+    settings.trusted_integration_hosts = ("wiki.example.test",)
+    confluence = _StaticConfluenceClient()
+    monkeypatch.setattr(
+        "docgen.generation.routes.ConfluenceClient.from_settings",
+        lambda _settings: confluence,
+    )
+
+    response = client.post(
+        f"/projects/{empty_project.id}/convert",
+        data={"output_format": "docx", "formatting_template_id": "colvir"},
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK\x03\x04")
+    assert b"Wiki" not in response.content
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document(empty_project.id) is None
+
+
+def test_template_free_conversion_requires_exactly_one_source(
     client: TestClient, project_with_source: Project
 ) -> None:
     response = client.post(
@@ -135,8 +203,8 @@ def test_start_assemble_without_template_requires_exactly_one_source(
     assert response.status_code == 200
 
     response = client.post(
-        f"/projects/{project_with_source.id}/jobs/assemble",
-        data={"template_id": "no-template"},
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
     )
 
     assert response.status_code == 422

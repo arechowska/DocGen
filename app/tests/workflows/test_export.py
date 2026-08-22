@@ -95,7 +95,7 @@ def catalog_dir(tmp_path: Path) -> Path:
     directory.mkdir()
     (directory / "docgen-light-html.yaml").write_text(
         "id: docgen-light\n"
-        "name: Облегченный HTML\n"
+        "name: Без шаблона\n"
         "format: html\n"
         "renderer: html\n",
         encoding="utf-8",
@@ -161,7 +161,8 @@ def test_export_workflow_renders_and_records_result(
     jobs: JobRepository,
     project_id: str,
 ) -> None:
-    documents.save_document(project_id, _document())
+    source_document = _document()
+    documents.save_document(project_id, source_document)
     job = _claimed_export_job(jobs, project_id)
     rendered = RenderedFile(
         filename="document.html", media_type="text/html", content=b"<p>ok</p>"
@@ -185,6 +186,7 @@ def test_export_workflow_renders_and_records_result(
     assert stored_job.export_document_revision == 1
     stored_path = storage.resolve(result.relative_path)
     assert stored_path.read_bytes() == rendered.content
+    assert documents.get_document_with_revision(project_id) == (source_document, 1)
 
 
 def test_export_workflow_rejects_wrong_job_kind(

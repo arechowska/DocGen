@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
@@ -11,8 +12,17 @@ from sqlalchemy.orm import Session
 from docgen.ai.client import ModelConfigurationError, build_text_model
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckReport, WorkingDocument
+from docgen.export.html import local_storage_image_loader
+from docgen.export.protocol import ExportError
+from docgen.export.service import default_exporters
 from docgen.extraction.confluence import ConfluenceClient
-from docgen.extraction.registry import ExtractionError
+from docgen.extraction.registry import ExtractionError, ExtractorRegistry
+from docgen.formatting.catalog import (
+    FormattingCatalog,
+    FormattingTemplateError,
+    default_templates_dir,
+)
+from docgen.formatting.schemas import OutputFormat
 from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.repository import (
     ActiveProjectJobExists,
@@ -23,12 +33,15 @@ from docgen.models import Project, Source, SourceKind
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
 from docgen.sources.repository import SourceRepository
+from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import (
     NO_TEMPLATE_ID,
     TemplateCatalog,
     TemplateConfigurationError,
 )
 from docgen.web import templates
+from docgen.workflows.conversion import conversion_document
+from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
 from .targets import is_supported_check_target
 
@@ -48,7 +61,91 @@ def start_assemble(
     template_id: Annotated[str, Form()],
     session: SessionDependency,
 ) -> Response:
+    if template_id == NO_TEMPLATE_ID:
+        project = _project_or_404(session, project_id)
+        return _setup_error(
+            request,
+            session,
+            project,
+            "Без шаблона источник нужно открывать как конвертацию",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
     return _start_job(request, session, project_id, JobKind.ASSEMBLE, template_id)
+
+
+@router.post("/{project_id}/convert")
+def convert_source(
+    request: Request,
+    project_id: str,
+    output_format: Annotated[OutputFormat, Form()],
+    formatting_template_id: Annotated[str, Form()],
+    session: SessionDependency,
+) -> Response:
+    """Convert one source to a file without creating an editor document."""
+    project = _project_or_404(session, project_id)
+    sources = SourceRepository(session).list_for_project(project_id)
+    if len(sources) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Для конвертации без шаблона нужен ровно один источник",
+        )
+    dependency_error = _dependency_error(request, sources, require_text_model=False)
+    if dependency_error is not None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=dependency_error,
+        )
+
+    settings = request.app.state.settings
+    formatting_directory = settings.formatting_template_dir or default_templates_dir()
+    try:
+        formatting_template = FormattingCatalog(formatting_directory).get(
+            output_format, formatting_template_id
+        )
+        storage = LocalStorage(settings.data_dir)
+        normalized = NormalizationWorkflow(
+            SourceRepository(session),
+            storage,
+            ExtractorRegistry.default(settings),
+            ConfluenceClient.from_settings(settings),
+        ).run(project_id)
+        source = sources[0]
+        blocks = [
+            block
+            for block in normalized.blocks
+            if any(item.source_id == source.id for item in block.provenance)
+        ]
+        if not blocks:
+            raise ExtractionError("В источнике нет извлекаемого содержимого")
+        document = conversion_document(blocks, source.display_name or project.name)
+        exporter = default_exporters(
+            image_loader=local_storage_image_loader(storage),
+            templates_dir=formatting_directory,
+        )[output_format]
+        rendered = exporter.render(document, formatting_template)
+    except (
+        ExportError,
+        ExtractionError,
+        FormattingTemplateError,
+        PageLimitExceeded,
+        ValueError,
+    ) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    disposition = "inline" if output_format is OutputFormat.HTML else "attachment"
+    encoded_filename = quote(rendered.filename)
+    return Response(
+        content=rendered.content,
+        media_type=rendered.media_type,
+        headers={
+            "Content-Disposition": (
+                f"{disposition}; filename*=UTF-8''{encoded_filename}"
+            )
+        },
+    )
 
 
 @router.post("/{project_id}/jobs/check", status_code=status.HTTP_202_ACCEPTED)

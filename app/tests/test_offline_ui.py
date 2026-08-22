@@ -441,9 +441,26 @@ const source = {{
   addEventListener(type, listener) {{ listeners.set(type, listener); }},
 }};
 const targets = [{{ value: "use-case" }}, {{ value: "use-case" }}];
+const label = {{ textContent: "Собрать" }};
+const buildButton = {{
+  dataset: {{ sourceAvailable: "true" }},
+  disabled: false,
+  formTarget: "",
+  setAttribute(name, value) {{ if (name === "form") this.formTarget = value; }},
+  querySelector(selector) {{ return selector === "[data-build-label]" ? label : null; }},
+}};
+const format = {{ value: "html" }};
+const formatting = {{ value: "docgen-light", disabled: false }};
+const conversionFormat = {{ value: "" }};
+const conversionTemplate = {{ value: "" }};
 globalThis.document = {{
   querySelector(selector) {{
     if (selector === "[data-template-source]") return source;
+    if (selector === "#buildButton") return buildButton;
+    if (selector === "#formatSelect") return format;
+    if (selector === "#export-template-select select[name='template_id']") return formatting;
+    if (selector === "[data-conversion-format]") return conversionFormat;
+    if (selector === "[data-conversion-template]") return conversionTemplate;
     return null;
   }},
   querySelectorAll(selector) {{
@@ -457,6 +474,13 @@ source.value = "faq";
 listeners.get("change")();
 if (targets.some((target) => target.value !== "faq")) {{
   throw new Error(`template targets were not synchronized: ${{targets.map((target) => target.value)}}`);
+}}
+source.value = "no-template";
+listeners.get("change")();
+if (buildButton.formTarget !== "conversionForm") throw new Error("conversion form was not selected");
+if (label.textContent !== "Открыть") throw new Error("conversion button was not relabeled");
+if (conversionFormat.value !== "html" || conversionTemplate.value !== "docgen-light") {{
+  throw new Error("conversion output was not synchronized");
 }}
 """
 

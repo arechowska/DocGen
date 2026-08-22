@@ -18,6 +18,27 @@
   });
 
   const templateSource = document.querySelector("[data-template-source]");
+  const synchronizeConversion = () => {
+    const buildButton = document.querySelector("#buildButton");
+    const formatSource = document.querySelector("#formatSelect");
+    const formattingSource = document.querySelector(
+      "#export-template-select select[name='template_id']",
+    );
+    const conversionFormat = document.querySelector("[data-conversion-format]");
+    const conversionTemplate = document.querySelector("[data-conversion-template]");
+    const withoutTemplate = templateSource?.value === "no-template";
+    if (conversionFormat) conversionFormat.value = formatSource?.value || "";
+    if (conversionTemplate) {
+      conversionTemplate.value = formattingSource?.disabled ? "" : formattingSource?.value || "";
+    }
+    if (!buildButton) return;
+    buildButton.setAttribute("form", withoutTemplate ? "conversionForm" : "assembleForm");
+    const label = buildButton.querySelector("[data-build-label]");
+    if (label) label.textContent = withoutTemplate ? "Открыть" : "Собрать";
+    const sourceAvailable = buildButton.dataset.sourceAvailable === "true";
+    const conversionReady = Boolean(formatSource?.value && conversionTemplate?.value);
+    buildButton.disabled = !sourceAvailable || (withoutTemplate && !conversionReady);
+  };
   const synchronizeTemplate = () => {
     document.querySelectorAll("[data-template-target]").forEach((target) => {
       target.value = templateSource?.value || "";
@@ -28,12 +49,19 @@
         templateSource?.value === "no-template" ||
         reviewButton.dataset.checkAvailable !== "true";
     }
+    synchronizeConversion();
   };
 
   if (templateSource) {
     synchronizeTemplate();
     templateSource.addEventListener("change", synchronizeTemplate);
   }
+  document.addEventListener("change", (event) => {
+    if (event.target?.matches?.("#formatSelect, #export-template-select select")) {
+      synchronizeConversion();
+    }
+  });
+  document.addEventListener("htmx:afterSwap", synchronizeConversion);
 
   const applySanitizedInlineStyles = (root) => {
     root?.querySelectorAll?.("[style]").forEach((element) => {

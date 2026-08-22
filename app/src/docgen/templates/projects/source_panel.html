@@ -109,6 +109,15 @@
     <input type="hidden" name="template_id" value="no-template" data-template-target>
   </form>
   <form
+    id="conversionForm"
+    action="/projects/{{ project.id }}/convert"
+    method="post"
+    target="_blank"
+  >
+    <input type="hidden" name="output_format" value="html" data-conversion-format>
+    <input type="hidden" name="formatting_template_id" value="" data-conversion-template>
+  </form>
+  <form
     id="checkForm"
     action="/projects/{{ project.id }}/jobs/check"
     method="post"
