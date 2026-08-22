@@ -121,21 +121,29 @@ class ConfluenceClient:
         if page_units > _MAX_PAGE_UNITS:
             raise ExtractionError(_PAGE_LIMIT_ERROR)
         resolved_blocks: list[NormalizedBlock] = []
+        warnings: list[str] = []
         attachment_bytes = 0
         for block in blocks:
-            resolved_block, retained_bytes = self._resolve_native_attachment(
-                page_id,
-                block,
-                auth,
-                before_external_call,
-                self._max_attachment_bytes - attachment_bytes,
-            )
+            try:
+                resolved_block, retained_bytes = self._resolve_native_attachment(
+                    page_id,
+                    block,
+                    auth,
+                    before_external_call,
+                    self._max_attachment_bytes - attachment_bytes,
+                )
+            except ExtractionError as error:
+                if block.kind is not BlockKind.IMAGE or "attachment" not in block.data:
+                    raise
+                filename = block.data["attachment"]
+                warnings.append(f"Встроенное изображение {filename} пропущено: {error}")
+                continue
             attachment_bytes += retained_bytes
             resolved_blocks.append(resolved_block)
         return ExtractionResult(
             blocks=resolved_blocks,
             page_units=page_units,
-            warnings=[],
+            warnings=warnings,
         )
 
     def _api_hosts(self) -> tuple[str, ...]:

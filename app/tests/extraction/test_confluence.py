@@ -405,7 +405,7 @@ def test_native_attachment_accepts_image_at_configured_pixel_limit() -> None:
     assert result.blocks[0].data["content_base64"] == base64.b64encode(content).decode("ascii")
 
 
-def test_native_attachment_rejects_image_above_configured_pixel_limit() -> None:
+def test_native_attachment_skips_image_above_configured_pixel_limit() -> None:
     client = ConfluenceClient(
         api_base="https://wiki.example.test/rest/api",
         token="secret",
@@ -416,11 +416,13 @@ def test_native_attachment_rejects_image_above_configured_pixel_limit() -> None:
         max_image_pixels=6,
     )
 
-    with pytest.raises(ExtractionError, match="Изображение слишком большое"):
-        client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert "Изображение слишком большое" in result.warnings[0]
 
 
-def test_native_attachment_rejects_malformed_image_bytes() -> None:
+def test_native_attachment_skips_malformed_image_bytes() -> None:
     client = ConfluenceClient(
         api_base="https://wiki.example.test/rest/api",
         token="secret",
@@ -430,8 +432,10 @@ def test_native_attachment_rejects_malformed_image_bytes() -> None:
         ),
     )
 
-    with pytest.raises(ExtractionError, match="Не удалось обработать вложение Confluence"):
-        client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert "Не удалось обработать вложение Confluence" in result.warnings[0]
 
 
 def test_client_from_settings_uses_configured_image_pixel_limit() -> None:
@@ -450,8 +454,10 @@ def test_client_from_settings_uses_configured_image_pixel_limit() -> None:
         ),
     )
 
-    with pytest.raises(ExtractionError, match="Изображение слишком большое"):
-        client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert "Изображение слишком большое" in result.warnings[0]
 
 
 def test_native_attachment_is_resolved_and_downloaded_with_gate_before_each_request() -> None:
@@ -518,7 +524,6 @@ def test_native_attachment_is_resolved_and_downloaded_with_gate_before_each_requ
 @pytest.mark.parametrize(
     ("metadata_payload", "message"),
     [
-        ({"results": []}, "Вложение Confluence не найдено"),
         (
             {"results": [{"title": "architecture.png", "metadata": {}}]},
             "Не удалось обработать вложение Confluence",
@@ -536,15 +541,38 @@ def test_native_attachment_missing_or_malformed_metadata_is_user_safe(
             )
         return httpx.Response(200, json=metadata_payload)
 
-    with pytest.raises(ExtractionError, match=message):
-        ConfluenceClient(
-            api_base="https://wiki.example.test/rest/api",
-            token="secret",
-            transport=httpx.MockTransport(handler),
-        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert message in result.warnings[0]
 
 
-def test_oversized_native_attachment_download_is_rejected() -> None:
+def test_native_attachment_not_found_does_not_block_page_text() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/content/42":
+            return _page_response(
+                "<p>Текст страницы</p>"
+                '<ac:image><ri:attachment ri:filename="missing.png" /></ac:image>'
+            )
+        return httpx.Response(200, json={"results": []})
+
+    result = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert [block.text for block in result.blocks] == ["Текст страницы"]
+    assert result.warnings == [
+        "Встроенное изображение missing.png пропущено: Вложение Confluence не найдено"
+    ]
+
+
+def test_oversized_native_attachment_download_is_skipped() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/rest/api/content/42":
             return _page_response(
@@ -565,15 +593,17 @@ def test_oversized_native_attachment_download_is_rejected() -> None:
             )
         return httpx.Response(200, headers={"Content-Length": "5000001"}, content=b"x")
 
-    with pytest.raises(ExtractionError, match="Ответ Confluence слишком большой"):
-        ConfluenceClient(
-            api_base="https://wiki.example.test/rest/api",
-            token="secret",
-            transport=httpx.MockTransport(handler),
-        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert "Ответ Confluence слишком большой" in result.warnings[0]
 
 
-def test_native_attachment_rejects_external_download_link_without_requesting_it() -> None:
+def test_native_attachment_skips_external_download_link_without_requesting_it() -> None:
     requested_hosts: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -595,13 +625,14 @@ def test_native_attachment_rejects_external_download_link_without_requesting_it(
             },
         )
 
-    with pytest.raises(ExtractionError, match="Недопустимая ссылка вложения Confluence"):
-        ConfluenceClient(
-            api_base="https://wiki.example.test/rest/api",
-            token="secret",
-            transport=httpx.MockTransport(handler),
-        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
 
+    assert result.blocks == []
+    assert "Недопустимая ссылка вложения Confluence" in result.warnings[0]
     assert requested_hosts == ["wiki.example.test", "wiki.example.test"]
 
 
@@ -654,17 +685,16 @@ def test_confluence_enforces_aggregate_attachment_budget_before_retaining_second
             )
         return httpx.Response(200, content=content)
 
-    with pytest.raises(
-        ExtractionError,
-        match="Общий объём вложений Confluence слишком большой",
-    ):
-        ConfluenceClient(
-            api_base="https://wiki.example.test/rest/api",
-            token="secret",
-            transport=httpx.MockTransport(handler),
-            max_response_bytes=10_000,
-            max_attachment_bytes=len(content) + 1,
-        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+        max_response_bytes=10_000,
+        max_attachment_bytes=len(content) + 1,
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert len(result.blocks) == 1
+    assert "Общий объём вложений Confluence слишком большой" in result.warnings[0]
 
 
 def test_native_attachment_maps_malformed_download_url_to_safe_error() -> None:
@@ -686,9 +716,11 @@ def test_native_attachment_maps_malformed_download_url_to_safe_error() -> None:
             },
         )
 
-    with pytest.raises(ExtractionError, match="Недопустимая ссылка вложения Confluence"):
-        ConfluenceClient(
-            api_base="https://wiki.example.test/rest/api",
-            token="secret",
-            transport=httpx.MockTransport(handler),
-        ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+    result = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=httpx.MockTransport(handler),
+    ).fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert result.blocks == []
+    assert "Недопустимая ссылка вложения Confluence" in result.warnings[0]
