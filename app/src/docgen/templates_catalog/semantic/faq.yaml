@@ -1,5 +1,5 @@
 id: faq
-name: FAQ для конечных пользователей Colvir
+name: FAQ
 version: "1.1"
 sections:
   - id: general_questions

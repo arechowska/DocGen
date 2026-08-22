@@ -1,5 +1,5 @@
 id: release-notes
-name: Примечания к выпуску
+name: Release notes
 version: "1.0"
 sections:
   - id: release-summary
