@@ -190,7 +190,7 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
     assert answer.runs[0].bold is True
     assert question._p.pPr.find(qn("w:numPr")) is None
     assert question.paragraph_format.space_after.twips == Pt(8).twips
-    assert answer.paragraph_format.space_after.twips == Pt(20).twips
+    assert answer.paragraph_format.space_after.twips == Pt(28).twips
 
 
 # --- heading level mapping --------------------------------------------------

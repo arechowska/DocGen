@@ -8,17 +8,31 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-from docgen.ai.client import ModelError, ModelResponseFormatError, TextModel
+from docgen.ai.client import ModelResponseFormatError, TextModel
+from docgen.chat.adapters import FaqAdapter
+from docgen.chat.errors import ChatError, ChatErrorCode
+from docgen.chat.executors import (
+    authored_operations,
+    formatting_operations,
+    structural_operations,
+)
+from docgen.chat.intents import IntentKind, route_intent
 from docgen.chat.manual_insert import (
     ManualInsertError,
-    manual_insert_operations,
-    parse_manual_insert,
 )
-from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest, ChatEditResult
-from docgen.documents.edit_service import DocumentEditService
+from docgen.chat.retrieval import SourceSnapshot, retrieve_relevant_blocks
+from docgen.chat.schemas import (
+    ChatEditOperation,
+    ChatEditPlan,
+    ChatEditRequest,
+    ChatEditResult,
+    FaqEntryDraft,
+)
+from docgen.documents.edit_service import DocumentEditService, EditConflict
 from docgen.documents.operations import (
     DeleteNode,
     DocumentOperation,
+    EditValidationError,
     InsertNode,
     MoveNode,
     UpdateData,
@@ -52,33 +66,30 @@ CHAT_RETRY_PROMPT = """
 если не можешь обосновать правку источниками.
 """.strip()
 
-CHAT_STRUCTURAL_RETRY_PROMPT = """
-Пользователь запросил структурирование существующего документа. Выполни команду: верни хотя бы одну операцию MoveNode или InsertNode, если документ содержит блоки для перестановки или группировки. Это не добавление фактов, поэтому evidence_block_ids оставь пустым. Не меняй текст существующих блоков и не возвращай пустой operations.
-""".strip()
-
-CHAT_QUESTION_RETRY_PROMPT = """
-Пользователь попросил добавить вопрос по источникам. Найди в source_blocks фрагмент, который отвечает на сформулированный пользователем вопрос. Добавь подтверждённую пару «Вопрос: ... Ответ: ...» через InsertNode и укажи ID этого фрагмента в evidence_block_ids. Используй только факты из выбранного фрагмента. Не возвращай пустой operations, если подходящий фрагмент есть.
-""".strip()
-
 CHAT_GROUNDING_RETRY_PROMPT = """
 Предыдущий план не прошёл проверку источников. Исправь план: каждая фактическая операция должна ссылаться в evidence_block_ids на существующие source_blocks, подтверждающие добавляемый или изменяемый текст. Не используй идентификаторы наугад. Если подтверждения нет, исключи такую операцию.
 """.strip()
 
-_STRUCTURAL_REQUEST_PATTERN = re.compile(
-    r"\b(?:раздел(?:и|ить)|разбей|структурир|сгруппир|перестав|перемест|упорядоч)"
-)
-_QUESTION_GENERATION_REQUEST_PATTERN = re.compile(
-    r"\b(?:добав(?:ь|ить)|состав(?:ь|ить)|сформируй)\b.*\bвопрос(?:ы|ов)?\b",
-    re.IGNORECASE | re.DOTALL,
-)
+FAQ_SYSTEM_PROMPT = """
+Ты создаёшь одну подтверждённую FAQ-запись для DocGen-документа.
+Верни только объект FaqEntryDraft: непустые question и answer, placement и
+evidence_block_ids. Ответ использует только факты из переданных source_blocks.
+Не помещай evidence_block_ids, placement и другие служебные поля в question или answer.
+""".strip()
+
+class ChatGroundingError(ChatError):
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        code: ChatErrorCode = ChatErrorCode.GROUNDING_FAILED,
+    ) -> None:
+        super().__init__(code, message=message)
 
 
-class ChatGroundingError(ValueError):
-    pass
-
-
-class ChatValidationError(ValueError):
-    pass
+class ChatValidationError(ChatError):
+    def __init__(self, message: str) -> None:
+        super().__init__(ChatErrorCode.INVALID_OPERATION, message=message)
 
 
 class ChatService:
@@ -87,7 +98,9 @@ class ChatService:
         *,
         documents: DocumentRepository,
         model: TextModel,
-        source_blocks: Callable[[str], list[NormalizedBlock]],
+        source_blocks: Callable[
+            [str], SourceSnapshot | list[NormalizedBlock]
+        ],
     ) -> None:
         self._documents = documents
         self._model = model
@@ -100,126 +113,171 @@ class ChatService:
             raise ChatValidationError("Документ не найден")
         document, current_revision = stored
         if current_revision != request.expected_revision:
-            raise ChatValidationError("Документ уже изменён")
+            raise ChatError(ChatErrorCode.REVISION_CONFLICT)
 
         try:
-            manual_intent = parse_manual_insert(message)
-            manual_operations = (
-                manual_insert_operations(document, manual_intent)
-                if manual_intent is not None
-                else []
-            )
+            decision = route_intent(message, document)
         except ManualInsertError as error:
             raise ChatValidationError(str(error)) from error
 
-        if manual_intent is not None and manual_intent.explicit_position:
-            return self._apply_manual_insert(
+        if decision.kind is IntentKind.CLARIFICATION:
+            raise ChatError(
+                ChatErrorCode.CLARIFICATION,
+                message=decision.clarification,
+                action="Сформулируй правку точнее и повтори запрос.",
+            )
+        if decision.kind is IntentKind.AUTHORED_EDIT:
+            try:
+                operations = authored_operations(document, decision)
+            except ManualInsertError as error:
+                raise ChatValidationError(str(error)) from error
+            return self._apply_operations(
                 project_id,
                 request.expected_revision,
-                manual_operations,
+                operations,
+                summary="Применена авторская правка",
+            )
+        if decision.kind is IntentKind.FORMAT:
+            return self._apply_operations(
+                project_id,
+                request.expected_revision,
+                formatting_operations(document, message),
+                summary="Применено форматирование",
+            )
+        if decision.kind is IntentKind.STRUCTURE:
+            return self._apply_operations(
+                project_id,
+                request.expected_revision,
+                structural_operations(document, decision),
+                summary="Документ структурирован",
             )
 
-        source_blocks = self._source_blocks(project_id)
-        try:
-            plan = self._model.generate_json(
+        snapshot = _as_source_snapshot(self._source_blocks(project_id))
+        retrieved = retrieve_relevant_blocks(snapshot, decision.retrieval_query)
+        source_blocks = retrieved.blocks
+
+        if decision.kind is IntentKind.TEMPLATE_ACTION:
+            try:
+                plan = self._faq_plan(document, source_blocks, message)
+            except ChatGroundingError:
+                plan = self._faq_plan(
+                    document,
+                    source_blocks,
+                    message,
+                    retry_grounding=True,
+                )
+        else:
+            plan = self._generate_with_schema_retry(
                 system=CHAT_SYSTEM_PROMPT,
                 user=_serialized_context(document, source_blocks, message),
                 schema=ChatEditPlan,
             )
-        except ModelResponseFormatError:
-            plan = self._model.generate_json(
-                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_RETRY_PROMPT}",
-                user=_serialized_context(document, source_blocks, message),
-                schema=ChatEditPlan,
-            )
-        except ModelError:
-            if not manual_operations:
-                raise
-            return self._apply_manual_insert(
-                project_id,
-                request.expected_revision,
-                manual_operations,
-            )
-        if not plan.operations and _is_structural_request(message):
-            plan = self._model.generate_json(
-                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_STRUCTURAL_RETRY_PROMPT}",
-                user=_serialized_context(document, source_blocks, message),
-                schema=ChatEditPlan,
-            )
-        if not plan.operations and _is_question_generation_request(message):
-            plan = self._model.generate_json(
-                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_QUESTION_RETRY_PROMPT}",
-                user=_serialized_context(
-                    document,
-                    _relevant_source_blocks(source_blocks, message),
-                    message,
-                ),
-                schema=ChatEditPlan,
-            )
+
+        if not plan.operations:
+            raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
+        _validate_plan_for_intent(decision.kind, document, plan)
         try:
             _validate_plan(document, source_blocks, plan)
         except ChatGroundingError:
-            plan = self._model.generate_json(
-                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_GROUNDING_RETRY_PROMPT}",
-                user=_serialized_context(document, source_blocks, message),
-                schema=ChatEditPlan,
-            )
+            if decision.kind is IntentKind.TEMPLATE_ACTION:
+                plan = self._faq_plan(
+                    document,
+                    source_blocks,
+                    message,
+                    retry_grounding=True,
+                )
+            else:
+                plan = self._generate_with_schema_retry(
+                    system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_GROUNDING_RETRY_PROMPT}",
+                    user=_serialized_context(document, source_blocks, message),
+                    schema=ChatEditPlan,
+                )
+            if not plan.operations:
+                raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
+            _validate_plan_for_intent(decision.kind, document, plan)
             _validate_plan(document, source_blocks, plan)
-        if not plan.operations:
-            if manual_operations:
-                return self._apply_manual_insert(
-                    project_id,
-                    request.expected_revision,
-                    manual_operations,
-                )
-            fallback_operations = _fallback_formatting_operations(document, message)
-            if not fallback_operations:
-                if _is_structural_request(message):
-                    raise ChatValidationError(
-                        "Не удалось определить разделы документа. Уточните, по каким темам его разделить"
-                    )
-                raise ChatGroundingError(
-                    "Не удалось сформировать подтверждённую правку по источникам"
-                )
-            result = DocumentEditService(self._documents).apply(
-                project_id,
-                request.expected_revision,
-                fallback_operations,
-            )
-            return ChatEditResult(
-                summary="Применено форматирование",
-                document=result.document,
-                revision=result.revision,
-            )
 
         operations = _operations_for_application(document, plan, source_blocks)
-        result = DocumentEditService(self._documents).apply(
+        return self._apply_operations(
             project_id,
             request.expected_revision,
             operations,
-        )
-        return ChatEditResult(
             summary=plan.summary,
-            document=result.document,
-            revision=result.revision,
         )
 
-    def _apply_manual_insert(
+    def _faq_plan(
+        self,
+        document: WorkingDocument,
+        source_blocks: list[NormalizedBlock],
+        message: str,
+        *,
+        retry_grounding: bool = False,
+    ) -> ChatEditPlan:
+        system = FAQ_SYSTEM_PROMPT
+        if retry_grounding:
+            system = f"{system}\n\n{CHAT_GROUNDING_RETRY_PROMPT}"
+        draft = self._generate_with_schema_retry(
+            system=system,
+            user=_serialized_context(document, source_blocks, message),
+            schema=FaqEntryDraft,
+        )
+        _validate_faq_draft_evidence(draft, source_blocks)
+        item = FaqAdapter().compile(document, draft)
+        return ChatEditPlan(
+            summary="Добавлена подтверждённая пара вопрос–ответ",
+            operations=[item],
+        )
+
+    def _generate_with_schema_retry(self, *, system: str, user: str, schema):
+        try:
+            return self._model.generate_json(system=system, user=user, schema=schema)
+        except ModelResponseFormatError:
+            try:
+                return self._model.generate_json(
+                    system=f"{system}\n\n{CHAT_RETRY_PROMPT}",
+                    user=user,
+                    schema=schema,
+                )
+            except ModelResponseFormatError as error:
+                raise ChatError(ChatErrorCode.MODEL_INVALID_JSON) from error
+
+    def _apply_operations(
         self,
         project_id: str,
         expected_revision: int,
         operations: list[DocumentOperation],
+        *,
+        summary: str,
     ) -> ChatEditResult:
-        result = DocumentEditService(self._documents).apply(
-            project_id,
-            expected_revision,
-            operations,
-        )
+        try:
+            result = DocumentEditService(self._documents).apply(
+                project_id,
+                expected_revision,
+                operations,
+            )
+        except EditConflict as error:
+            raise ChatError(ChatErrorCode.REVISION_CONFLICT) from error
+        except EditValidationError as error:
+            raise ChatError(
+                ChatErrorCode.INVALID_OPERATION,
+                message=str(error),
+            ) from error
         return ChatEditResult(
-            summary="Добавлен текст пользователя",
+            summary=summary,
             document=result.document,
             revision=result.revision,
         )
+
+
+def _as_source_snapshot(
+    value: SourceSnapshot | list[NormalizedBlock],
+) -> SourceSnapshot:
+    if isinstance(value, SourceSnapshot):
+        return value
+    return SourceSnapshot(
+        configured_source_count=1 if value else 0,
+        blocks=value,
+    )
 
 
 def _validated_message(message: str) -> str:
@@ -229,38 +287,6 @@ def _validated_message(message: str) -> str:
     if len(normalized) > 4000:
         raise ChatValidationError("Сообщение слишком длинное")
     return normalized
-
-
-def _is_structural_request(message: str) -> bool:
-    return _STRUCTURAL_REQUEST_PATTERN.search(message.casefold()) is not None
-
-
-def _is_question_generation_request(message: str) -> bool:
-    return _QUESTION_GENERATION_REQUEST_PATTERN.search(message) is not None
-
-
-def _relevant_source_blocks(
-    source_blocks: list[NormalizedBlock], message: str, limit: int = 12
-) -> list[NormalizedBlock]:
-    """Return the source fragments most likely to answer a requested question."""
-    query_tokens = _tokens(message)
-    if not query_tokens:
-        return source_blocks
-
-    def score(block: NormalizedBlock) -> int:
-        block_tokens = _tokens(block.text)
-        return sum(
-            1
-            for query_token in query_tokens
-            if any(_tokens_match(query_token, block_token) for block_token in block_tokens)
-        )
-
-    ranked = sorted(
-        ((score(block), index, block) for index, block in enumerate(source_blocks)),
-        key=lambda item: (-item[0], item[1]),
-    )
-    matches = [block for relevance, _index, block in ranked if relevance]
-    return matches[:limit] or source_blocks[:limit]
 
 
 def _serialized_context(
@@ -291,6 +317,35 @@ def _validate_plan(
         _validate_operation_evidence(document, evidence_by_id, item)
 
 
+def _validate_plan_for_intent(
+    intent: IntentKind,
+    document: WorkingDocument,
+    plan: ChatEditPlan,
+) -> None:
+    if intent is IntentKind.TEMPLATE_ACTION:
+        if len(plan.operations) != 1 or not isinstance(
+            plan.operations[0].operation, InsertNode
+        ):
+            raise ChatValidationError("FAQ-адаптер вернул недопустимую операцию")
+        return
+    if intent is not IntentKind.GROUNDED_EDIT:
+        return
+    for item in plan.operations:
+        operation = item.operation
+        if isinstance(operation, (DeleteNode, MoveNode)):
+            raise ChatValidationError(
+                "Фактологический запрос не может удалять или перемещать блоки"
+            )
+        if isinstance(operation, InsertNode) and operation.node.kind is NodeKind.HEADING:
+            raise ChatValidationError(
+                "Фактологический запрос не может менять структуру документа"
+            )
+        if not _factual_changed_tokens(document, operation):
+            raise ChatValidationError(
+                "Модель вернула операцию, не соответствующую фактологическому запросу"
+            )
+
+
 def _operations_for_application(
     document: WorkingDocument,
     plan: ChatEditPlan,
@@ -305,8 +360,14 @@ def _operations_for_application(
         if isinstance(operation, UpdateData):
             node = find_node(document, operation.node_id)
             if node is not None:
+                merged_data = _merged_data(node.data, operation.data)
+                if "items" in operation.data:
+                    if "items_html" not in operation.data:
+                        merged_data.pop("items_html", None)
+                    if "item_styles" not in operation.data:
+                        merged_data.pop("item_styles", None)
                 operation = operation.model_copy(
-                    update={"data": _merged_data(node.data, operation.data)}
+                    update={"data": merged_data}
                 )
         elif isinstance(operation, InsertNode) and provenance:
             operation = operation.model_copy(
@@ -344,6 +405,25 @@ def _provenance_for_evidence(
     return _merge_provenance([], provenance)
 
 
+def _validate_faq_draft_evidence(
+    draft: FaqEntryDraft,
+    source_blocks: list[NormalizedBlock],
+) -> None:
+    evidence_by_id = {block.id: block for block in source_blocks}
+    try:
+        evidence = [evidence_by_id[block_id] for block_id in draft.evidence_block_ids]
+    except KeyError as error:
+        raise ChatGroundingError(
+            "Ответ модели ссылается на неизвестный фрагмент источника",
+            code=ChatErrorCode.EVIDENCE_MISSING,
+        ) from error
+    if not _tokens_supported(
+        _tokens(draft.answer),
+        _tokens(" ".join(block.text for block in evidence)),
+    ):
+        raise ChatGroundingError(code=ChatErrorCode.GROUNDING_FAILED)
+
+
 def _merge_provenance(
     existing: list[Provenance], additions: list[Provenance]
 ) -> list[Provenance]:
@@ -355,62 +435,6 @@ def _merge_provenance(
             seen.add(key)
             result.append(item)
     return result
-
-
-def _fallback_formatting_operations(
-    document: WorkingDocument,
-    message: str,
-) -> list[DocumentOperation]:
-    style = _style_from_message(message)
-    if not style:
-        return []
-    node = _first_visible_node(document)
-    if node is None:
-        return []
-    return [UpdateData(node_id=node.id, data=_merged_data(node.data, {"style": style}))]
-
-
-def _style_from_message(message: str) -> dict[str, str]:
-    normalized = message.casefold().replace("ё", "е")
-    style: dict[str, str] = {}
-    if any(token in normalized for token in ("жирн", "полужирн", "bold")):
-        style["font-weight"] = "700"
-    if any(token in normalized for token in ("синий", "синим", "blue")):
-        style["color"] = "blue"
-    if any(token in normalized for token in ("красн", "red")):
-        style["color"] = "red"
-    if any(token in normalized for token in ("зелен", "green")):
-        style["color"] = "green"
-    if any(token in normalized for token in ("курсив", "italic")):
-        style["font-style"] = "italic"
-    if any(token in normalized for token in ("подчерк", "underline")):
-        style["text-decoration"] = "underline"
-    if "отступ" in normalized:
-        style["margin-left"] = "24px"
-    if not style:
-        return {}
-    if not any(token in normalized for token in ("абзац", "узел", "блок", "текст", "шрифт", "цвет", "формат")):
-        return {}
-    return style
-
-
-def _first_visible_node(document: WorkingDocument) -> DocumentNode | None:
-    preferred = (NodeKind.PARAGRAPH, NodeKind.LIST, NodeKind.HEADING, NodeKind.TABLE)
-    for kind in preferred:
-        node = _first_node_of_kind(document.nodes, kind)
-        if node is not None:
-            return node
-    return None
-
-
-def _first_node_of_kind(nodes: list[DocumentNode], kind: NodeKind) -> DocumentNode | None:
-    for node in nodes:
-        if node.kind is kind:
-            return node
-        child = _first_node_of_kind(node.children, kind)
-        if child is not None:
-            return child
-    return None
 
 
 def _merged_data(existing: dict, update: dict) -> dict:
@@ -435,18 +459,21 @@ def _validate_operation_evidence(
         cited_blocks = [evidence_by_id[block_id] for block_id in item.evidence_block_ids]
     except KeyError as error:
         raise ChatGroundingError(
-            "Для этой правки нет подтверждения в источниках"
+            "Ответ модели ссылается на неизвестный фрагмент источника",
+            code=ChatErrorCode.EVIDENCE_MISSING,
         ) from error
 
     changed_tokens = _factual_changed_tokens(document, item.operation)
     if not changed_tokens:
         return
-    if not cited_blocks or not _tokens_supported(
+    if not cited_blocks:
+        raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
+    if not _tokens_supported(
         changed_tokens,
         _tokens(" ".join(block.text for block in cited_blocks)),
         allow_grounded_synthesis=_allows_grounded_synthesis(document, item.operation),
     ):
-        raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
+        raise ChatGroundingError(code=ChatErrorCode.GROUNDING_FAILED)
 
 
 def _is_non_factual_structural_operation(operation: DocumentOperation) -> bool:
@@ -460,7 +487,7 @@ def _allows_grounded_synthesis(
     operation: DocumentOperation,
 ) -> bool:
     if isinstance(operation, InsertNode):
-        return True
+        return False
     if not isinstance(operation, UpdateData):
         return False
     node = find_node(document, operation.node_id)

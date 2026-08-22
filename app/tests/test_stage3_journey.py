@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from docgen.ai.grounding import GroundingValidator
-from docgen.chat.schemas import ChatEditOperation, ChatEditPlan
+from docgen.chat.schemas import (
+    ChatEditOperation,
+    ChatEditPlan,
+    FaqEntryDraft,
+    FaqPlacement,
+)
 from docgen.chat.service import ChatService
 from docgen.config import Settings
 from docgen.documents.operations import UpdateData
@@ -122,7 +127,11 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
         for expected, actual in zip(original.nodes, saved.nodes[:4], strict=True):
             assert actual.id == expected.id
             assert actual.section_id == expected.section_id
-            assert actual.provenance == expected.provenance
+            if actual.id == "faq-start":
+                assert actual.provenance[: len(expected.provenance)] == expected.provenance
+                assert len(actual.provenance) == len(expected.provenance) + 1
+            else:
+                assert actual.provenance == expected.provenance
 
         report = _stored_report(client, project_id)
         assert report.template_id == "faq"
@@ -174,6 +183,148 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
         document_page = restarted.get(f"{project_url}/document")
         assert document_page.status_code == 200
         assert "Formatta" in document_page.text
+
+
+def test_reliable_chat_scenarios_end_to_end(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{tmp_path / 'reliable-chat.db'}",
+        data_dir=tmp_path / "data",
+        confluence_hosts=("wiki.example.test",),
+    )
+    model = _ReliableChatModel()
+    source_calls = 0
+    app = create_app(settings)
+
+    def chat_factory(request, session):
+        def source_blocks(project_id: str) -> list[NormalizedBlock]:
+            nonlocal source_calls
+            source_calls += 1
+            return _normalized_source_blocks(
+                session,
+                request.app.state.settings,
+                project_id,
+            )
+
+        return ChatService(
+            documents=DocumentRepository(session),
+            model=model,
+            source_blocks=source_blocks,
+        )
+
+    app.state.chat_service_factory = chat_factory
+
+    with TestClient(app) as client:
+        project_id, project_url = _create_document(client)
+        _upload_markdown(client, project_url, project_id)
+        _persist_generated_faq(client, project_id)
+
+        faq_edit = client.post(
+            f"{project_url}/chat",
+            data={
+                "message": "Добавь вопрос как собрать документ?",
+                "revision": "1",
+            },
+        )
+        assert faq_edit.status_code == 200
+        saved = _stored_document(client, project_id)
+        inserted = saved.nodes[-1]
+        assert inserted.data["items"] == [
+            (
+                "Вопрос: Как собрать документ?\n"
+                "Ответ: Нажмите «Собрать» и дождитесь завершения задания worker."
+            )
+        ]
+        assert inserted.provenance
+        assert model.schemas[-1] is FaqEntryDraft
+
+        source_calls_after_faq = source_calls
+        manual_edit = client.post(
+            f"{project_url}/chat",
+            data={"message": "Замени Formatta на DocGen", "revision": "2"},
+        )
+        assert manual_edit.status_code == 200
+        manually_changed = _stored_document(client, project_id)
+        assert manually_changed.title == "FAQ DocGen"
+        assert "DocGen" in manually_changed.nodes[0].data["items"][0]
+        assert "manual-edit" in manually_changed.nodes[0].flags
+        assert source_calls == source_calls_after_faq
+
+        invalid_edit = client.post(
+            f"{project_url}/chat",
+            data={"message": "Уточни лимит по источнику", "revision": "3"},
+        )
+        assert invalid_edit.status_code == 422
+        assert 'data-error-code="invalid_operation"' in invalid_edit.text
+        assert _stored_revision(client, project_id) == 3
+
+        missing_fact = client.post(
+            f"{project_url}/chat",
+            data={
+                "message": "Уточни биометрическую идентификацию по источнику",
+                "revision": "3",
+            },
+        )
+        assert missing_fact.status_code == 422
+        assert 'data-error-code="relevant_fragment_missing"' in missing_fact.text
+        assert "не найден фрагмент" in missing_fact.text
+        assert _stored_revision(client, project_id) == 3
+
+        source_calls_before_structure = source_calls
+        structure = client.post(
+            f"{project_url}/chat",
+            data={"message": "Раздели документ на разделы", "revision": "3"},
+        )
+        assert structure.status_code == 200
+        structured = _stored_document(client, project_id)
+        assert structured.nodes
+        assert all(node.kind is NodeKind.HEADING for node in structured.nodes)
+        assert all(node.children for node in structured.nodes)
+        assert source_calls == source_calls_before_structure
+
+        conflict = client.post(
+            f"{project_url}/chat",
+            data={"message": "Добавь в конец документа: текст", "revision": "3"},
+        )
+        assert conflict.status_code == 409
+        assert 'data-error-code="revision_conflict"' in conflict.text
+        assert _stored_revision(client, project_id) == 4
+
+
+class _ReliableChatModel:
+    def __init__(self) -> None:
+        self.schemas: list[type[Any]] = []
+
+    def generate_json(self, system: str, user: str, schema: type[Any]) -> Any:
+        assert system
+        self.schemas.append(schema)
+        payload = json.loads(user)
+        if schema is FaqEntryDraft:
+            evidence = next(
+                block
+                for block in payload["source_blocks"]
+                if "Нажмите «Собрать»" in block["text"]
+            )
+            return FaqEntryDraft(
+                question="Как собрать документ?",
+                answer="Нажмите «Собрать» и дождитесь завершения задания worker.",
+                placement=FaqPlacement(index=len(payload["document"]["nodes"])),
+                evidence_block_ids=[evidence["id"]],
+            )
+        if schema is ChatEditPlan:
+            return ChatEditPlan(
+                summary="Невалидная операция",
+                operations=[
+                    ChatEditOperation(
+                        operation=UpdateData(
+                            node_id="missing-node",
+                            data={"items": ["Лимит 100 операций"]},
+                        ),
+                        evidence_block_ids=[payload["source_blocks"][0]["id"]],
+                    )
+                ],
+            )
+        raise AssertionError(f"Unexpected schema: {schema}")
 
 
 class _JourneyModel:
@@ -401,6 +552,16 @@ def _stored_document(client: TestClient, project_id: str) -> WorkingDocument:
         session.close()
 
 
+def _stored_revision(client: TestClient, project_id: str) -> int:
+    session = client.app.state.session_factory()
+    try:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        return stored[1]
+    finally:
+        session.close()
+
+
 def _stored_report(client: TestClient, project_id: str) -> CheckReport:
     session = client.app.state.session_factory()
     try:
@@ -449,4 +610,8 @@ Formatta помогает собрать документ из загружен�
 ## Ошибки
 
 Если модель недоступна, проверьте настройку локальной text-модели.
+
+## Лимиты
+
+Лимит составляет 100 операций.
 """

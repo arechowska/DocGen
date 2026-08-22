@@ -100,11 +100,7 @@ class _OpenAICompatibleModel:
                     "schema": schema.model_json_schema(),
                 },
             }
-        print("=== DOCGEN MODEL REQUEST PAYLOAD ===")
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
         response_bytes = self._post(payload)
-        print("=== DOCGEN MODEL RESPONSE RAW ===")
-        print(response_bytes.decode("utf-8", errors="replace"))
         try:
             response_data = json.loads(response_bytes)
             choice = response_data["choices"][0]
@@ -112,8 +108,6 @@ class _OpenAICompatibleModel:
             content = choice["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError("model content is not a string")
-            print("=== DOCGEN MODEL RESPONSE CONTENT ===")
-            print(content)
             if finish_reason == "length":
                 raise ModelOutputLimitError(
                     "Ответ модели обрезан по лимиту длины"

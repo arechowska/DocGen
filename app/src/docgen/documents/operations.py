@@ -15,6 +15,11 @@ class UpdateText(BaseModel):
     text: str
 
 
+class UpdateTitle(BaseModel):
+    kind: Literal["update_title"] = "update_title"
+    title: str
+
+
 class InsertNode(BaseModel):
     kind: Literal["insert_node"] = "insert_node"
     parent_id: str | None = None
@@ -46,8 +51,21 @@ class UpdateProvenance(BaseModel):
     provenance: list[Provenance]
 
 
+class UpdateFlags(BaseModel):
+    kind: Literal["update_flags"] = "update_flags"
+    node_id: str
+    flags: list[str]
+
+
 DocumentOperation = Annotated[
-    UpdateText | InsertNode | DeleteNode | MoveNode | UpdateData | UpdateProvenance,
+    UpdateText
+    | UpdateTitle
+    | InsertNode
+    | DeleteNode
+    | MoveNode
+    | UpdateData
+    | UpdateProvenance
+    | UpdateFlags,
     Field(discriminator="kind"),
 ]
 
@@ -74,6 +92,11 @@ def apply_operations(
 
 
 def _apply_one(document: WorkingDocument, operation: DocumentOperation) -> WorkingDocument:
+    if isinstance(operation, UpdateTitle):
+        title = operation.title.strip()
+        if not title:
+            raise EditValidationError("Название документа не может быть пустым")
+        return document.model_copy(update={"title": title})
     if isinstance(operation, UpdateText):
         return _replace_node(
             document,
@@ -91,6 +114,12 @@ def _apply_one(document: WorkingDocument, operation: DocumentOperation) -> Worki
             document,
             operation.node_id,
             lambda node: node.model_copy(update={"provenance": operation.provenance}),
+        )
+    if isinstance(operation, UpdateFlags):
+        return _replace_node(
+            document,
+            operation.node_id,
+            lambda node: node.model_copy(update={"flags": operation.flags}),
         )
     if isinstance(operation, InsertNode):
         _validate_index(operation.index)

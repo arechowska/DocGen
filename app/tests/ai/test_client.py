@@ -164,7 +164,7 @@ def test_qwen_text_model_uses_prompt_json_mode_without_schema_constraint() -> No
     assert result.template_id == "faq"
 
 
-def test_text_model_prints_payload_to_worker_console(
+def test_text_model_does_not_print_prompt_or_response_to_worker_console(
     mock_transport: httpx.MockTransport,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -175,17 +175,8 @@ def test_text_model_prints_payload_to_worker_console(
     model.generate_json("system", "user", WorkingDocument)
 
     captured = capsys.readouterr()
-    assert "=== DOCGEN MODEL REQUEST PAYLOAD ===" in captured.out
-    assert '"model": "local-text"' in captured.out
-    assert '"messages": [' in captured.out
-    assert '"content": "user"' in captured.out
-    assert "=== DOCGEN MODEL RESPONSE RAW ===" in captured.out
-    raw_response = captured.out.split("=== DOCGEN MODEL RESPONSE RAW ===", maxsplit=1)[
-        1
-    ].split("=== DOCGEN MODEL RESPONSE CONTENT ===", maxsplit=1)[0]
-    response_payload = json.loads(raw_response)
-    document_payload = json.loads(response_payload["choices"][0]["message"]["content"])
-    assert document_payload["template_id"] == "use-case"
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_model_request_budget_accepts_exact_serialized_boundary_and_rejects_before_http() -> None:

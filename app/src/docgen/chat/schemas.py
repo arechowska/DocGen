@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from docgen.documents.operations import DocumentOperation
 from docgen.documents.schemas import WorkingDocument
@@ -48,6 +48,37 @@ class ChatEditPlan(BaseModel):
         if isinstance(value, list):
             summary = "Нет правок" if not value else "Применены правки"
             return {"summary": summary, "operations": value}
+        return value
+
+
+class FaqPlacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parent_id: str | None = None
+    index: int = Field(ge=0)
+
+
+class FaqEntryDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
+    placement: FaqPlacement
+    evidence_block_ids: list[str] = Field(min_length=1)
+
+    @field_validator("question", "answer")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("FAQ text must not be blank")
+        return normalized
+
+    @field_validator("evidence_block_ids")
+    @classmethod
+    def reject_blank_evidence(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("FAQ evidence IDs must not be blank")
         return value
 
 

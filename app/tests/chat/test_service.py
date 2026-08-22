@@ -1,18 +1,27 @@
+from typing import Any
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from docgen.ai.client import ModelError
-from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest
+from docgen.ai.client import ModelError, ModelResponseFormatError
+from docgen.chat.errors import ChatError, ChatErrorCode
+from docgen.chat.retrieval import SourceSnapshot
+from docgen.chat.schemas import (
+    ChatEditOperation,
+    ChatEditPlan,
+    ChatEditRequest,
+    FaqEntryDraft,
+    FaqPlacement,
+)
 from docgen.chat.service import (
     ChatGroundingError,
     ChatService,
     ChatValidationError,
-    _relevant_source_blocks,
 )
 from docgen.db import Base
 from docgen.documents.models import ProjectArtifact
-from docgen.documents.operations import InsertNode, MoveNode, UpdateData, UpdateText, find_node
+from docgen.documents.operations import DeleteNode, InsertNode, UpdateData, UpdateText, find_node
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
@@ -25,16 +34,18 @@ class FakeModel:
     def __init__(self) -> None:
         self.calls = 0
         self.error: ModelError | None = None
-        self.result: ChatEditPlan | None = None
-        self.results: list[ChatEditPlan] = []
+        self.result: Any = None
+        self.results: list[Any] = []
         self.systems: list[str] = []
+        self.users: list[str] = []
+        self.schemas: list[type] = []
 
     def generate_json(self, system: str, user: str, schema):
         self.calls += 1
         self.systems.append(system)
-        assert "русском языке" in system
+        self.users.append(user)
+        self.schemas.append(schema)
         assert "Оператор" in user
-        assert schema is ChatEditPlan
         if self.error is not None:
             raise self.error
         if self.results:
@@ -105,7 +116,10 @@ def test_chat_applies_grounded_plan(chat_service: ChatService, fake_model: FakeM
 
     result = chat_service.edit(
         "p1",
-        ChatEditRequest(message="Уточни актора", expected_revision=2),
+        ChatEditRequest(
+            message="Уточни подтверждение заявки по источнику",
+            expected_revision=2,
+        ),
     )
 
     assert result.revision == 3
@@ -119,57 +133,193 @@ def test_chat_noop_plan_is_not_reported_as_a_successful_edit(
 ) -> None:
     fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
 
-    with pytest.raises(
-        ChatGroundingError, match="Не удалось сформировать подтверждённую правку"
-    ):
+    with pytest.raises(ChatError) as caught:
         chat_service.edit(
             "p1",
             ChatEditRequest(message="как дела", expected_revision=2),
         )
 
+    assert caught.value.code is ChatErrorCode.CLARIFICATION
+    assert fake_model.calls == 0
     stored = DocumentRepository(session).get_document_with_revision("p1")
     assert stored is not None
     _, persisted_revision = stored
     assert persisted_revision == 2
 
 
-def test_chat_retries_structural_request_after_noop(
+@pytest.mark.parametrize(
+    ("snapshot", "expected_code"),
+    [
+        (SourceSnapshot(configured_source_count=0), ChatErrorCode.SOURCES_MISSING),
+        (
+            SourceSnapshot(
+                configured_source_count=1,
+                warnings=("Confluence HTTP 503",),
+            ),
+            ChatErrorCode.SOURCE_UNAVAILABLE,
+        ),
+    ],
+)
+def test_chat_reports_source_state_before_model_call(
+    session: Session,
+    fake_model: FakeModel,
+    snapshot: SourceSnapshot,
+    expected_code: ChatErrorCode,
+) -> None:
+    service = ChatService(
+        documents=DocumentRepository(session),
+        model=fake_model,
+        source_blocks=lambda _project_id: snapshot,
+    )
+
+    with pytest.raises(ChatError) as caught:
+        service.edit(
+            "p1",
+            ChatEditRequest(message="Уточни лимит по источнику", expected_revision=2),
+        )
+
+    assert caught.value.code is expected_code
+    assert fake_model.calls == 0
+
+
+def test_chat_reports_missing_thematic_fragment_before_model_call(
+    session: Session,
+    fake_model: FakeModel,
+) -> None:
+    service = ChatService(
+        documents=DocumentRepository(session),
+        model=fake_model,
+        source_blocks=lambda _project_id: SourceSnapshot(
+            configured_source_count=1,
+            blocks=_source_blocks("p1"),
+        ),
+    )
+
+    with pytest.raises(ChatError) as caught:
+        service.edit(
+            "p1",
+            ChatEditRequest(
+                message="Уточни биометрическую идентификацию по источнику",
+                expected_revision=2,
+            ),
+        )
+
+    assert caught.value.code is ChatErrorCode.RELEVANT_FRAGMENT_MISSING
+    assert fake_model.calls == 0
+
+
+def test_chat_reports_invalid_model_json_and_preserves_document(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    fake_model.error = ModelResponseFormatError("raw model output must stay private")
+
+    with pytest.raises(ChatError) as caught:
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(
+                message="Уточни подтверждение заявки по источнику",
+                expected_revision=2,
+            ),
+        )
+
+    assert caught.value.code is ChatErrorCode.MODEL_INVALID_JSON
+    assert "raw model output" not in caught.value.message
+    assert fake_model.calls == 2
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None and stored[1] == 2
+
+
+def test_chat_rejects_invalid_model_operation_atomically(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Невалидная правка",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateText(node_id="missing", text="Новый факт"),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+
+    with pytest.raises(ChatError) as caught:
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(
+                message="Уточни подтверждение заявки по источнику",
+                expected_revision=2,
+            ),
+        )
+
+    assert caught.value.code is ChatErrorCode.INVALID_OPERATION
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None and stored[1] == 2
+
+
+def test_grounded_intent_rejects_model_structural_operation(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Удалён блок",
+        operations=[
+            ChatEditOperation(
+                operation=DeleteNode(node_id="actor"),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+
+    with pytest.raises(ChatError) as caught:
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(
+                message="Уточни подтверждение заявки по источнику",
+                expected_revision=2,
+            ),
+        )
+
+    assert caught.value.code is ChatErrorCode.INVALID_OPERATION
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None
+    assert [node.id for node in stored[0].nodes] == ["actor", "limit"]
+    assert stored[1] == 2
+
+
+def test_chat_structures_document_without_model_or_sources(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
-    fake_model.results = [
-        ChatEditPlan(summary="Нет правок", operations=[]),
-        ChatEditPlan(
-            summary="Блоки переставлены",
-            operations=[
-                ChatEditOperation(operation=MoveNode(node_id="limit", index=0)),
-            ],
-        ),
-    ]
-
     result = chat_service.edit(
         "p1",
         ChatEditRequest(message="раздели на разделы", expected_revision=2),
     )
 
-    assert fake_model.calls == 2
-    assert "структурирование" in fake_model.systems[-1]
-    assert [node.id for node in result.document.nodes] == ["limit", "actor"]
+    assert fake_model.calls == 0
+    assert [node.kind for node in result.document.nodes] == [
+        NodeKind.HEADING,
+        NodeKind.HEADING,
+    ]
+    assert [node.children[0].id for node in result.document.nodes] == ["actor", "limit"]
 
 
-def test_chat_reports_structural_noop_as_error(
+def test_chat_ambiguous_move_requests_target_details_without_model(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
-    fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
-
-    with pytest.raises(ChatValidationError, match="Не удалось определить разделы"):
+    with pytest.raises(ChatError) as caught:
         chat_service.edit(
             "p1",
-            ChatEditRequest(message="раздели на разделы", expected_revision=2),
+            ChatEditRequest(message="перемести блоки", expected_revision=2),
         )
 
-    assert fake_model.calls == 2
+    assert caught.value.code is ChatErrorCode.CLARIFICATION
+    assert fake_model.calls == 0
 
 
 def test_chat_applies_formatting_command_when_model_returns_noop(
@@ -187,6 +337,7 @@ def test_chat_applies_formatting_command_when_model_returns_noop(
     )
 
     assert result.summary == "Применено форматирование"
+    assert fake_model.calls == 0
     assert result.revision == 3
     assert find_node(result.document, "actor").data == {
         "style": {
@@ -210,12 +361,54 @@ def test_chat_adds_user_text_as_manual_paragraph_when_model_returns_noop(
         ),
     )
 
-    assert result.summary == "Добавлен текст пользователя"
+    assert result.summary == "Применена авторская правка"
     assert result.revision == 3
     inserted = result.document.nodes[-1]
     assert inserted.kind is NodeKind.PARAGRAPH
     assert inserted.text == "Вопрос: как пройти в библиотеку\nОтвет: прямо и направо"
     assert inserted.flags == ["manual-edit"]
+
+
+def test_chat_applies_explicit_product_name_correction_without_model(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    repository = DocumentRepository(session)
+    stored = repository.get_document_with_revision("p1")
+    assert stored is not None
+    document, revision = stored
+    repository.save_document(
+        "p1",
+        document.model_copy(
+            update={
+                "title": "Руководство TracksCare",
+                "nodes": [
+                    DocumentNode(id="actor", kind=NodeKind.PARAGRAPH, text="TracksCare"),
+                    DocumentNode(
+                        id="faq",
+                        kind=NodeKind.LIST,
+                        data={"items": ["Как настроить TracksCare?"]},
+                    ),
+                ]
+            }
+        ),
+    )
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(
+            message="Наоборот, продукт должен быть TrackCare", expected_revision=revision + 1
+        ),
+    )
+
+    assert fake_model.calls == 0
+    assert result.summary == "Применена авторская правка"
+    assert result.document.title == "Руководство TrackCare"
+    assert result.document.nodes[0].text == "TrackCare"
+    assert result.document.nodes[1].data["items"] == ["Как настроить TrackCare?"]
+    assert result.document.nodes[0].flags == ["manual-edit"]
+    assert result.document.nodes[1].flags == ["manual-edit"]
 
 
 def test_chat_adds_user_text_at_document_start_when_requested(
@@ -271,7 +464,7 @@ def test_chat_positioned_manual_insert_bypasses_model_and_source_lookup(
         "Новый текст",
         "Лимит",
     ]
-    assert result.summary == "Добавлен текст пользователя"
+    assert result.summary == "Применена авторская правка"
 
 
 def test_chat_rejects_empty_authored_text_without_model_or_source_lookup(
@@ -328,7 +521,7 @@ def test_chat_missing_visual_target_preserves_document(
     assert fake_model.calls == 0
 
 
-def test_chat_unpositioned_manual_insert_keeps_model_first_fallback(
+def test_chat_unpositioned_manual_insert_bypasses_model(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
@@ -339,11 +532,11 @@ def test_chat_unpositioned_manual_insert_keeps_model_first_fallback(
         ChatEditRequest(message="добавь авторский текст", expected_revision=2),
     )
 
-    assert fake_model.calls == 1
+    assert fake_model.calls == 0
     assert result.document.nodes[-1].text == "авторский текст"
 
 
-def test_chat_unpositioned_manual_insert_survives_model_error(
+def test_chat_unpositioned_manual_insert_does_not_depend_on_model(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
@@ -354,8 +547,8 @@ def test_chat_unpositioned_manual_insert_survives_model_error(
         ChatEditRequest(message="добавь авторский текст", expected_revision=2),
     )
 
-    assert fake_model.calls == 1
-    assert result.summary == "Добавлен текст пользователя"
+    assert fake_model.calls == 0
+    assert result.summary == "Применена авторская правка"
     assert result.revision == 3
     inserted = result.document.nodes[-1]
     assert inserted.kind is NodeKind.PARAGRAPH
@@ -375,14 +568,12 @@ def test_chat_rejects_unknown_evidence(
         ],
     )
 
-    with pytest.raises(
-        ChatGroundingError,
-        match="Для этой правки нет подтверждения в источниках",
-    ):
+    with pytest.raises(ChatGroundingError) as caught:
         chat_service.edit(
             "p1",
             ChatEditRequest(message="Добавь лимит", expected_revision=2),
         )
+    assert caught.value.code is ChatErrorCode.EVIDENCE_MISSING
 
 
 def test_chat_rejects_known_but_irrelevant_evidence_and_preserves_document(
@@ -402,14 +593,12 @@ def test_chat_rejects_known_but_irrelevant_evidence_and_preserves_document(
         ],
     )
 
-    with pytest.raises(
-        ChatGroundingError,
-        match="Для этой правки нет подтверждения в источниках",
-    ):
+    with pytest.raises(ChatGroundingError) as caught:
         chat_service.edit(
             "p1",
             ChatEditRequest(message="Добавь лимит", expected_revision=2),
         )
+    assert caught.value.code is ChatErrorCode.EVIDENCE_MISSING
 
     stored = DocumentRepository(session).get_document_with_revision("p1")
     assert stored is not None
@@ -467,14 +656,16 @@ def test_chat_rejects_inexact_or_insufficient_numeric_evidence(
         ],
     )
 
-    with pytest.raises(
-        ChatGroundingError,
-        match="Для этой правки нет подтверждения в источниках",
-    ):
+    topic = text.split()[0]
+    with pytest.raises(ChatGroundingError) as caught:
         chat_service.edit(
             "p1",
-            ChatEditRequest(message="Измени значение", expected_revision=2),
+            ChatEditRequest(
+                message=f"Уточни {topic} по источнику",
+                expected_revision=2,
+            ),
         )
+    assert caught.value.code is ChatErrorCode.GROUNDING_FAILED
 
 
 def test_chat_accepts_equivalent_signed_decimal_range_and_currency_literals(
@@ -499,7 +690,7 @@ def test_chat_accepts_equivalent_signed_decimal_range_and_currency_literals(
 
     result = chat_service.edit(
         "p1",
-        ChatEditRequest(message="Добавь значения", expected_revision=2),
+        ChatEditRequest(message="Уточни комиссию по источнику", expected_revision=2),
     )
 
     assert find_node(result.document, "limit").text == (
@@ -507,55 +698,29 @@ def test_chat_accepts_equivalent_signed_decimal_range_and_currency_literals(
     )
 
 
-def test_chat_allows_non_factual_structural_operation_without_evidence(
-    chat_service: ChatService,
-    fake_model: FakeModel,
-) -> None:
-    fake_model.result = ChatEditPlan(
-        summary="Переставлены блоки",
-        operations=[
-            ChatEditOperation(
-                operation=MoveNode(node_id="limit", index=0),
-            )
-        ],
-    )
-
-    result = chat_service.edit(
-        "p1",
-        ChatEditRequest(message="Переставь блоки", expected_revision=2),
-    )
-
-    assert [node.id for node in result.document.nodes] == ["limit", "actor"]
-
-
 def test_chat_allows_grounded_generated_questions_from_source(
     chat_service: ChatService,
     fake_model: FakeModel,
+    session: Session,
 ) -> None:
-    fake_model.result = ChatEditPlan(
-        summary="Добавлены вопросы",
-        operations=[
-            ChatEditOperation(
-                operation=InsertNode(
-                    index=2,
-                    node=DocumentNode(
-                        id="questions",
-                        kind=NodeKind.LIST,
-                        data={"items": ["Как оператор подтверждает заявку?"]},
-                    ),
-                ),
-                evidence_block_ids=["s1:b2"],
-            )
-        ],
+    revision = _set_template(session, "faq")
+    fake_model.result = FaqEntryDraft(
+        question="Кто подтверждает заявку?",
+        answer="Заявку подтверждает оператор.",
+        placement=FaqPlacement(index=2),
+        evidence_block_ids=["s1:b2"],
     )
 
     result = chat_service.edit(
         "p1",
-        ChatEditRequest(message="Добавь больше вопросов", expected_revision=2),
+        ChatEditRequest(
+            message="Добавь вопрос кто подтверждает заявку?",
+            expected_revision=revision,
+        ),
     )
 
     assert result.document.nodes[-1].data["items"] == [
-        "Как оператор подтверждает заявку?"
+        "Вопрос: Кто подтверждает заявку?\nОтвет: Заявку подтверждает оператор."
     ]
     assert result.document.nodes[-1].provenance == [
         Provenance(
@@ -566,59 +731,39 @@ def test_chat_allows_grounded_generated_questions_from_source(
     ]
 
 
-def test_chat_retries_empty_question_request_with_source_focused_prompt(
+def test_chat_retries_faq_after_unknown_evidence_with_source_focused_prompt(
     chat_service: ChatService,
     fake_model: FakeModel,
+    session: Session,
 ) -> None:
+    revision = _set_template(session, "faq")
     fake_model.results = [
-        ChatEditPlan(summary="Нет правок"),
-        ChatEditPlan(
-            summary="Добавлен вопрос",
-            operations=[
-                ChatEditOperation(
-                    operation=InsertNode(
-                        index=2,
-                        node=DocumentNode(
-                            id="question-from-source",
-                            kind=NodeKind.LIST,
-                            data={
-                                "items": [
-                                    (
-                                        "Вопрос: Кто подтверждает заявку? "
-                                        "Ответ: Заявку подтверждает оператор."
-                                    )
-                                ]
-                            },
-                        ),
-                    ),
-                    evidence_block_ids=["s1:b2"],
-                )
-            ],
+        FaqEntryDraft(
+            question="Кто подтверждает заявку?",
+            answer="Заявку подтверждает оператор.",
+            placement=FaqPlacement(index=2),
+            evidence_block_ids=["unknown"],
+        ),
+        FaqEntryDraft(
+            question="Кто подтверждает заявку?",
+            answer="Заявку подтверждает оператор.",
+            placement=FaqPlacement(index=2),
+            evidence_block_ids=["s1:b2"],
         ),
     ]
 
     result = chat_service.edit(
         "p1",
         ChatEditRequest(
-            message="Добавь вопрос Кто подтверждает заявку?", expected_revision=2
+            message="Добавь вопрос Кто подтверждает заявку?",
+            expected_revision=revision,
         ),
     )
 
     assert fake_model.calls == 2
-    assert "попросил добавить вопрос" in fake_model.systems[-1]
+    assert fake_model.schemas == [FaqEntryDraft, FaqEntryDraft]
+    assert "проверку источников" in fake_model.systems[-1]
     assert result.document.nodes[-1].provenance[0].source_id == "s1"
-
-
-def test_question_source_selection_prefers_matching_fragments() -> None:
-    blocks = _source_blocks("p1")
-
-    selected = _relevant_source_blocks(
-        blocks,
-        "Добавь вопрос Кто подтверждает заявку?",
-    )
-
-    assert selected[0].id == "s1:b2"
-    assert len(selected) < len(blocks)
 
 
 def test_chat_retries_grounded_request_after_invalid_evidence(
@@ -660,7 +805,10 @@ def test_chat_retries_grounded_request_after_invalid_evidence(
 
     result = chat_service.edit(
         "p1",
-        ChatEditRequest(message="Добавь ещё вопросов", expected_revision=2),
+        ChatEditRequest(
+            message="Уточни подтверждение заявки по источнику",
+            expected_revision=2,
+        ),
     )
 
     assert fake_model.calls == 2
@@ -676,13 +824,15 @@ def test_chat_rejects_empty_grounded_plan(
 ) -> None:
     fake_model.result = ChatEditPlan(summary="Нет правок")
 
-    with pytest.raises(
-        ChatGroundingError, match="Не удалось сформировать подтверждённую правку"
-    ):
+    with pytest.raises(ChatGroundingError) as caught:
         chat_service.edit(
             "p1",
-            ChatEditRequest(message="Уточни порядок подтверждения", expected_revision=2),
+            ChatEditRequest(
+                message="Уточни подтверждение заявки по источнику",
+                expected_revision=2,
+            ),
         )
+    assert caught.value.code is ChatErrorCode.EVIDENCE_MISSING
 
 
 def test_chat_allows_style_only_data_operation_without_evidence(
@@ -707,9 +857,9 @@ def test_chat_allows_style_only_data_operation_without_evidence(
     )
 
     assert find_node(result.document, "actor").data == {
-        "alignment": "center",
-        "width": 80,
+        "style": {"text-align": "center"}
     }
+    assert fake_model.calls == 0
 
 
 def test_chat_allows_text_formatting_data_operation_without_evidence(
@@ -746,6 +896,7 @@ def test_chat_allows_text_formatting_data_operation_without_evidence(
             "margin-left": "24px",
         }
     }
+    assert fake_model.calls == 0
 
 
 def test_chat_merges_partial_formatting_data_with_existing_node_data(
@@ -795,6 +946,7 @@ def test_chat_merges_partial_formatting_data_with_existing_node_data(
             "font-weight": "700",
         },
     }
+    assert fake_model.calls == 0
 
 
 def test_chat_prompt_documents_formatting_operations() -> None:
@@ -804,6 +956,19 @@ def test_chat_prompt_documents_formatting_operations() -> None:
     assert "font-weight" in CHAT_SYSTEM_PROMPT
     assert "margin-left" in CHAT_SYSTEM_PROMPT
     assert "Структурные команды" in CHAT_SYSTEM_PROMPT
+
+
+def _set_template(session: Session, template_id: str) -> int:
+    repository = DocumentRepository(session)
+    stored = repository.get_document_with_revision("p1")
+    assert stored is not None
+    document, revision = stored
+    repository.save_document(
+        "p1",
+        document.model_copy(update={"template_id": template_id}),
+    )
+    session.commit()
+    return revision + 1
 
 
 def _source_blocks(project_id: str) -> list[NormalizedBlock]:

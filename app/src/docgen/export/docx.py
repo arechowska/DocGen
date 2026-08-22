@@ -326,7 +326,7 @@ class DocxExporter:
             paragraph = docx_document.add_paragraph(style=_PARAGRAPH_STYLE)
             paragraph.add_run(f"{label}: ").bold = True
             paragraph.add_run(value)
-            paragraph.paragraph_format.space_after = Pt(8 if label == "Вопрос" else 20)
+            paragraph.paragraph_format.space_after = Pt(8 if label == "Вопрос" else 28)
 
     def _render_table(
         self, docx_document: docx.document.Document, node: DocumentNode

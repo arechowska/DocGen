@@ -1,3 +1,6 @@
-<div class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
-  {{ message }}
+<div class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900" data-error-code="{{ error_code | default('request_invalid') }}">
+  <div>{{ message }}</div>
+  {% if action | default(false) %}
+    <div class="mt-1 font-medium">Что сделать: {{ action }}</div>
+  {% endif %}
 </div>

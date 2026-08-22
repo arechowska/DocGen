@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from docgen.chat.errors import ChatError, ChatErrorCode
 from docgen.chat.routes import _source_blocks_from_project
 from docgen.chat.schemas import ChatEditRequest, ChatEditResult
 from docgen.chat.service import ChatGroundingError
@@ -20,6 +21,9 @@ class FakeChat:
         assert project_id
         if "неподтверждённый" in request.message:
             raise ChatGroundingError("Для этой правки нет подтверждения в источниках")
+        for code in ChatErrorCode:
+            if request.message == code.value:
+                raise ChatError(code)
         return ChatEditResult(
             summary="Заголовок сокращён",
             document=WorkingDocument(
@@ -87,6 +91,35 @@ def test_chat_grounding_error_preserves_document(
 
     assert response.status_code == 422
     assert "нет подтверждения в источниках" in response.text
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_status", "expected_text"),
+    [
+        (ChatErrorCode.SOURCES_MISSING, 422, "не добавлены источники"),
+        (ChatErrorCode.SOURCE_UNAVAILABLE, 503, "не удалось прочитать"),
+        (ChatErrorCode.RELEVANT_FRAGMENT_MISSING, 422, "не найден фрагмент"),
+        (ChatErrorCode.MODEL_INVALID_JSON, 502, "неверном формате"),
+        (ChatErrorCode.EVIDENCE_MISSING, 422, "не содержит подтверждения"),
+        (ChatErrorCode.REVISION_CONFLICT, 409, "уже изменён"),
+    ],
+)
+def test_chat_renders_stable_error_code_message_and_next_action(
+    client: TestClient,
+    project_with_document: Project,
+    code: ChatErrorCode,
+    expected_status: int,
+    expected_text: str,
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_document.id}/chat",
+        data={"message": code.value, "revision": "1"},
+    )
+
+    assert response.status_code == expected_status
+    assert f'data-error-code="{code.value}"' in response.text
+    assert expected_text in response.text
+    assert "Что сделать:" in response.text
 
 
 def test_chat_without_message_returns_readable_error(
