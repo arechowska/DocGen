@@ -56,12 +56,20 @@ CHAT_STRUCTURAL_RETRY_PROMPT = """
 Пользователь запросил структурирование существующего документа. Выполни команду: верни хотя бы одну операцию MoveNode или InsertNode, если документ содержит блоки для перестановки или группировки. Это не добавление фактов, поэтому evidence_block_ids оставь пустым. Не меняй текст существующих блоков и не возвращай пустой operations.
 """.strip()
 
+CHAT_QUESTION_RETRY_PROMPT = """
+Пользователь попросил добавить вопрос по источникам. Найди в source_blocks фрагмент, который отвечает на сформулированный пользователем вопрос. Добавь подтверждённую пару «Вопрос: ... Ответ: ...» через InsertNode и укажи ID этого фрагмента в evidence_block_ids. Используй только факты из выбранного фрагмента. Не возвращай пустой operations, если подходящий фрагмент есть.
+""".strip()
+
 CHAT_GROUNDING_RETRY_PROMPT = """
 Предыдущий план не прошёл проверку источников. Исправь план: каждая фактическая операция должна ссылаться в evidence_block_ids на существующие source_blocks, подтверждающие добавляемый или изменяемый текст. Не используй идентификаторы наугад. Если подтверждения нет, исключи такую операцию.
 """.strip()
 
 _STRUCTURAL_REQUEST_PATTERN = re.compile(
     r"\b(?:раздел(?:и|ить)|разбей|структурир|сгруппир|перестав|перемест|упорядоч)"
+)
+_QUESTION_GENERATION_REQUEST_PATTERN = re.compile(
+    r"\b(?:добав(?:ь|ить)|состав(?:ь|ить)|сформируй)\b.*\bвопрос(?:ы|ов)?\b",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -136,6 +144,16 @@ class ChatService:
             plan = self._model.generate_json(
                 system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_STRUCTURAL_RETRY_PROMPT}",
                 user=_serialized_context(document, source_blocks, message),
+                schema=ChatEditPlan,
+            )
+        if not plan.operations and _is_question_generation_request(message):
+            plan = self._model.generate_json(
+                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_QUESTION_RETRY_PROMPT}",
+                user=_serialized_context(
+                    document,
+                    _relevant_source_blocks(source_blocks, message),
+                    message,
+                ),
                 schema=ChatEditPlan,
             )
         try:
@@ -215,6 +233,34 @@ def _validated_message(message: str) -> str:
 
 def _is_structural_request(message: str) -> bool:
     return _STRUCTURAL_REQUEST_PATTERN.search(message.casefold()) is not None
+
+
+def _is_question_generation_request(message: str) -> bool:
+    return _QUESTION_GENERATION_REQUEST_PATTERN.search(message) is not None
+
+
+def _relevant_source_blocks(
+    source_blocks: list[NormalizedBlock], message: str, limit: int = 12
+) -> list[NormalizedBlock]:
+    """Return the source fragments most likely to answer a requested question."""
+    query_tokens = _tokens(message)
+    if not query_tokens:
+        return source_blocks
+
+    def score(block: NormalizedBlock) -> int:
+        block_tokens = _tokens(block.text)
+        return sum(
+            1
+            for query_token in query_tokens
+            if any(_tokens_match(query_token, block_token) for block_token in block_tokens)
+        )
+
+    ranked = sorted(
+        ((score(block), index, block) for index, block in enumerate(source_blocks)),
+        key=lambda item: (-item[0], item[1]),
+    )
+    matches = [block for relevance, _index, block in ranked if relevance]
+    return matches[:limit] or source_blocks[:limit]
 
 
 def _serialized_context(

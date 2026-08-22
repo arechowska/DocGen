@@ -4,7 +4,12 @@ from sqlalchemy.orm import Session
 
 from docgen.ai.client import ModelError
 from docgen.chat.schemas import ChatEditOperation, ChatEditPlan, ChatEditRequest
-from docgen.chat.service import ChatGroundingError, ChatService, ChatValidationError
+from docgen.chat.service import (
+    ChatGroundingError,
+    ChatService,
+    ChatValidationError,
+    _relevant_source_blocks,
+)
 from docgen.db import Base
 from docgen.documents.models import ProjectArtifact
 from docgen.documents.operations import InsertNode, MoveNode, UpdateData, UpdateText, find_node
@@ -559,6 +564,61 @@ def test_chat_allows_grounded_generated_questions_from_source(
             quote="Заявка подтверждается оператором",
         )
     ]
+
+
+def test_chat_retries_empty_question_request_with_source_focused_prompt(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.results = [
+        ChatEditPlan(summary="Нет правок"),
+        ChatEditPlan(
+            summary="Добавлен вопрос",
+            operations=[
+                ChatEditOperation(
+                    operation=InsertNode(
+                        index=2,
+                        node=DocumentNode(
+                            id="question-from-source",
+                            kind=NodeKind.LIST,
+                            data={
+                                "items": [
+                                    (
+                                        "Вопрос: Кто подтверждает заявку? "
+                                        "Ответ: Заявку подтверждает оператор."
+                                    )
+                                ]
+                            },
+                        ),
+                    ),
+                    evidence_block_ids=["s1:b2"],
+                )
+            ],
+        ),
+    ]
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(
+            message="Добавь вопрос Кто подтверждает заявку?", expected_revision=2
+        ),
+    )
+
+    assert fake_model.calls == 2
+    assert "попросил добавить вопрос" in fake_model.systems[-1]
+    assert result.document.nodes[-1].provenance[0].source_id == "s1"
+
+
+def test_question_source_selection_prefers_matching_fragments() -> None:
+    blocks = _source_blocks("p1")
+
+    selected = _relevant_source_blocks(
+        blocks,
+        "Добавь вопрос Кто подтверждает заявку?",
+    )
+
+    assert selected[0].id == "s1:b2"
+    assert len(selected) < len(blocks)
 
 
 def test_chat_retries_grounded_request_after_invalid_evidence(

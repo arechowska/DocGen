@@ -354,6 +354,7 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     assert chat_form is not None
     assert chat_form.get("action") == f"/projects/{project_id}/chat"
     assert chat_form.get("hx-post") is None
+    assert soup.find(id="chatInput").get("rows") == "3"
     spacer = chat_form.find_next_sibling()
     assert spacer is not None
     assert "chat-result-spacer" in spacer.get("class", [])
@@ -367,7 +368,9 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
     assert ".result-actions .button{width:fit-content;min-width:180px}" in stylesheet.text
     assert ".chat-result-spacer{min-height:0}" in stylesheet.text
     assert ".chat-result-divider{height:3px" in stylesheet.text
-    assert "minmax(0,1fr) auto auto minmax(0,calc(1cm - 12px)) auto auto" in stylesheet.text
+    assert "minmax(0,1fr) auto auto minmax(0,calc(.5cm - 4px)) auto auto" in stylesheet.text
+    assert ".chat-form{min-height:96px}" in stylesheet.text
+    assert ".chat-form textarea{min-height:94px;max-height:150px}" in stylesheet.text
     assert ".chat-panel>.chat-form{grid-row:4}" in stylesheet.text
     assert ".chat-panel>.chat-result-spacer{grid-row:5}" in stylesheet.text
     assert ".chat-panel>.chat-result-divider{grid-row:6}" in stylesheet.text

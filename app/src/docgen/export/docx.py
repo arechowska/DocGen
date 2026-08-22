@@ -326,7 +326,7 @@ class DocxExporter:
             paragraph = docx_document.add_paragraph(style=_PARAGRAPH_STYLE)
             paragraph.add_run(f"{label}: ").bold = True
             paragraph.add_run(value)
-            paragraph.paragraph_format.space_after = Pt(8 if label == "Вопрос" else 14)
+            paragraph.paragraph_format.space_after = Pt(8 if label == "Вопрос" else 20)
 
     def _render_table(
         self, docx_document: docx.document.Document, node: DocumentNode
@@ -562,9 +562,9 @@ class DocxExporter:
 def _cover_title(title: str) -> str:
     normalized = " ".join(title.split()).strip()
     lowered = normalized.casefold()
-    for prefix in ("вопросы и ответы по модулю", "faq по модулю", "faq"):
+    for prefix in ("вопросы и ответы по модулю", "faq по модулю"):
         if lowered.startswith(prefix):
-            normalized = normalized[len(prefix) :].lstrip(" :—-")
+            normalized = f"FAQ {normalized[len(prefix) :].lstrip(' :—-')}"
             break
     if len(normalized) <= 42:
         return normalized or "Документ"

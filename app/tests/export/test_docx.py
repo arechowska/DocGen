@@ -126,6 +126,7 @@ def test_docx_contents_uses_document_headings(docx_template: FormattingTemplate)
     assert len(contents) == 2
     assert contents[0].style.name == "Colvir_Абзац"
     assert contents[0].paragraph_format.left_indent.twips == Cm(0.6).twips
+    assert len([p for p in package.paragraphs if p.text == "Настройки"]) == 2
 
 
 def test_docx_sets_title_paragraph_and_metadata(docx_template: FormattingTemplate) -> None:
@@ -169,7 +170,9 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
     title = next(
         p for p in package.paragraphs if p.style.name == "Colvir_Обложка_Название"
     )
-    assert title.text == "«Главная Книга» Colvir Banking System"
+    assert title.text == "FAQ «Главная Книга» Colvir Banking System"
+    header_text = package.sections[0].header.paragraphs[0].text
+    assert header_text.endswith("\tFAQ «Главная Книга» Colvir Banking System")
 
     heading = next(
         p
@@ -187,7 +190,7 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
     assert answer.runs[0].bold is True
     assert question._p.pPr.find(qn("w:numPr")) is None
     assert question.paragraph_format.space_after.twips == Pt(8).twips
-    assert answer.paragraph_format.space_after.twips == Pt(14).twips
+    assert answer.paragraph_format.space_after.twips == Pt(20).twips
 
 
 # --- heading level mapping --------------------------------------------------
