@@ -10,7 +10,7 @@ from docgen.documents.models import ProjectArtifact
 from docgen.documents.operations import InsertNode, MoveNode, UpdateData, UpdateText, find_node
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
-from docgen.extraction.schemas import BlockKind, NormalizedBlock
+from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job
 from docgen.projects.models import Project
 from docgen.sources.models import Source
@@ -107,21 +107,21 @@ def test_chat_applies_grounded_plan(chat_service: ChatService, fake_model: FakeM
     assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
 
 
-def test_chat_noop_plan_preserves_document_revision(
+def test_chat_noop_plan_is_not_reported_as_a_successful_edit(
     chat_service: ChatService,
     fake_model: FakeModel,
     session: Session,
 ) -> None:
     fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
 
-    result = chat_service.edit(
-        "p1",
-        ChatEditRequest(message="как дела", expected_revision=2),
-    )
+    with pytest.raises(
+        ChatGroundingError, match="Не удалось сформировать подтверждённую правку"
+    ):
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(message="как дела", expected_revision=2),
+        )
 
-    assert result.summary == "Нет правок"
-    assert result.revision == 2
-    assert find_node(result.document, "actor").text == "Оператор"
     stored = DocumentRepository(session).get_document_with_revision("p1")
     assert stored is not None
     _, persisted_revision = stored
@@ -552,6 +552,77 @@ def test_chat_allows_grounded_generated_questions_from_source(
     assert result.document.nodes[-1].data["items"] == [
         "Как оператор подтверждает заявку?"
     ]
+    assert result.document.nodes[-1].provenance == [
+        Provenance(
+            source_id="s1",
+            locator="paragraph-2",
+            quote="Заявка подтверждается оператором",
+        )
+    ]
+
+
+def test_chat_retries_grounded_request_after_invalid_evidence(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    invalid = ChatEditPlan(
+        summary="Добавлены вопросы",
+        operations=[
+            ChatEditOperation(
+                operation=InsertNode(
+                    index=2,
+                    node=DocumentNode(
+                        id="questions-invalid",
+                        kind=NodeKind.LIST,
+                        data={"items": ["Как оператор подтверждает заявку?"]},
+                    ),
+                ),
+            )
+        ],
+    )
+    grounded = ChatEditPlan(
+        summary="Добавлены вопросы",
+        operations=[
+            ChatEditOperation(
+                operation=InsertNode(
+                    index=2,
+                    node=DocumentNode(
+                        id="questions-grounded",
+                        kind=NodeKind.LIST,
+                        data={"items": ["Как оператор подтверждает заявку?"]},
+                    ),
+                ),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+    fake_model.results = [invalid, grounded]
+
+    result = chat_service.edit(
+        "p1",
+        ChatEditRequest(message="Добавь ещё вопросов", expected_revision=2),
+    )
+
+    assert fake_model.calls == 2
+    assert "не прошёл проверку источников" in fake_model.systems[-1].casefold()
+    assert result.document.nodes[-1].data["items"] == [
+        "Как оператор подтверждает заявку?"
+    ]
+    assert result.document.nodes[-1].provenance[0].source_id == "s1"
+
+
+def test_chat_rejects_empty_grounded_plan(
+    chat_service: ChatService, fake_model: FakeModel
+) -> None:
+    fake_model.result = ChatEditPlan(summary="Нет правок")
+
+    with pytest.raises(
+        ChatGroundingError, match="Не удалось сформировать подтверждённую правку"
+    ):
+        chat_service.edit(
+            "p1",
+            ChatEditRequest(message="Уточни порядок подтверждения", expected_revision=2),
+        )
 
 
 def test_chat_allows_style_only_data_operation_without_evidence(
@@ -682,6 +753,13 @@ def _source_blocks(project_id: str) -> list[NormalizedBlock]:
             id="s1:b2",
             kind=BlockKind.TEXT,
             text="Заявка подтверждается оператором",
+            provenance=[
+                Provenance(
+                    source_id="s1",
+                    locator="paragraph-2",
+                    quote="Заявка подтверждается оператором",
+                )
+            ],
             confidence=1,
         ),
         NormalizedBlock(

@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.extraction.schemas import Provenance
 
 
 class UpdateText(BaseModel):
@@ -39,8 +40,14 @@ class UpdateData(BaseModel):
     data: dict
 
 
+class UpdateProvenance(BaseModel):
+    kind: Literal["update_provenance"] = "update_provenance"
+    node_id: str
+    provenance: list[Provenance]
+
+
 DocumentOperation = Annotated[
-    UpdateText | InsertNode | DeleteNode | MoveNode | UpdateData,
+    UpdateText | InsertNode | DeleteNode | MoveNode | UpdateData | UpdateProvenance,
     Field(discriminator="kind"),
 ]
 
@@ -78,6 +85,12 @@ def _apply_one(document: WorkingDocument, operation: DocumentOperation) -> Worki
             document,
             operation.node_id,
             lambda node: node.model_copy(update={"data": operation.data}),
+        )
+    if isinstance(operation, UpdateProvenance):
+        return _replace_node(
+            document,
+            operation.node_id,
+            lambda node: node.model_copy(update={"provenance": operation.provenance}),
         )
     if isinstance(operation, InsertNode):
         _validate_index(operation.index)

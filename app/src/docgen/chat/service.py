@@ -22,12 +22,13 @@ from docgen.documents.operations import (
     InsertNode,
     MoveNode,
     UpdateData,
+    UpdateProvenance,
     UpdateText,
     find_node,
 )
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
-from docgen.extraction.schemas import NormalizedBlock
+from docgen.extraction.schemas import NormalizedBlock, Provenance
 
 CHAT_SYSTEM_PROMPT = """
 Вы редактируете DocGen-документ на русском языке.
@@ -53,6 +54,10 @@ CHAT_RETRY_PROMPT = """
 
 CHAT_STRUCTURAL_RETRY_PROMPT = """
 Пользователь запросил структурирование существующего документа. Выполни команду: верни хотя бы одну операцию MoveNode или InsertNode, если документ содержит блоки для перестановки или группировки. Это не добавление фактов, поэтому evidence_block_ids оставь пустым. Не меняй текст существующих блоков и не возвращай пустой operations.
+""".strip()
+
+CHAT_GROUNDING_RETRY_PROMPT = """
+Предыдущий план не прошёл проверку источников. Исправь план: каждая фактическая операция должна ссылаться в evidence_block_ids на существующие source_blocks, подтверждающие добавляемый или изменяемый текст. Не используй идентификаторы наугад. Если подтверждения нет, исключи такую операцию.
 """.strip()
 
 _STRUCTURAL_REQUEST_PATTERN = re.compile(
@@ -133,7 +138,15 @@ class ChatService:
                 user=_serialized_context(document, source_blocks, message),
                 schema=ChatEditPlan,
             )
-        _validate_plan(document, source_blocks, plan)
+        try:
+            _validate_plan(document, source_blocks, plan)
+        except ChatGroundingError:
+            plan = self._model.generate_json(
+                system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_GROUNDING_RETRY_PROMPT}",
+                user=_serialized_context(document, source_blocks, message),
+                schema=ChatEditPlan,
+            )
+            _validate_plan(document, source_blocks, plan)
         if not plan.operations:
             if manual_operations:
                 return self._apply_manual_insert(
@@ -147,10 +160,8 @@ class ChatService:
                     raise ChatValidationError(
                         "Не удалось определить разделы документа. Уточните, по каким темам его разделить"
                     )
-                return ChatEditResult(
-                    summary=plan.summary,
-                    document=document,
-                    revision=current_revision,
+                raise ChatGroundingError(
+                    "Не удалось сформировать подтверждённую правку по источникам"
                 )
             result = DocumentEditService(self._documents).apply(
                 project_id,
@@ -163,7 +174,7 @@ class ChatService:
                 revision=result.revision,
             )
 
-        operations = _operations_for_application(document, plan)
+        operations = _operations_for_application(document, plan, source_blocks)
         result = DocumentEditService(self._documents).apply(
             project_id,
             request.expected_revision,
@@ -237,18 +248,67 @@ def _validate_plan(
 def _operations_for_application(
     document: WorkingDocument,
     plan: ChatEditPlan,
+    source_blocks: list[NormalizedBlock],
 ) -> list[DocumentOperation]:
+    evidence_by_id = {block.id: block for block in source_blocks}
     operations: list[DocumentOperation] = []
+    provenance_by_node: dict[str, list[Provenance]] = {}
     for item in plan.operations:
         operation = item.operation
+        provenance = _provenance_for_evidence(item.evidence_block_ids, evidence_by_id)
         if isinstance(operation, UpdateData):
             node = find_node(document, operation.node_id)
             if node is not None:
                 operation = operation.model_copy(
                     update={"data": _merged_data(node.data, operation.data)}
                 )
+        elif isinstance(operation, InsertNode) and provenance:
+            operation = operation.model_copy(
+                update={
+                    "node": operation.node.model_copy(
+                        update={"provenance": provenance}
+                    )
+                }
+            )
         operations.append(operation)
+        if provenance and isinstance(operation, (UpdateText, UpdateData)):
+            node = find_node(document, operation.node_id)
+            if node is not None:
+                merged_provenance = _merge_provenance(
+                    provenance_by_node.get(operation.node_id, node.provenance), provenance
+                )
+                provenance_by_node[operation.node_id] = merged_provenance
+                operations.append(
+                    UpdateProvenance(
+                        node_id=operation.node_id,
+                        provenance=merged_provenance,
+                    )
+                )
     return operations
+
+
+def _provenance_for_evidence(
+    evidence_block_ids: list[str], evidence_by_id: dict[str, NormalizedBlock]
+) -> list[Provenance]:
+    provenance = [
+        item
+        for block_id in evidence_block_ids
+        for item in evidence_by_id[block_id].provenance
+    ]
+    return _merge_provenance([], provenance)
+
+
+def _merge_provenance(
+    existing: list[Provenance], additions: list[Provenance]
+) -> list[Provenance]:
+    seen: set[tuple[str, str, str | None]] = set()
+    result: list[Provenance] = []
+    for item in [*existing, *additions]:
+        key = (item.source_id, item.locator, item.quote)
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
 
 
 def _fallback_formatting_operations(
