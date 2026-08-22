@@ -1010,15 +1010,37 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     assert detail_response.status_code == 200
     assert 'id="checkTargetSelect"' not in detail_response.text
 
-    response = client.get(f"/projects/{project_with_source.id}/jobs/{job.id}")
+    browser_response = client.get(
+        f"/projects/{project_with_source.id}/jobs/{job.id}",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert browser_response.status_code == 303
+    assert browser_response.headers["location"] == (
+        f"/projects/{project_with_source.id}#docgen2Editor"
+    )
+
+    response = client.get(
+        f"/projects/{project_with_source.id}/jobs/{job.id}",
+        headers={"HX-Request": "true"},
+    )
     assert response.status_code == 200
     assert 'id="generation-status"' in response.text
     assert "Проверка по шаблону" in response.text
     assert "Проблем не найдено" in response.text
     assert f'href="/projects/{project_with_source.id}/report"' in response.text
+    assert 'id="docgen2Editor"' in response.text
+    assert 'hx-swap-oob="outerHTML"' in response.text
+    assert "Case" in response.text
+    assert 'id="chatPanel"' in response.text
 
     full_report_response = client.get(f"/projects/{project_with_source.id}/report")
     assert "Результат проверки" in full_report_response.text
+    assert (
+        f'href="/projects/{project_with_source.id}#docgen2Editor"'
+        in full_report_response.text
+    )
+    assert "Открыть рабочую копию" in full_report_response.text
     assert "Непроверенные правила" in full_report_response.text
     assert unchecked_rules[0] not in full_report_response.text
 

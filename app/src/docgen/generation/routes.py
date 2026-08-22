@@ -427,16 +427,26 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
             )
             if report is not None:
                 if _wants_full_page(request):
-                    return _report_response(
+                    return RedirectResponse(
+                        url=f"/projects/{job.project_id}#docgen2Editor",
+                        status_code=status.HTTP_303_SEE_OTHER,
+                    )
+                document = documents.get_document_at_revision(
+                    job.project_id,
+                    job.result_report_revision,
+                )
+                if document is None:
+                    return _status_response(
                         request,
-                        job.project_id,
-                        report,
-                        standalone=True,
-                        warnings=job.warning_messages,
+                        job,
+                        notice="Результат задания заменён более новым",
                     )
                 return _check_complete_response(
                     request,
+                    session,
                     job.project_id,
+                    document,
+                    job.result_report_revision,
                     report,
                     warnings=job.warning_messages,
                 )
@@ -504,31 +514,18 @@ def _assemble_complete_response(
     *,
     warnings: tuple[str, ...] = (),
 ) -> Response:
-    project = _project_or_404(session, project_id)
-    sources = SourceRepository(session).list_for_project(project_id)
-    documents = DocumentRepository(session)
-    template_catalog = TemplateCatalog(
-        external_directory=request.app.state.settings.template_dir
+    context = _workspace_completion_context(
+        request,
+        session,
+        project_id,
+        document,
+        revision,
     )
+    context["warnings"] = warnings
     response = templates.TemplateResponse(
         request=request,
         name="generation/assemble_complete.html",
-        context={
-            "project": project,
-            "project_id": project_id,
-            "sources": sources,
-            "check_targets": [
-                source for source in sources if is_supported_check_target(source)
-            ],
-            "templates": template_catalog.list(),
-            "document": document,
-            "revision": revision,
-            "has_document": True,
-            "has_report": documents.get_report(project_id) is not None,
-            "source_error": None,
-            "generation_error": None,
-            "warnings": warnings,
-        },
+        context=context,
     )
     response.headers["HX-Trigger"] = json.dumps(
         {"docgen:document-ready": {}}, ensure_ascii=False
@@ -563,25 +560,68 @@ def _report_response(
 
 def _check_complete_response(
     request: Request,
+    session: Session,
     project_id: str,
+    document: WorkingDocument,
+    revision: int,
     report: CheckReport,
     *,
     warnings: tuple[str, ...] = (),
 ) -> Response:
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
-    return templates.TemplateResponse(
-        request=request,
-        name="generation/check_complete.html",
-        context={
-            "project_id": project_id,
+    context = _workspace_completion_context(
+        request,
+        session,
+        project_id,
+        document,
+        revision,
+    )
+    context.update(
+        {
             "report": report,
             "confirmed": confirmed,
             "low_confidence": low_confidence,
             "rule_instructions": _rule_instructions(request, report.template_id),
             "warnings": warnings,
-        },
+        }
     )
+    return templates.TemplateResponse(
+        request=request,
+        name="generation/check_complete.html",
+        context=context,
+    )
+
+
+def _workspace_completion_context(
+    request: Request,
+    session: Session,
+    project_id: str,
+    document: WorkingDocument,
+    revision: int,
+) -> dict[str, object]:
+    project = _project_or_404(session, project_id)
+    sources = SourceRepository(session).list_for_project(project_id)
+    documents = DocumentRepository(session)
+    template_catalog = TemplateCatalog(
+        external_directory=request.app.state.settings.template_dir
+    )
+    return {
+        "project": project,
+        "project_id": project_id,
+        "sources": sources,
+        "check_targets": [
+            source for source in sources if is_supported_check_target(source)
+        ],
+        "templates": template_catalog.list(),
+        "document": document,
+        "revision": revision,
+        "workspace_html": documents.get_workspace_html(project_id),
+        "has_document": True,
+        "has_report": documents.get_report(project_id) is not None,
+        "source_error": None,
+        "generation_error": None,
+    }
 
 
 def _rule_instructions(request: Request, template_id: str) -> dict[str, str]:

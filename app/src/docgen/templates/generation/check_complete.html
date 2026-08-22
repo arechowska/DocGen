@@ -9,4 +9,12 @@
   {% endif %}
 </div>
 
+{% set source_panel_oob = true %}
+{% set review_button_oob = true %}
+{% include "projects/source_panel.html" %}
+
+{% set editor_oob = true %}
+{% include "projects/work_panel.html" %}
+{% include "projects/action_panel.html" %}
+
 {% include "chat/check_result.html" %}
