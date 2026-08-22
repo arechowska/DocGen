@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from pydantic import ValidationError
 
@@ -111,16 +112,18 @@ class CheckWorkflow:
             raise WorkflowError(_DOCUMENT_GROUNDING_ERROR)
 
         progress(90, "Проверка документа моделью")
+        model_template = _template_for_model_check(template)
         raw_report = self._text_model.generate_json(
             CHECK_SYSTEM_PROMPT,
-            _check_prompt(template, evidence_blocks, document),
+            _check_prompt(model_template, evidence_blocks, document),
             CheckReport,
         )
         try:
             model_report = CheckReport.model_validate(raw_report)
         except ValidationError as exc:
             raise WorkflowError(_REPORT_SCHEMA_ERROR) from exc
-        report = _validated_report(model_report, template, document)
+        report = _validated_report(model_report, model_template, document)
+        report = _merge_structure_check(report, template, document)
 
         progress(100, "Сохранение отчёта")
         progress.checkpoint()
@@ -275,6 +278,155 @@ def _validated_report(
         )
     except ValidationError as exc:
         raise WorkflowError(_REPORT_SCHEMA_ERROR) from exc
+
+
+def _template_for_model_check(template: SemanticTemplate) -> SemanticTemplate:
+    structure_check = template.structure_check
+    if structure_check is None:
+        return template
+    return template.model_copy(
+        update={
+            "rules": tuple(
+                rule for rule in template.rules if rule.id != structure_check.rule_id
+            ),
+            "structure_check": None,
+        }
+    )
+
+
+def _merge_structure_check(
+    report: CheckReport,
+    template: SemanticTemplate,
+    document: WorkingDocument,
+) -> CheckReport:
+    contract = template.structure_check
+    if contract is None:
+        return report
+    rules = {rule.id: rule for rule in template.rules}
+    rule = rules[contract.rule_id]
+    message = _structure_mismatch_message(template, document)
+    findings = list(report.findings)
+    passed = set(report.passed_rule_ids)
+    if message is None:
+        passed.add(contract.rule_id)
+    else:
+        findings.insert(
+            0,
+            CheckFinding(
+                code="template-structure-mismatch",
+                severity=Severity(rule.severity),
+                confidence=1.0,
+                message=message,
+                rule_id=contract.rule_id,
+            ),
+        )
+    return CheckReport(
+        template_id=template.id,
+        findings=findings,
+        passed_rule_ids=tuple(rule.id for rule in template.rules if rule.id in passed),
+        unchecked_rules=[
+            rule.id for rule in template.rules if rule.id in report.unchecked_rules
+        ],
+    )
+
+
+def _structure_mismatch_message(
+    template: SemanticTemplate,
+    document: WorkingDocument,
+) -> str | None:
+    contract = template.structure_check
+    if contract is None:
+        return None
+    if (
+        document.origin is DocumentOrigin.ASSEMBLED
+        and document.build_template_id == template.id
+    ):
+        nodes_by_section = {
+            node.section_id: node
+            for node in document.nodes
+            if node.kind is NodeKind.HEADING and node.section_id
+        }
+        missing_ids = [
+            section_id
+            for section_id in contract.assembled_section_ids
+            if section_id not in nodes_by_section
+            or not nodes_by_section[section_id].children
+        ]
+        if not missing_ids:
+            return None
+        titles = {section.id: section.title for section in template.sections}
+        missing = ", ".join(
+            f"«{titles.get(section_id, section_id)}»" for section_id in missing_ids
+        )
+        return f"В собранном документе «{template.name}» отсутствуют разделы: {missing}."
+
+    headings = [
+        _normalized_heading(node.text)
+        for node in _walk_nodes(document.nodes)
+        if node.kind is NodeKind.HEADING and node.text
+    ]
+    missing_headings = [
+        heading
+        for heading in contract.required_headings
+        if _normalized_heading(heading) not in headings
+    ]
+    table_cells = [
+        [
+            _normalized_label(cell)
+            for row in node.data.get("rows", [])
+            if isinstance(row, list)
+            for cell in row
+        ]
+        for node in _walk_nodes(document.nodes)
+        if node.kind is NodeKind.TABLE and isinstance(node.data.get("rows"), list)
+    ]
+    differences: list[str] = []
+    if missing_headings:
+        differences.append(
+            "отсутствуют разделы: "
+            + ", ".join(f"«{heading}»" for heading in missing_headings)
+        )
+    for required_table in contract.required_tables:
+        expected = {
+            label: _normalized_label(label) for label in required_table.required_labels
+        }
+        best_matches: set[str] = set()
+        for cells in table_cells:
+            matches = {
+                label
+                for label, normalized in expected.items()
+                if any(normalized in cell for cell in cells)
+            }
+            if len(matches) > len(best_matches):
+                best_matches = matches
+        if len(best_matches) == len(expected):
+            continue
+        missing_labels = [
+            label for label in required_table.required_labels if label not in best_matches
+        ]
+        if not best_matches:
+            differences.append(f"отсутствует таблица «{required_table.title}»")
+        else:
+            differences.append(
+                f"в таблице «{required_table.title}» отсутствуют поля: "
+                + ", ".join(f"«{label}»" for label in missing_labels)
+            )
+    if not differences:
+        return None
+    return (
+        f"Структура документа не совпадает с полной формой «{template.name}»: "
+        + "; ".join(differences)
+        + ". Пустые значения допустимы — нужно добавить именно отсутствующие "
+        "элементы формы."
+    )
+
+
+def _normalized_label(value: object) -> str:
+    return " ".join(str(value).split()).casefold()
+
+
+def _normalized_heading(value: object) -> str:
+    return re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", _normalized_label(value))
 
 
 def _walk_nodes(nodes: list) -> list:

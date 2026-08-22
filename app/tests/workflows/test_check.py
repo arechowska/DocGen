@@ -18,12 +18,15 @@ from docgen.documents.schemas import (
 )
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind, JobStatus
+from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticRule, SemanticSection, SemanticTemplate
 from docgen.workflows.assemble import WorkflowError
 from docgen.workflows.check import (
     CheckWorkflow,
     _check_prompt,
+    _merge_structure_check,
     _target_document,
+    _template_for_model_check,
     _validated_report,
 )
 from docgen.workflows.normalize import NormalizedProject
@@ -686,6 +689,91 @@ def test_check_allows_current_document_to_use_another_semantic_profile(
     assert report.template_id == "use-case"
     assert documents.document.template_id == "faq"
     assert events[-1] == "save"
+
+
+def test_use_case_form_check_is_local_and_not_delegated_to_model() -> None:
+    template = TemplateCatalog().get("use-case")
+
+    model_template = _template_for_model_check(template)
+    prompt = json.loads(
+        _check_prompt(
+            model_template,
+            [],
+            WorkingDocument(title="Исходник", template_id=NO_TEMPLATE_ID),
+        )
+    )
+
+    assert "use-case-template-form" not in {
+        rule["id"] for rule in prompt["правила"]
+    }
+    assert {rule.id for rule in model_template.rules} == {
+        rule.id for rule in template.rules if rule.id != "use-case-template-form"
+    }
+
+
+def test_use_case_form_check_reports_missing_structure_even_when_model_passes() -> None:
+    template = TemplateCatalog().get("use-case")
+    model_template = _template_for_model_check(template)
+    document = WorkingDocument(
+        title="Исходный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[DocumentNode(kind=NodeKind.PARAGRAPH, text="Описание сценария")],
+    )
+    model_report = CheckReport(
+        template_id=template.id,
+        passed_rule_ids=tuple(rule.id for rule in model_template.rules),
+    )
+
+    validated = _validated_report(model_report, model_template, document)
+    report = _merge_structure_check(validated, template, document)
+
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.rule_id == "use-case-template-form"
+    )
+    assert finding.code == "template-structure-mismatch"
+    assert finding.confidence == 1
+    assert "«Общие сведения»" in finding.message
+    assert "«История изменений»" in finding.message
+    assert "use-case-template-form" not in report.passed_rule_ids
+
+
+def test_use_case_form_check_accepts_empty_values_in_complete_form() -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    nodes = [
+        DocumentNode(kind=NodeKind.HEADING, text=heading)
+        for heading in contract.required_headings
+    ]
+    nodes.extend(
+        DocumentNode(
+            kind=NodeKind.TABLE,
+            data={"rows": [[label, ""] for label in table.required_labels]},
+        )
+        for table in contract.required_tables
+    )
+    document = WorkingDocument(
+        title="Корпоративный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=nodes,
+    )
+    model_template = _template_for_model_check(template)
+    model_report = CheckReport(
+        template_id=template.id,
+        passed_rule_ids=tuple(rule.id for rule in model_template.rules),
+    )
+
+    validated = _validated_report(model_report, model_template, document)
+    report = _merge_structure_check(validated, template, document)
+
+    assert report.findings == []
+    assert report.passed_rule_ids == tuple(rule.id for rule in template.rules)
 
 
 def _rule(rule_id: str, dimension: Any, severity: Any, instruction: str) -> SemanticRule:

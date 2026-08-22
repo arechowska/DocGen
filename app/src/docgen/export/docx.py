@@ -26,6 +26,13 @@ from docgen.export._naming import make_safe_filename
 from docgen.export.html import ImageAsset, ImageLoader, local_storage_image_loader
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
+from docgen.templates_catalog.use_case import (
+    USE_CASE_DESCRIPTION_ROWS,
+    USE_CASE_HISTORY_HEADERS,
+    USE_CASE_LINK_HEADERS,
+    USE_CASE_METADATA_FIELDS,
+    USE_CASE_TECHNICAL_HEADERS,
+)
 
 __all__ = ["DocxExporter", "ImageAsset", "ImageLoader", "local_storage_image_loader"]
 
@@ -60,37 +67,6 @@ _CAPTION_STYLE = "Colvir_Рисунок_Подпись"
 _TABLE_STYLE = "Colvir_сетка_таблицы"
 _TABLE_HEADER_CELL_STYLE = "Colvir_Таблица_заголовок"
 _TABLE_BODY_CELL_STYLE = "Colvir_Таблица_текст"
-
-_USE_CASE_METADATA_FIELDS = (
-    "Код документа",
-    "Наименование",
-    "Версия документа",
-    "Статус документа",
-    "Модуль",
-    "Номер задачи ТС",
-    "Полезность",
-    "Страна",
-    "Кастомизация",
-    "Аналитик",
-)
-_USE_CASE_DESCRIPTION_ROWS = (
-    ("Область действия", "scope"),
-    ("Уровень цели", "goal-level"),
-    ("Основное действующее лицо", "primary-actor"),
-    ("Цель основного действующего лица", "actor-goal"),
-    ("Участники и интересы", None),
-    ("Участники и интересы", "actors"),
-    ("Участники и интересы", None),
-    ("Предусловия", "preconditions"),
-    ("Минимальные гарантии", "minimum-guarantees"),
-    ("Инициируется", "trigger"),
-    ("Основной сценарий", "main-flow"),
-    ("Результат основного сценария", "result"),
-    ("Альтернативный вариант", "alternative-flow"),
-    ("Список изменений в технологиях и данных", None),
-    ("Показатели назначения", None),
-    ("Открытые вопросы", "open-questions"),
-)
 
 _LIST_INDENT_LEFT_TWIPS = 720
 _LIST_INDENT_HANGING_TWIPS = 360
@@ -286,11 +262,11 @@ class DocxExporter:
         }
         self._add_form_heading(docx_document, "Общие сведения")
         metadata = docx_document.add_table(
-            rows=len(_USE_CASE_METADATA_FIELDS),
+            rows=len(USE_CASE_METADATA_FIELDS),
             cols=2,
         )
         metadata.style = _TABLE_STYLE
-        for row_index, label in enumerate(_USE_CASE_METADATA_FIELDS):
+        for row_index, label in enumerate(USE_CASE_METADATA_FIELDS):
             self._set_cell_text(
                 metadata.cell(row_index, 0),
                 label,
@@ -312,11 +288,11 @@ class DocxExporter:
         self._add_form_heading(docx_document, "Описание")
 
         description = docx_document.add_table(
-            rows=len(_USE_CASE_DESCRIPTION_ROWS),
+            rows=len(USE_CASE_DESCRIPTION_ROWS),
             cols=3,
         )
         description.style = _TABLE_STYLE
-        for row_index, (label, section_id) in enumerate(_USE_CASE_DESCRIPTION_ROWS):
+        for row_index, (label, section_id) in enumerate(USE_CASE_DESCRIPTION_ROWS):
             self._set_cell_text(
                 description.cell(row_index, 0),
                 label,
@@ -346,21 +322,14 @@ class DocxExporter:
         self._add_form_heading(docx_document, "Приложения: Технические спецификации")
         self._add_empty_form_table(
             docx_document,
-            ("Наименование", "Спецификация", "Примечание"),
+            USE_CASE_TECHNICAL_HEADERS,
         )
         self._add_form_heading(docx_document, "Ссылки")
-        self._add_empty_form_table(docx_document, ("Ссылка", "Примечание"))
+        self._add_empty_form_table(docx_document, USE_CASE_LINK_HEADERS)
         self._add_form_heading(docx_document, "История изменений")
         self._add_empty_form_table(
             docx_document,
-            (
-                "Версия документа",
-                "Ссылка на версию документа",
-                "Дата",
-                "Изменил",
-                "Состав изменений",
-                "Версия АБС/ Номер патча",
-            ),
+            USE_CASE_HISTORY_HEADERS,
             empty_rows=2,
         )
         self._add_form_heading(docx_document, "Термины и определения")

@@ -45,6 +45,13 @@ def _validate_russian_text(value: str, *, minimum_length: int | None = None) -> 
     return normalized_value
 
 
+def _validate_template_name(value: str) -> str:
+    normalized_value = " ".join(value.split())
+    if not normalized_value:
+        raise ValueError("Название шаблона не должно быть пустым")
+    return normalized_value
+
+
 class SemanticSection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -78,6 +85,44 @@ class SemanticRule(BaseModel):
         return _validate_russian_text(value, minimum_length=10)
 
 
+class SemanticTableCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    required_labels: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        return _validate_russian_text(value)
+
+    @field_validator("required_labels")
+    @classmethod
+    def validate_labels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_validate_russian_text(label) for label in value)
+
+
+class SemanticStructureCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule_id: str = Field(min_length=1)
+    required_headings: tuple[str, ...] = ()
+    required_tables: tuple[SemanticTableCheck, ...] = ()
+    assembled_section_ids: tuple[str, ...] = ()
+
+    @field_validator("required_headings")
+    @classmethod
+    def validate_headings(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_validate_russian_text(heading) for heading in value)
+
+    @model_validator(mode="after")
+    def validate_structure(self) -> SemanticStructureCheck:
+        if not self.required_headings and not self.required_tables:
+            raise ValueError("Структурная проверка должна содержать разделы или таблицы")
+        return self
+
+
 class SemanticTemplate(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -87,11 +132,12 @@ class SemanticTemplate(BaseModel):
     sections: tuple[SemanticSection, ...] = Field(min_length=3)
     rules: tuple[SemanticRule, ...] = Field(min_length=5)
     style_rules: tuple[str, ...] = Field(min_length=1)
+    structure_check: SemanticStructureCheck | None = None
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        return _validate_russian_text(value)
+        return _validate_template_name(value)
 
     @field_validator("style_rules")
     @classmethod
@@ -109,6 +155,17 @@ class SemanticTemplate(BaseModel):
         rule_ids = [rule.id for rule in self.rules]
         if len(rule_ids) != len(set(rule_ids)):
             raise ValueError("Повторяющийся идентификатор правила")
+        if self.structure_check is not None:
+            if self.structure_check.rule_id not in rule_ids:
+                raise ValueError("Правило структурной проверки не найдено")
+            table_ids = [table.id for table in self.structure_check.required_tables]
+            if len(table_ids) != len(set(table_ids)):
+                raise ValueError("Повторяющаяся таблица структурной проверки")
+            unknown_sections = (
+                set(self.structure_check.assembled_section_ids) - set(section_ids)
+            )
+            if unknown_sections:
+                raise ValueError("Раздел структурной проверки не найден")
 
         required_dimensions = {
             "structure",

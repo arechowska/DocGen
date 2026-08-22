@@ -973,7 +973,13 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     job = _jobs_for_project(client, project_with_source.id)[0]
 
     catalog = TemplateCatalog()
-    unchecked_rules = [rule.id for rule in catalog.get("use-case").rules]
+    template = catalog.get("use-case")
+    structural_rule_id = (
+        template.structure_check.rule_id if template.structure_check is not None else None
+    )
+    unchecked_rules = [
+        rule.id for rule in template.rules if rule.id != structural_rule_id
+    ]
     with _session(client) as session:
         workflow = CheckWorkflow(
             projects=ProjectRepository(session),
@@ -1027,7 +1033,7 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     assert response.status_code == 200
     assert 'id="generation-status"' in response.text
     assert "Проверка по шаблону" in response.text
-    assert "Проблем не найдено" in response.text
+    assert "Структура документа не совпадает с полной формой" in response.text
     assert f'href="/projects/{project_with_source.id}/report"' in response.text
     assert 'id="docgen2Editor"' in response.text
     assert 'hx-swap-oob="outerHTML"' in response.text

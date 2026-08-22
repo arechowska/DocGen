@@ -5,6 +5,14 @@ from pathlib import Path
 import pytest
 
 from docgen.templates_catalog.loader import TemplateCatalog, TemplateConfigurationError
+from docgen.templates_catalog.use_case import (
+    USE_CASE_DESCRIPTION_ROWS,
+    USE_CASE_FORM_HEADINGS,
+    USE_CASE_HISTORY_HEADERS,
+    USE_CASE_LINK_HEADERS,
+    USE_CASE_METADATA_FIELDS,
+    USE_CASE_TECHNICAL_HEADERS,
+)
 
 REQUIRED_TEMPLATE_IDS = {
     "faq",
@@ -92,8 +100,25 @@ def test_catalog_get_returns_template_by_id(catalog: TemplateCatalog) -> None:
     """Fails if lookup does not return the loaded semantic template."""
     template = catalog.get("use-case")
 
-    assert template.name == "Корпоративный сценарий использования Colvir"
+    assert template.name == "Use Case"
     assert len(template.sections) >= 3
+
+
+def test_use_case_structure_check_matches_corporate_export_form(
+    catalog: TemplateCatalog,
+) -> None:
+    contract = catalog.get("use-case").structure_check
+    assert contract is not None
+    tables = {table.id: table.required_labels for table in contract.required_tables}
+
+    assert contract.required_headings == USE_CASE_FORM_HEADINGS
+    assert tables["metadata"] == USE_CASE_METADATA_FIELDS
+    assert tables["description"] == tuple(
+        dict.fromkeys(label for label, _section_id in USE_CASE_DESCRIPTION_ROWS)
+    )
+    assert tables["technical-specifications"] == USE_CASE_TECHNICAL_HEADERS
+    assert tables["links"] == USE_CASE_LINK_HEADERS
+    assert tables["change-history"] == USE_CASE_HISTORY_HEADERS
 
 
 def test_catalog_default_path_is_independent_from_current_directory(
@@ -175,6 +200,17 @@ def test_catalog_rejects_english_section_title(tmp_path: Path) -> None:
         TemplateCatalog(tmp_path).list()
 
 
+@pytest.mark.parametrize("name", ["FAQ", "Release notes", "API Docs"])
+def test_catalog_accepts_product_facing_template_name(tmp_path: Path, name: str) -> None:
+    write_complete_catalog(tmp_path)
+    product_name = template_with_id("faq").replace(
+        "name: Корректный шаблон", f"name: {name}", 1
+    )
+    write_yaml(tmp_path / "faq.yaml", product_name)
+
+    assert TemplateCatalog(tmp_path).get("faq").name == name
+
+
 def test_catalog_rejects_english_section_description(tmp_path: Path) -> None:
     """Fails if a user-facing section description does not contain Russian text."""
     write_complete_catalog(tmp_path)
@@ -190,7 +226,6 @@ def test_catalog_rejects_english_section_description(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("source", "replacement"),
     [
-        ("name: Корректный шаблон", "name: English template Я"),
         ("title: Обзор", "title: English title Я"),
         ("Кратко описывает назначение документа.", "English description Я"),
         ("Проверьте порядок обязательных разделов.", "English instruction Я"),
