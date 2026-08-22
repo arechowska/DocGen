@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from docgen.ai.client import ModelCompletion
 from docgen.ai.grounding import GroundingValidator
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
@@ -229,6 +230,16 @@ def _session(client: TestClient) -> Iterator[Any]:
 
 class _DeterministicStage2Model:
     def generate_json(self, system: str, user: str, schema: type[Any]) -> Any:
+        return self._generate(system, user, schema)
+
+    def generate_json_completion(
+        self, system: str, user: str, schema: type[Any]
+    ) -> ModelCompletion[Any]:
+        return ModelCompletion(
+            value=self._generate(system, user, schema), finish_reason="stop"
+        )
+
+    def _generate(self, system: str, user: str, schema: type[Any]) -> Any:
         assert system
         payload = json.loads(user)
         if schema is CheckReport:
@@ -264,6 +275,34 @@ class _DeterministicStage2Model:
                     ],
                 )
             )
+        covered_block_ids = {
+            provenance.source_id for node in nodes for provenance in node.provenance
+        }
+        leftover_provenance = [
+            Provenance(
+                source_id=block["id"],
+                locator=block["locators"][0],
+                quote=block["text"],
+            )
+            for block in payload["исходные_блоки"]
+            if block["kind"] != "heading"
+            and block["text"].strip()
+            and block["id"] not in covered_block_ids
+        ]
+        if leftover_provenance:
+            if nodes:
+                nodes[0] = nodes[0].model_copy(
+                    update={"provenance": [*nodes[0].provenance, *leftover_provenance]}
+                )
+            else:
+                nodes.append(
+                    DocumentNode(
+                        kind=NodeKind.PARAGRAPH,
+                        section_id=payload["шаблон"]["sections"][0]["id"],
+                        text="Дополнительные сведения",
+                        provenance=leftover_provenance,
+                    )
+                )
         return WorkingDocument(
             title="Перевод между своими счетами",
             template_id="use-case",

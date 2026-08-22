@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     max_archive_entries: int = Field(default=10_000, gt=0)
     max_archive_uncompressed_bytes: int = Field(default=209_715_200, gt=0)
     max_model_request_bytes: int = Field(default=20_971_520, gt=0)
+    assembly_batch_chars: int = Field(default=40_000, gt=0)
     max_job_seconds: int = Field(default=300, gt=0)
     template_dir: Path | None = None
     formatting_template_dir: Path | None = None

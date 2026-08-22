@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
 import httpx
@@ -26,12 +27,26 @@ class ModelResponseFormatError(ModelError):
     """The model response could not be parsed into the requested schema."""
 
 
+class ModelOutputLimitError(ModelError):
+    """The model's response was cut off by a length limit before completing."""
+
+
 class ModelConfigurationError(ValueError):
     """Raised when a production model adapter cannot be configured."""
 
 
+@dataclass(frozen=True)
+class ModelCompletion[T]:
+    value: T
+    finish_reason: str | None = None
+
+
 class TextModel(Protocol):
     def generate_json(self, system: str, user: str, schema: type[T]) -> T: ...
+
+    def generate_json_completion(
+        self, system: str, user: str, schema: type[T]
+    ) -> ModelCompletion[T]: ...
 
 
 class VisionDescription(BaseModel):
@@ -66,7 +81,9 @@ class _OpenAICompatibleModel:
         self._max_response_bytes = max_response_bytes
         self._max_request_bytes = max_request_bytes
 
-    def _complete(self, messages: list[dict[str, object]], schema: type[T]) -> T:
+    def _complete(
+        self, messages: list[dict[str, object]], schema: type[T]
+    ) -> ModelCompletion[T]:
         is_qwen = self._model.lower().startswith("qwen")
         payload = {
             "model": self._model,
@@ -90,16 +107,23 @@ class _OpenAICompatibleModel:
         print(response_bytes.decode("utf-8", errors="replace"))
         try:
             response_data = json.loads(response_bytes)
-            content = response_data["choices"][0]["message"]["content"]
+            choice = response_data["choices"][0]
+            finish_reason = choice.get("finish_reason")
+            content = choice["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError("model content is not a string")
             print("=== DOCGEN MODEL RESPONSE CONTENT ===")
             print(content)
-            return schema.model_validate_json(_unwrap_json_fence(content))
+            if finish_reason == "length":
+                raise ModelOutputLimitError(
+                    "Ответ модели обрезан по лимиту длины"
+                )
+            value = schema.model_validate_json(_unwrap_json_fence(content))
         except (IndexError, KeyError, TypeError, UnicodeDecodeError, ValidationError, json.JSONDecodeError) as exc:
             raise ModelResponseFormatError(
                 "Модель вернула некорректный структурированный ответ"
             ) from exc
+        return ModelCompletion(value=value, finish_reason=finish_reason)
 
     def _post(self, payload: dict[str, object]) -> bytes:
         payload_bytes = json.dumps(
@@ -155,6 +179,11 @@ def _unwrap_json_fence(content: str) -> str:
 
 class OpenAICompatibleTextModel(_OpenAICompatibleModel):
     def generate_json(self, system: str, user: str, schema: type[T]) -> T:
+        return self.generate_json_completion(system, user, schema).value
+
+    def generate_json_completion(
+        self, system: str, user: str, schema: type[T]
+    ) -> ModelCompletion[T]:
         return self._complete(
             [
                 {"role": "system", "content": system},
@@ -182,7 +211,7 @@ class OpenAICompatibleVisionModel(_OpenAICompatibleModel):
                 },
             ],
             VisionDescription,
-        )
+        ).value
 
 
 def build_text_model(settings: Settings) -> TextModel:

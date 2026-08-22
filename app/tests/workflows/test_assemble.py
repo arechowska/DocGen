@@ -10,7 +10,12 @@ import httpx
 import pytest
 from PIL import Image
 
-from docgen.ai.client import ModelConfigurationError, VisionDescription
+from docgen.ai.client import (
+    ModelCompletion,
+    ModelConfigurationError,
+    ModelOutputLimitError,
+    VisionDescription,
+)
 from docgen.ai.grounding import GroundingValidator
 from docgen.config import Settings
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
@@ -21,7 +26,12 @@ from docgen.jobs.models import Job, JobKind, JobStatus
 from docgen.jobs.runner import WorkflowDependencies, build_workflows
 from docgen.models import Source, SourceKind
 from docgen.templates_catalog.loader import TemplateCatalog
-from docgen.workflows.assemble import AssembleWorkflow, WorkflowError, _assemble_prompt
+from docgen.workflows.assemble import (
+    AssembleWorkflow,
+    WorkflowError,
+    _assemble_prompt,
+    _validate_coverage,
+)
 from docgen.workflows.normalize import NormalizationWorkflow, NormalizedProject
 
 
@@ -58,12 +68,14 @@ class FakeTextModel:
     events: list[str]
     user_prompt: str = ""
 
-    def generate_json(self, system: str, user: str, schema: type[Any]) -> object:
+    def generate_json_completion(
+        self, system: str, user: str, schema: type[Any]
+    ) -> ModelCompletion[Any]:
         assert "только" in system.lower()
         assert schema is WorkingDocument
         self.events.append("text")
         self.user_prompt = user
-        return self.result
+        return ModelCompletion(value=self.result, finish_reason="stop")
 
 
 @dataclass
@@ -216,6 +228,7 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
         "checkpoint",
         "vision",
         "progress:90",
+        "checkpoint",
         "text",
         "progress:100",
         "save",
@@ -276,7 +289,12 @@ def test_assemble_uses_job_template_when_model_returns_a_different_template_id(
                         source_id="text-block",
                         locator="text:1",
                         quote="Пользователь оплачивает заказ",
-                    )
+                    ),
+                    Provenance(
+                        source_id="image-block",
+                        locator="image:1",
+                        quote="Схема подтверждает успешную оплату",
+                    ),
                 ],
             ),
             DocumentNode(
@@ -304,6 +322,53 @@ def test_assemble_uses_job_template_when_model_returns_a_different_template_id(
 
     assert document.template_id == "faq"
     assert documents.get_document("p1").template_id == "faq"  # type: ignore[union-attr]
+
+
+def test_validate_coverage_flags_uncited_text_block() -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[DocumentNode(kind=NodeKind.PARAGRAPH, section_id="actors", text="Текст")],
+    )
+    block = _block("orphan", BlockKind.TEXT, "Другой текст")
+
+    assert _validate_coverage(document, [block]) == [
+        "Блок orphan не отражён ни в одном узле документа"
+    ]
+
+
+def test_validate_coverage_exempts_heading_and_blank_blocks() -> None:
+    document = WorkingDocument(title="Документ", template_id="use-case", nodes=[])
+    heading = _block("heading", BlockKind.HEADING, "Заголовок")
+    blank = _block("blank", BlockKind.TEXT, "   ")
+
+    assert _validate_coverage(document, [heading, blank]) == []
+
+
+def test_validate_coverage_accepts_citation_from_nested_child() -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                section_id="actors",
+                text="Заголовок",
+                children=[
+                    DocumentNode(
+                        kind=NodeKind.PARAGRAPH,
+                        text="Текст",
+                        provenance=[
+                            Provenance(source_id="known", locator="paragraph:1", quote="Текст")
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+    block = _block("known", BlockKind.TEXT, "Текст")
+
+    assert _validate_coverage(document, [block]) == []
 
 
 def test_assemble_prompt_tells_faq_to_convert_supported_facts_into_answers(
@@ -390,10 +455,26 @@ def test_assemble_saves_model_document_without_strict_grounding(
                         source_id="unknown",
                         locator="paragraph:1",
                         quote="Нет в источниках",
+                    ),
+                    Provenance(
+                        source_id="text-block",
+                        locator="text:1",
+                        quote="Пользователь оплачивает заказ",
+                    ),
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.IMAGE,
+                section_id="preconditions",
+                text="Схема успешной оплаты",
+                provenance=[
+                    Provenance(
+                        source_id="image-block",
+                        locator="image:1",
+                        quote="Схема подтверждает успешную оплату",
                     )
                 ],
             ),
-            DocumentNode(kind=NodeKind.GAP, section_id="preconditions", flags=["missing-source-data"]),
             DocumentNode(kind=NodeKind.GAP, section_id="main-flow", flags=["missing-source-data"]),
             DocumentNode(kind=NodeKind.GAP, section_id="result", flags=["missing-source-data"]),
         ],
@@ -435,7 +516,12 @@ def test_assemble_adds_missing_required_sections_as_source_gaps(
                         source_id="text-block",
                         locator="paragraph:1",
                         quote="Пользователь оплачивает заказ",
-                    )
+                    ),
+                    Provenance(
+                        source_id="image-block",
+                        locator="image:1",
+                        quote="Схема подтверждает успешную оплату",
+                    ),
                 ],
             )
         ],
@@ -462,6 +548,208 @@ def test_assemble_validates_model_schema_before_saving(
 
     with pytest.raises(WorkflowError, match="Модель вернула некорректный документ"):
         workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert documents.get_document("p1") is None
+
+
+def test_assemble_rejects_document_that_leaves_a_source_block_uncovered(
+    assembled: tuple[AssembleWorkflow, FakeTextModel, FakeDocuments, ProgressSpy, list[str]],
+) -> None:
+    workflow, model, documents, progress, _events = assembled
+    model.result = WorkingDocument(
+        title="Неполное покрытие",
+        template_id="use-case",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                section_id="actors",
+                text="Пользователь оплачивает заказ",
+                provenance=[
+                    Provenance(
+                        source_id="text-block",
+                        locator="text:1",
+                        quote="Пользователь оплачивает заказ",
+                    )
+                ],
+            ),
+            DocumentNode(kind=NodeKind.GAP, section_id="preconditions", flags=["missing-source-data"]),
+            DocumentNode(kind=NodeKind.GAP, section_id="main-flow", flags=["missing-source-data"]),
+            DocumentNode(kind=NodeKind.GAP, section_id="result", flags=["missing-source-data"]),
+        ],
+    )
+
+    with pytest.raises(WorkflowError, match="не отражены все содержательные исходные блоки"):
+        workflow.run(_job(JobKind.ASSEMBLE), progress)
+
+    assert documents.get_document("p1") is None
+
+
+def test_assemble_batches_blocks_and_merges_list_items_across_calls() -> None:
+    events: list[str] = []
+    block_a = _block("block-a", BlockKind.TEXT, "Пользователь оплачивает заказ картой")
+    block_b = _block(
+        "block-b", BlockKind.TEXT, "Пользователь может отменить оплаченный заказ"
+    )
+    faq_gaps = [
+        DocumentNode(kind=NodeKind.GAP, section_id=section_id, flags=["missing-source-data"])
+        for section_id in ("getting_started", "working_with_system", "errors_and_limitations")
+    ]
+    responses = [
+        WorkingDocument(
+            title="FAQ",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    kind=NodeKind.LIST,
+                    section_id="general_questions",
+                    text="Общие вопросы",
+                    data={"items": ["Вопрос: Как оплатить заказ? Ответ: Картой."]},
+                    provenance=[
+                        Provenance(
+                            source_id="block-a",
+                            locator="text:1",
+                            quote="Пользователь оплачивает заказ картой",
+                        )
+                    ],
+                ),
+                *faq_gaps,
+            ],
+        ),
+        WorkingDocument(
+            title="FAQ",
+            template_id="faq",
+            nodes=[
+                DocumentNode(
+                    kind=NodeKind.LIST,
+                    section_id="general_questions",
+                    text="Общие вопросы",
+                    data={
+                        "items": ["Вопрос: Можно ли отменить заказ? Ответ: Да, до отгрузки."]
+                    },
+                    provenance=[
+                        Provenance(
+                            source_id="block-b",
+                            locator="text:1",
+                            quote="Пользователь может отменить оплаченный заказ",
+                        )
+                    ],
+                ),
+                *faq_gaps,
+            ],
+        ),
+    ]
+
+    class BatchingModel:
+        def generate_json_completion(
+            self, system: str, user: str, schema: type[Any]
+        ) -> ModelCompletion[Any]:
+            assert schema is WorkingDocument
+            events.append("text")
+            return ModelCompletion(value=responses.pop(0), finish_reason="stop")
+
+    documents = FakeDocuments(events)
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=FakeNormalization([block_a, block_b], events),
+        templates=TemplateCatalog(),
+        text_model=BatchingModel(),
+        vision_model=FakeVisionModel(events),
+        grounding=GroundingValidator(),
+        documents=documents,
+        assembly_batch_chars=1,
+    )
+    job = _job(JobKind.ASSEMBLE)
+    job.template_id = "faq"
+
+    document = workflow.run(job, ProgressSpy(events))
+
+    section = next(node for node in document.nodes if node.section_id == "general_questions")
+    assert section.data["items"] == [
+        "Вопрос: Как оплатить заказ? Ответ: Картой.",
+        "Вопрос: Можно ли отменить заказ? Ответ: Да, до отгрузки.",
+    ]
+    assert events.count("text") == 2
+    assert documents.get_document("p1") == document
+
+
+def test_assemble_splits_batch_and_retries_after_output_length_limit() -> None:
+    events: list[str] = []
+    block_a = _block("block-a", BlockKind.HEADING, "Раздел 1")
+    block_b = _block("block-b", BlockKind.HEADING, "Раздел 2")
+    gap_document = WorkingDocument(
+        title="FAQ",
+        template_id="faq",
+        nodes=[
+            DocumentNode(kind=NodeKind.GAP, section_id=section_id, flags=["missing-source-data"])
+            for section_id in (
+                "general_questions",
+                "getting_started",
+                "working_with_system",
+                "errors_and_limitations",
+            )
+        ],
+    )
+
+    class LengthLimitedModel:
+        def generate_json_completion(
+            self, system: str, user: str, schema: type[Any]
+        ) -> ModelCompletion[Any]:
+            assert schema is WorkingDocument
+            payload = json.loads(user)
+            block_count = len(payload["исходные_блоки"])
+            events.append(f"text:{block_count}")
+            if block_count > 1:
+                raise ModelOutputLimitError("Ответ модели обрезан по лимиту длины")
+            return ModelCompletion(value=gap_document, finish_reason="stop")
+
+    documents = FakeDocuments(events)
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=FakeNormalization([block_a, block_b], events),
+        templates=TemplateCatalog(),
+        text_model=LengthLimitedModel(),
+        vision_model=FakeVisionModel(events),
+        grounding=GroundingValidator(),
+        documents=documents,
+        assembly_batch_chars=1_000_000,
+    )
+    job = _job(JobKind.ASSEMBLE)
+    job.template_id = "faq"
+
+    document = workflow.run(job, ProgressSpy(events))
+
+    assert events.count("text:2") == 1
+    assert events.count("text:1") == 2
+    assert documents.get_document("p1") == document
+
+
+def test_assemble_raises_workflow_error_when_single_block_exceeds_length_limit() -> None:
+    events: list[str] = []
+    block_a = _block("block-a", BlockKind.HEADING, "Раздел 1")
+
+    class AlwaysLimitedModel:
+        def generate_json_completion(
+            self, system: str, user: str, schema: type[Any]
+        ) -> ModelCompletion[Any]:
+            assert schema is WorkingDocument
+            events.append("text")
+            raise ModelOutputLimitError("Ответ модели обрезан по лимиту длины")
+
+    documents = FakeDocuments(events)
+    workflow = AssembleWorkflow(
+        projects=FakeProjects(events),
+        normalization=FakeNormalization([block_a], events),
+        templates=TemplateCatalog(),
+        text_model=AlwaysLimitedModel(),
+        vision_model=FakeVisionModel(events),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+    job = _job(JobKind.ASSEMBLE)
+    job.template_id = "faq"
+
+    with pytest.raises(WorkflowError, match="допустимую длину"):
+        workflow.run(job, ProgressSpy(events))
 
     assert documents.get_document("p1") is None
 
@@ -572,8 +860,45 @@ def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_bas
             events.append("vision")
             return VisionDescription(description="Архитектурная схема системы")
 
+    def _grounded_document(source_block: dict[str, Any]) -> WorkingDocument:
+        return WorkingDocument(
+            title="Архитектура",
+            template_id="use-case",
+            nodes=[
+                DocumentNode(
+                    kind=NodeKind.IMAGE,
+                    section_id="actors",
+                    text="Архитектурная схема системы",
+                    provenance=[
+                        Provenance(
+                            source_id=source_block["id"],
+                            locator=source_block["locators"][0],
+                            quote="Архитектурная схема системы",
+                        )
+                    ],
+                ),
+                DocumentNode(
+                    kind=NodeKind.GAP,
+                    section_id="preconditions",
+                    flags=["missing-source-data"],
+                ),
+                DocumentNode(
+                    kind=NodeKind.GAP,
+                    section_id="main-flow",
+                    flags=["missing-source-data"],
+                ),
+                DocumentNode(
+                    kind=NodeKind.GAP,
+                    section_id="result",
+                    flags=["missing-source-data"],
+                ),
+            ],
+        )
+
     class GroundedModel:
-        def generate_json(self, system: str, user: str, schema: type[Any]) -> WorkingDocument:
+        def generate_json_completion(
+            self, system: str, user: str, schema: type[Any]
+        ) -> ModelCompletion[Any]:
             del system
             assert schema is WorkingDocument
             payload = json.loads(user)
@@ -581,38 +906,8 @@ def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_bas
             assert source_block["text"] == "Архитектурная схема системы"
             assert "content_base64" not in source_block["data"]
             events.append("text")
-            return WorkingDocument(
-                title="Архитектура",
-                template_id="use-case",
-                nodes=[
-                    DocumentNode(
-                        kind=NodeKind.IMAGE,
-                        section_id="actors",
-                        text="Архитектурная схема системы",
-                        provenance=[
-                            Provenance(
-                                source_id=source_block["id"],
-                                locator=source_block["locators"][0],
-                                quote="Архитектурная схема системы",
-                            )
-                        ],
-                    ),
-                    DocumentNode(
-                        kind=NodeKind.GAP,
-                        section_id="preconditions",
-                        flags=["missing-source-data"],
-                    ),
-                    DocumentNode(
-                        kind=NodeKind.GAP,
-                        section_id="main-flow",
-                        flags=["missing-source-data"],
-                    ),
-                    DocumentNode(
-                        kind=NodeKind.GAP,
-                        section_id="result",
-                        flags=["missing-source-data"],
-                    ),
-                ],
+            return ModelCompletion(
+                value=_grounded_document(source_block), finish_reason="stop"
             )
 
     documents = FakeDocuments(events)
@@ -654,6 +949,7 @@ def test_assemble_enriches_native_confluence_attachment_with_gates_and_hides_bas
         "checkpoint",
         "vision",
         "progress:90",
+        "checkpoint",
         "text",
         "progress:100",
         "save",

@@ -4,16 +4,24 @@ import base64
 import binascii
 import json
 import mimetypes
+from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from docgen.ai.client import TextModel, VisionDescription, VisionModel
+from docgen.ai.client import (
+    ModelCompletion,
+    ModelOutputLimitError,
+    TextModel,
+    VisionDescription,
+    VisionModel,
+)
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import DOCUMENT_SYSTEM_PROMPT
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
-from docgen.extraction.schemas import BlockKind, NormalizedBlock
+from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.runner import ProgressSink, UserSafeJobError
 from docgen.projects.repository import ProjectRepository
@@ -25,7 +33,12 @@ from .normalize import NormalizationWorkflow, NormalizedProject
 _ASSEMBLE_KIND_ERROR = "Некорректный тип задания для сборки"
 _PROJECT_NOT_FOUND = "Проект не найден"
 _DOCUMENT_SCHEMA_ERROR = "Модель вернула некорректный документ"
+_DOCUMENT_LENGTH_ERROR = (
+    "Ответ модели превышает допустимую длину даже для одного исходного блока"
+)
 _GROUNDING_ERROR = "Результат не прошёл проверку по источникам"
+_COVERAGE_ERROR = "В документе не отражены все содержательные исходные блоки"
+_DEFAULT_ASSEMBLY_BATCH_CHARS = 40_000
 
 
 class WorkflowError(UserSafeJobError):
@@ -43,6 +56,7 @@ class AssembleWorkflow:
         vision_model: VisionModel,
         grounding: GroundingValidator,
         documents: DocumentRepository,
+        assembly_batch_chars: int = _DEFAULT_ASSEMBLY_BATCH_CHARS,
     ) -> None:
         self._projects = projects
         self._normalization = normalization
@@ -51,6 +65,7 @@ class AssembleWorkflow:
         self._vision_model = vision_model
         self._grounding = grounding
         self._documents = documents
+        self._assembly_batch_chars = assembly_batch_chars
 
     def run(self, job: Job, progress: ProgressSink) -> WorkingDocument:
         if job.kind is not JobKind.ASSEMBLE:
@@ -74,15 +89,13 @@ class AssembleWorkflow:
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
 
         progress(90, "Сборка документа моделью")
-        raw_document = self._text_model.generate_json(
-            DOCUMENT_SYSTEM_PROMPT,
-            _assemble_prompt(template, blocks),
-            WorkingDocument,
+        document = _run_batched_assembly(
+            self._text_model,
+            template,
+            blocks,
+            self._assembly_batch_chars,
+            progress,
         )
-        try:
-            document = WorkingDocument.model_validate(raw_document)
-        except ValidationError as exc:
-            raise WorkflowError(_DOCUMENT_SCHEMA_ERROR) from exc
         document = document.model_copy(
             update={
                 "title": _compact_document_title(document.title),
@@ -97,6 +110,8 @@ class AssembleWorkflow:
         )
         if grounding_errors:
             raise WorkflowError(_GROUNDING_ERROR)
+        if _validate_coverage(document, blocks):
+            raise WorkflowError(_COVERAGE_ERROR)
 
         progress(100, "Сохранение документа")
         self._documents.save_document(job.project_id, document)
@@ -205,24 +220,170 @@ def cancellation_checkpoint(progress: ProgressSink) -> None:
 
 
 def public_blocks(blocks: list[NormalizedBlock]) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
+    return [_public_block(block) for block in blocks]
+
+
+def _public_block(block: NormalizedBlock) -> dict[str, object]:
+    data = {
+        key: value
+        for key, value in block.data.items()
+        if key not in {"content_base64", "storage_path"}
+    }
+    return {
+        "id": block.id,
+        "kind": block.kind.value,
+        "text": block.text,
+        "data": data,
+        "locators": [item.locator for item in block.provenance],
+        "confidence": block.confidence,
+    }
+
+
+def _batch_blocks(
+    blocks: list[NormalizedBlock], max_chars: int
+) -> list[list[NormalizedBlock]]:
+    if not blocks:
+        return [[]]
+    batches: list[list[NormalizedBlock]] = []
+    current: list[NormalizedBlock] = []
+    current_size = 0
     for block in blocks:
-        data = {
-            key: value
-            for key, value in block.data.items()
-            if key not in {"content_base64", "storage_path"}
-        }
-        result.append(
-            {
-                "id": block.id,
-                "kind": block.kind.value,
-                "text": block.text,
-                "data": data,
-                "locators": [item.locator for item in block.provenance],
-                "confidence": block.confidence,
-            }
+        block_size = len(json.dumps(_public_block(block), ensure_ascii=False))
+        if current and current_size + block_size > max_chars:
+            batches.append(current)
+            current, current_size = [], 0
+        current.append(block)
+        current_size += block_size
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _run_batched_assembly(
+    text_model: TextModel,
+    template: SemanticTemplate,
+    blocks: list[NormalizedBlock],
+    batch_chars: int,
+    progress: ProgressSink,
+) -> WorkingDocument:
+    batches = _batch_blocks(blocks, batch_chars)
+    documents: list[WorkingDocument] = []
+    for batch in batches:
+        cancellation_checkpoint(progress)
+        documents.append(_assemble_batch(text_model, template, batch))
+    return _merge_batches(documents, template)
+
+
+def _assemble_batch(
+    text_model: TextModel,
+    template: SemanticTemplate,
+    batch: list[NormalizedBlock],
+) -> WorkingDocument:
+    try:
+        completion: ModelCompletion[WorkingDocument] = text_model.generate_json_completion(
+            DOCUMENT_SYSTEM_PROMPT,
+            _assemble_prompt(template, batch),
+            WorkingDocument,
         )
-    return result
+    except ModelOutputLimitError as exc:
+        if len(batch) <= 1:
+            raise WorkflowError(_DOCUMENT_LENGTH_ERROR) from exc
+        midpoint = len(batch) // 2
+        first_half = _assemble_batch(text_model, template, batch[:midpoint])
+        second_half = _assemble_batch(text_model, template, batch[midpoint:])
+        return _merge_batches([first_half, second_half], template)
+
+    try:
+        document = WorkingDocument.model_validate(completion.value)
+    except ValidationError as exc:
+        raise WorkflowError(_DOCUMENT_SCHEMA_ERROR) from exc
+    _validate_batch_section_ids(document, template)
+    return document
+
+
+def _validate_batch_section_ids(
+    document: WorkingDocument, template: SemanticTemplate
+) -> None:
+    known_section_ids = {section.id for section in template.sections}
+    for node in document.nodes:
+        if node.section_id is not None and node.section_id not in known_section_ids:
+            raise WorkflowError(_DOCUMENT_SCHEMA_ERROR)
+
+
+def _merge_batches(
+    documents: list[WorkingDocument], template: SemanticTemplate
+) -> WorkingDocument:
+    fragments_by_section: dict[str, list[DocumentNode]] = defaultdict(list)
+    gap_section_ids: set[str] = set()
+    for document in documents:
+        for node in document.nodes:
+            if node.section_id is None:
+                continue
+            if node.kind is NodeKind.GAP:
+                gap_section_ids.add(node.section_id)
+                continue
+            fragments_by_section[node.section_id].append(node)
+
+    merged_nodes: list[DocumentNode] = []
+    for section in template.sections:
+        fragments = fragments_by_section.get(section.id)
+        if fragments:
+            merged_nodes.append(_merge_section_fragments(fragments))
+        elif section.id in gap_section_ids:
+            merged_nodes.append(
+                DocumentNode(
+                    kind=NodeKind.GAP,
+                    section_id=section.id,
+                    flags=["missing-source-data"],
+                )
+            )
+    title = next(
+        (document.title for document in documents if document.title.strip()),
+        "Документ",
+    )
+    return WorkingDocument(title=title, template_id=template.id, nodes=merged_nodes)
+
+
+def _merge_section_fragments(fragments: list[DocumentNode]) -> DocumentNode:
+    primary = fragments[0]
+    if len(fragments) == 1:
+        return primary
+
+    provenance: list[Provenance] = []
+    for fragment in fragments:
+        provenance.extend(fragment.provenance)
+    provenance = _dedupe_provenance(provenance)
+
+    if primary.kind is NodeKind.LIST:
+        items: list[str] = []
+        seen: set[str] = set()
+        for fragment in fragments:
+            for item in fragment.data.get("items", []):
+                if item not in seen:
+                    seen.add(item)
+                    items.append(item)
+        return primary.model_copy(
+            update={"data": {**primary.data, "items": items}, "provenance": provenance}
+        )
+
+    if primary.kind is NodeKind.PARAGRAPH:
+        texts = [fragment.text for fragment in fragments if fragment.text]
+        return primary.model_copy(
+            update={"text": "\n\n".join(texts), "provenance": provenance}
+        )
+
+    return primary.model_copy(update={"children": [*primary.children, *fragments[1:]]})
+
+
+def _dedupe_provenance(provenance: list[Provenance]) -> list[Provenance]:
+    seen: set[tuple[str, str, str | None]] = set()
+    deduped: list[Provenance] = []
+    for item in provenance:
+        key = (item.source_id, item.locator, item.quote)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped
 
 
 def _assemble_prompt(template: SemanticTemplate, blocks: list[NormalizedBlock]) -> str:
@@ -581,6 +742,33 @@ def _validate_document_structure(
         raise WorkflowError(
             "Документ не содержит все обязательные разделы шаблона"
         )
+
+
+def _validate_coverage(
+    document: WorkingDocument, blocks: list[NormalizedBlock]
+) -> list[str]:
+    referenced_ids = {
+        provenance.source_id
+        for node in _walk_nodes(document.nodes)
+        for provenance in node.provenance
+    }
+    return [
+        f"Блок {block.id} не отражён ни в одном узле документа"
+        for block in blocks
+        if _requires_coverage(block) and block.id not in referenced_ids
+    ]
+
+
+def _requires_coverage(block: NormalizedBlock) -> bool:
+    if block.kind is BlockKind.HEADING:
+        return False
+    return bool(block.text.strip()) or bool(block.data)
+
+
+def _walk_nodes(nodes: Iterable[DocumentNode]) -> Iterable[DocumentNode]:
+    for node in nodes:
+        yield node
+        yield from _walk_nodes(node.children)
 
 
 def _add_missing_required_sections(

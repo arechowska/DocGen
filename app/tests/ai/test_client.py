@@ -8,6 +8,7 @@ import pytest
 from docgen.ai.client import (
     ModelConfigurationError,
     ModelError,
+    ModelOutputLimitError,
     OpenAICompatibleTextModel,
     OpenAICompatibleVisionModel,
     VisionDescription,
@@ -65,6 +66,41 @@ def test_text_model_parses_structured_response(mock_transport: httpx.MockTranspo
     result = model.generate_json("system", "user", WorkingDocument)
 
     assert result.template_id == "use-case"
+
+
+def test_text_model_exposes_completion_finish_reason(
+    mock_transport: httpx.MockTransport,
+) -> None:
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL, model="local-text", transport=mock_transport
+    )
+
+    completion = model.generate_json_completion("system", "user", WorkingDocument)
+
+    assert completion.value.template_id == "use-case"
+    assert completion.finish_reason is None
+
+
+def test_text_model_rejects_length_finish_reason() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"content": '{"title":"FAQ"'},
+                    }
+                ]
+            },
+        )
+    )
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL, model="qwen-test", transport=transport
+    )
+
+    with pytest.raises(ModelOutputLimitError, match="лимит"):
+        model.generate_json_completion("system", "user", WorkingDocument)
 
 
 def test_text_model_parses_json_wrapped_in_markdown_fence() -> None:

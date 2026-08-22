@@ -9,6 +9,7 @@ from typing import Protocol, Self, TypeVar
 from pydantic import BaseModel
 
 from docgen.ai.client import (
+    ModelCompletion,
     ModelConfigurationError,
     ModelError,
     TextModel,
@@ -84,6 +85,13 @@ class _ProductionTextModel:
         if self._model is None:
             self._model = build_text_model(self._settings)
         return self._model.generate_json(system, user, schema)
+
+    def generate_json_completion(
+        self, system: str, user: str, schema: type[T]
+    ) -> ModelCompletion[T]:
+        if self._model is None:
+            self._model = build_text_model(self._settings)
+        return self._model.generate_json_completion(system, user, schema)
 
 
 class _ProductionVisionModel:
@@ -301,7 +309,9 @@ def build_workflows(
         "documents": dependencies.documents,
     }
     workflows: dict[JobKind, JobWorkflow] = {
-        JobKind.ASSEMBLE: AssembleWorkflow(**shared),
+        JobKind.ASSEMBLE: AssembleWorkflow(
+            **shared, assembly_batch_chars=settings.assembly_batch_chars
+        ),
         JobKind.CHECK: CheckWorkflow(**shared),
     }
     if dependencies.jobs is not None and dependencies.export_service is not None:
