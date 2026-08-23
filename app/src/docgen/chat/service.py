@@ -75,6 +75,10 @@ FAQ_SYSTEM_PROMPT = """
 Верни только объект FaqEntryDraft: непустые question и answer, placement и
 evidence_block_ids. Ответ использует только факты из переданных source_blocks.
 Не помещай evidence_block_ids, placement и другие служебные поля в question или answer.
+Поле placement.parent_id всегда null: FAQ-запись добавляется только на верхний
+уровень документа, а не внутрь другого блока.
+Поле placement.index — целое число, равное количеству блоков верхнего уровня в
+переданном document.nodes (то есть запись добавляется в конец документа).
 """.strip()
 
 class ChatGroundingError(ChatError):
