@@ -7,6 +7,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
 from docgen.ai.client import ModelResponseFormatError, TextModel
 from docgen.chat.adapters import FaqAdapter
@@ -28,6 +29,8 @@ from docgen.chat.schemas import (
     ChatEditResult,
     FaqEntryDraft,
     FindingFixProposal,
+    GlossaryDraft,
+    GlossaryEntryDraft,
 )
 from docgen.documents.edit_service import DocumentEditService, EditConflict
 from docgen.documents.operations import (
@@ -91,6 +94,16 @@ evidence_block_ids. Ответ использует только факты из
 переданном document.nodes (то есть запись добавляется в конец документа).
 """.strip()
 
+GLOSSARY_SYSTEM_PROMPT = """
+Выделите термины и краткие определения только из переданного текущего документа.
+Верните GlossaryDraft с непустым entries. Каждый entry содержит term, definition и
+evidence_node_ids — идентификаторы узлов документа, где термин действительно
+использован. Не включайте общеупотребительные слова, заголовки формы, служебные поля,
+идентификаторы узлов и термины, уже присутствующие в разделе «Термины и определения».
+Не придумывайте значения, числовые факты и расшифровки сокращений, которых нет в
+указанных узлах. Никакого Markdown и текста вне JSON.
+""".strip()
+
 class ChatGroundingError(ChatError):
     def __init__(
         self,
@@ -140,6 +153,13 @@ class ChatService:
                 message=decision.clarification,
                 action="Сформулируй правку точнее и повтори запрос.",
             )
+        if decision.kind is IntentKind.DOCUMENT_GLOSSARY:
+            return self._document_glossary(
+                project_id,
+                request.expected_revision,
+                document,
+                message,
+            )
         if decision.kind is IntentKind.AUTHORED_EDIT:
             try:
                 operations = authored_operations(document, decision)
@@ -173,6 +193,63 @@ class ChatService:
             message,
             decision.retrieval_query,
             decision.kind,
+        )
+
+    def _document_glossary(
+        self,
+        project_id: str,
+        expected_revision: int,
+        document: WorkingDocument,
+        message: str,
+    ) -> ChatEditResult:
+        target = _terms_section(document)
+        if target is None:
+            raise ChatError(
+                ChatErrorCode.CLARIFICATION,
+                message="Раздел «Термины и определения» не найден",
+                action="Добавь форму выбранного шаблона и повтори запрос.",
+            )
+        evidence_nodes = _glossary_evidence_nodes(document, target)
+        if not evidence_nodes:
+            raise ChatError(
+                ChatErrorCode.CLARIFICATION,
+                message="В документе нет содержания для выделения терминов",
+                action="Добавь содержательные разделы и повтори запрос.",
+            )
+        user = json.dumps(
+            {
+                "task": message,
+                "target_heading_id": target.id,
+                "existing_items": _existing_glossary_items(document, target),
+                "document_nodes": [
+                    {
+                        "id": node.id,
+                        "kind": node.kind.value,
+                        "text": node.text,
+                        "data": node.data,
+                    }
+                    for node in evidence_nodes
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        draft = self._generate_with_schema_retry(
+            system=GLOSSARY_SYSTEM_PROMPT,
+            user=user,
+            schema=GlossaryDraft,
+        )
+        entries = _validated_glossary_entries(
+            draft,
+            evidence_nodes,
+            _existing_glossary_items(document, target),
+        )
+        operations = _glossary_operations(document, target, entries, evidence_nodes)
+        return self._apply_operations(
+            project_id,
+            expected_revision,
+            operations,
+            summary=f"Добавлено терминов: {len(entries)}",
         )
 
     def apply_finding_fix(
@@ -485,6 +562,195 @@ def _as_source_snapshot(
         configured_source_count=1 if value else 0,
         blocks=value,
     )
+
+
+def _terms_section(document: WorkingDocument) -> DocumentNode | None:
+    return next(
+        (
+            node
+            for node in _document_nodes(document.nodes)
+            if node.kind is NodeKind.HEADING
+            and (
+                node.section_id == "terms"
+                or _normalized_section_title(node.text) == "термины и определения"
+            )
+        ),
+        None,
+    )
+
+
+def _normalized_section_title(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = " ".join(value.casefold().replace("ё", "е").split())
+    return re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", normalized)
+
+
+def _glossary_evidence_nodes(
+    document: WorkingDocument,
+    target: DocumentNode,
+) -> list[DocumentNode]:
+    excluded_ids = {node.id for node in _document_nodes([target])}
+    return [
+        node
+        for node in _document_nodes(document.nodes)
+        if node.id not in excluded_ids
+        and node.kind not in {NodeKind.GAP, NodeKind.IMAGE}
+        and _node_factual_text(node).strip()
+    ]
+
+
+def _existing_glossary_list(
+    document: WorkingDocument,
+    target: DocumentNode,
+) -> DocumentNode | None:
+    child = next(
+        (node for node in target.children if node.kind is NodeKind.LIST),
+        None,
+    )
+    if child is not None:
+        return child
+    if target not in document.nodes:
+        return None
+    index = document.nodes.index(target)
+    if index + 1 >= len(document.nodes):
+        return None
+    candidate = document.nodes[index + 1]
+    return candidate if candidate.kind is NodeKind.LIST else None
+
+
+def _existing_glossary_items(
+    document: WorkingDocument,
+    target: DocumentNode,
+) -> list[str]:
+    glossary = _existing_glossary_list(document, target)
+    if glossary is None:
+        return []
+    items = glossary.data.get("items", [])
+    return [str(item) for item in items] if isinstance(items, list) else []
+
+
+def _validated_glossary_entries(
+    draft: GlossaryDraft,
+    evidence_nodes: list[DocumentNode],
+    existing_items: list[str],
+) -> list[GlossaryEntryDraft]:
+    evidence_by_id = {node.id: node for node in evidence_nodes}
+    existing_terms = {
+        _normalized_glossary_term(item.split("—", 1)[0])
+        for item in existing_items
+    }
+    seen = set(existing_terms)
+    result: list[GlossaryEntryDraft] = []
+    for entry in draft.entries:
+        normalized_term = _normalized_glossary_term(entry.term)
+        if not normalized_term or normalized_term in seen:
+            continue
+        try:
+            cited = [evidence_by_id[node_id] for node_id in entry.evidence_node_ids]
+        except KeyError as error:
+            raise ChatGroundingError(
+                "Модель сослалась на неизвестный узел документа",
+                code=ChatErrorCode.EVIDENCE_MISSING,
+            ) from error
+        evidence_text = " ".join(_node_factual_text(node) for node in cited)
+        if not _tokens_supported(_tokens(entry.term), _tokens(evidence_text)):
+            raise ChatGroundingError(
+                "Термин не найден в указанном фрагменте документа",
+                code=ChatErrorCode.GROUNDING_FAILED,
+            )
+        if not _tokens_supported(
+            _tokens(entry.definition),
+            _tokens(evidence_text),
+            allow_grounded_synthesis=True,
+        ):
+            raise ChatGroundingError(
+                "Определение не подтверждается документом",
+                code=ChatErrorCode.GROUNDING_FAILED,
+            )
+        seen.add(normalized_term)
+        result.append(entry)
+    if not result:
+        raise ChatError(
+            ChatErrorCode.CLARIFICATION,
+            message="Новых подтверждённых терминов в документе не найдено",
+            action="Уточни нужные термины или дополни содержательные разделы.",
+        )
+    return result
+
+
+def _normalized_glossary_term(value: str) -> str:
+    return " ".join(value.casefold().replace("ё", "е").split()).strip(" —–-")
+
+
+def _glossary_operations(
+    document: WorkingDocument,
+    target: DocumentNode,
+    entries: list[GlossaryEntryDraft],
+    evidence_nodes: list[DocumentNode],
+) -> list[DocumentOperation]:
+    evidence_by_id = {node.id: node for node in evidence_nodes}
+    items = [f"{entry.term} — {entry.definition}" for entry in entries]
+    provenance = _merge_provenance(
+        [],
+        [
+            item
+            for entry in entries
+            for node_id in entry.evidence_node_ids
+            for item in evidence_by_id[node_id].provenance
+        ],
+    )
+    existing = _existing_glossary_list(document, target)
+    if existing is not None:
+        data = dict(existing.data)
+        current_items = data.get("items", [])
+        if not isinstance(current_items, list):
+            current_items = []
+        data["items"] = [*current_items, *items]
+        data.pop("items_html", None)
+        data.pop("item_styles", None)
+        operations: list[DocumentOperation] = [
+            UpdateData(node_id=existing.id, data=data)
+        ]
+        if provenance:
+            operations.append(
+                UpdateProvenance(
+                    node_id=existing.id,
+                    provenance=_merge_provenance(existing.provenance, provenance),
+                )
+            )
+        return operations
+
+    node = DocumentNode(
+        id=f"glossary-{uuid4()}",
+        kind=NodeKind.LIST,
+        data={"items": items},
+        provenance=provenance,
+        flags=["document-derived", "glossary"],
+    )
+    if target in document.nodes:
+        target_index = document.nodes.index(target)
+        operations = []
+        if target_index + 1 < len(document.nodes):
+            placeholder = document.nodes[target_index + 1]
+            if placeholder.kind is NodeKind.GAP or (
+                placeholder.kind is NodeKind.PARAGRAPH
+                and not (placeholder.text or "").strip()
+            ):
+                operations.append(DeleteNode(node_id=placeholder.id))
+        operations.append(InsertNode(index=target_index + 1, node=node))
+        return operations
+
+    gap_children = [child for child in target.children if child.kind is NodeKind.GAP]
+    operations = [DeleteNode(node_id=child.id) for child in gap_children]
+    operations.append(
+        InsertNode(
+            parent_id=target.id,
+            index=len(target.children) - len(gap_children),
+            node=node,
+        )
+    )
+    return operations
 
 
 def _scope_snapshot_to_named_source(

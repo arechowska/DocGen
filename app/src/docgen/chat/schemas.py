@@ -51,6 +51,55 @@ class ChatEditPlan(BaseModel):
         return value
 
 
+class GlossaryEntryDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    term: str = Field(min_length=1)
+    definition: str = Field(min_length=1)
+    evidence_node_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_russian_keys(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        aliases = {
+            "термин": "term",
+            "определение": "definition",
+            "узлы": "evidence_node_ids",
+            "evidence_ids": "evidence_node_ids",
+        }
+        for source, target in aliases.items():
+            if source in normalized and target not in normalized:
+                normalized[target] = normalized.pop(source)
+        return normalized
+
+    @field_validator("term", "definition")
+    @classmethod
+    def normalize_glossary_text(cls, value: str) -> str:
+        return " ".join(value.split()).strip(" —–-")
+
+
+class GlossaryDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entries: list[GlossaryEntryDraft] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_common_shapes(cls, value: object) -> object:
+        if isinstance(value, list):
+            return {"entries": value}
+        if isinstance(value, dict):
+            normalized = dict(value)
+            for key in ("terms", "термины", "items"):
+                if key in normalized and "entries" not in normalized:
+                    normalized["entries"] = normalized.pop(key)
+            return normalized
+        return value
+
+
 class FaqPlacement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

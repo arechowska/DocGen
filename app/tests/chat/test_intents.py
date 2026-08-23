@@ -44,6 +44,23 @@ def test_router_recognizes_fill_empty_fields_from_source(document: WorkingDocume
     assert decision.kind is IntentKind.GROUNDED_EDIT
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Заполни раздел Термины и определения терминами из документа",
+        "Собери глоссарий по текущему документу",
+        "Добавь термины из текста в раздел определений",
+        "Вынеси в раздел определения терминов из документа",
+        "Сформируй на основе документа термины и определения",
+    ],
+)
+def test_router_recognizes_glossary_from_current_document(
+    document: WorkingDocument,
+    message: str,
+) -> None:
+    assert route_intent(message, document).kind is IntentKind.DOCUMENT_GLOSSARY
+
+
 def test_router_keeps_faq_action_template_specific(document: WorkingDocument) -> None:
     faq = document.model_copy(
         update={"template_id": "faq", "build_template_id": "faq"}

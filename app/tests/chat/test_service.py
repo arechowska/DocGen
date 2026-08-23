@@ -13,6 +13,8 @@ from docgen.chat.schemas import (
     ChatEditRequest,
     FaqEntryDraft,
     FaqPlacement,
+    GlossaryDraft,
+    GlossaryEntryDraft,
 )
 from docgen.chat.service import (
     ChatGroundingError,
@@ -131,6 +133,70 @@ def test_chat_applies_grounded_plan(chat_service: ChatService, fake_model: FakeM
 
     assert result.revision == 3
     assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
+
+
+def test_chat_builds_glossary_from_current_document_without_external_sources(
+    session: Session,
+    fake_model: FakeModel,
+) -> None:
+    repository = DocumentRepository(session)
+    revision = repository.save_document(
+        "p1",
+        WorkingDocument(
+            title="Документ",
+            template_id="use-case",
+            nodes=[
+                DocumentNode(
+                    id="body",
+                    kind=NodeKind.PARAGRAPH,
+                    text=(
+                        "Оператор использует ЦС. ЦС — цифровой счёт клиента."
+                    ),
+                ),
+                DocumentNode(
+                    id="terms-heading",
+                    kind=NodeKind.HEADING,
+                    section_id="terms",
+                    text="Термины и определения",
+                ),
+            ],
+        ),
+    )
+    session.commit()
+    fake_model.result = GlossaryDraft(
+        entries=[
+            GlossaryEntryDraft(
+                term="ЦС",
+                definition="цифровой счёт клиента",
+                evidence_node_ids=["body"],
+            )
+        ]
+    )
+    service = ChatService(
+        documents=repository,
+        model=fake_model,
+        source_blocks=lambda _project_id: (_ for _ in ()).throw(
+            AssertionError("external sources must not be read")
+        ),
+    )
+
+    result = service.edit(
+        "p1",
+        ChatEditRequest(
+            message=(
+                "Заполни раздел Термины и определения терминами из документа"
+            ),
+            expected_revision=revision,
+        ),
+    )
+
+    heading_index = next(
+        index for index, node in enumerate(result.document.nodes) if node.id == "terms-heading"
+    )
+    glossary = result.document.nodes[heading_index + 1]
+    assert glossary.kind is NodeKind.LIST
+    assert glossary.data["items"] == ["ЦС — цифровой счёт клиента"]
+    assert fake_model.schemas == [GlossaryDraft]
 
 
 def test_chat_fills_only_empty_cells_from_explicitly_named_source(

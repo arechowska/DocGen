@@ -15,6 +15,7 @@ class IntentKind(StrEnum):
     STRUCTURE = "structure"
     FORMAT = "format"
     CLARIFICATION = "clarification"
+    DOCUMENT_GLOSSARY = "document_glossary"
 
 
 class StructureAction(StrEnum):
@@ -109,11 +110,36 @@ _QUERY_NOISE = {
 }
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 _NEGATION_BEFORE_ACTION = re.compile(r"\b(?:не|нельзя)\s+\S*$")
+_GLOSSARY_ACTION_STEMS = (
+    "добав",
+    "вынес",
+    "выдел",
+    "заполн",
+    "извлек",
+    "собер",
+    "состав",
+    "сформир",
+)
+_GLOSSARY_CONTENT_STEMS = ("глоссар", "определен", "термин")
+_DOCUMENT_CONTENT_MARKERS = (
+    "в документ",
+    "из документ",
+    "из текст",
+    "на основе документ",
+    "по документ",
+    "по текущ",
+    "по текст",
+    "текущего документ",
+    "текущем документ",
+)
 
 
 def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
     normalized = " ".join(message.strip().split())
     lowered = normalized.casefold().replace("ё", "е")
+
+    if _is_document_glossary_request(lowered):
+        return IntentDecision(IntentKind.DOCUMENT_GLOSSARY)
 
     manual = parse_manual_insert(normalized)
     if manual is not None and _is_positioned_or_complete_pair(normalized, manual):
@@ -192,6 +218,14 @@ def _is_explicit_authored_insert(
         or ":" in message
         or ("вопрос" in lowered and "ответ" in lowered)
         or len(intent.text.split()) >= 2
+    )
+
+
+def _is_document_glossary_request(message: str) -> bool:
+    return (
+        any(stem in message for stem in _GLOSSARY_ACTION_STEMS)
+        and any(stem in message for stem in _GLOSSARY_CONTENT_STEMS)
+        and any(marker in message for marker in _DOCUMENT_CONTENT_MARKERS)
     )
 
 
