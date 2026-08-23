@@ -17,7 +17,13 @@ from docgen.chat.executors import (
     formatting_operations,
     structural_operations,
 )
-from docgen.chat.intents import IntentKind, _retrieval_query, route_intent
+from docgen.chat.intents import (
+    IntentDecision,
+    IntentKind,
+    StructureAction,
+    _retrieval_query,
+    route_intent,
+)
 from docgen.chat.manual_insert import (
     ManualInsertError,
 )
@@ -31,6 +37,7 @@ from docgen.chat.schemas import (
     FindingFixProposal,
     GlossaryDraft,
     GlossaryEntryDraft,
+    SemanticIntentDraft,
 )
 from docgen.documents.edit_service import DocumentEditService, EditConflict
 from docgen.documents.operations import (
@@ -106,6 +113,23 @@ evidence_node_ids — идентификаторы узлов документа
 указанных узлах. Никакого Markdown и текста вне JSON.
 """.strip()
 
+SEMANTIC_INTENT_SYSTEM_PROMPT = """
+Определи намерение пользователя по смыслу фразы, а не по ключевым словам.
+Верни SemanticIntentDraft с одним intent:
+- grounded_edit: изменить или добавить факты по внешнему источнику;
+- fill_empty_fields: заполнить только пустые ячейки таблиц по внешнему источнику;
+- document_glossary: извлечь термины и определения из текущего документа;
+- structure: переместить, удалить, объединить, разделить или сгруппировать имеющиеся блоки;
+- clarification: цель или объект правки неоднозначны.
+Для правки по источнику заполни retrieval_query темой искомых фактов.
+Если назван конкретный источник, точно скопируй его имя в source_name.
+Для structure заполни structure_action, target_ordinals и relation.
+Если данных не хватает для безопасного выполнения, выбери clarification и задай один вопрос.
+Не предлагай пользователю самому редактировать документ.
+Ответ — только JSON-объект с полями intent, retrieval_query, source_name,
+clarification, structure_action, target_ordinals и relation. Неприменимые поля можно опустить.
+""".strip()
+
 class ChatGroundingError(ChatError):
     def __init__(
         self,
@@ -148,6 +172,44 @@ class ChatService:
             decision = route_intent(message, document)
         except ManualInsertError as error:
             raise ChatValidationError(str(error)) from error
+
+        if decision.kind is IntentKind.SEMANTIC:
+            semantic = self._semantic_intent(document, message)
+            if semantic.intent == "clarification":
+                raise ChatError(
+                    ChatErrorCode.CLARIFICATION,
+                    message=semantic.clarification
+                    or "Уточни, что именно изменить",
+                    action="Назови целевой блок, факт или источник.",
+                )
+            if semantic.intent == "document_glossary":
+                return self._document_glossary(
+                    project_id, request.expected_revision, document, message
+                )
+            if semantic.intent == "structure":
+                if semantic.structure_action is None:
+                    raise ChatError(
+                        ChatErrorCode.CLARIFICATION,
+                        message="Не удалось определить структурную правку",
+                        action="Уточни действие и номера блоков.",
+                    )
+                decision = IntentDecision(
+                    kind=IntentKind.STRUCTURE,
+                    structure_action=StructureAction(semantic.structure_action),
+                    target_ordinals=semantic.target_ordinals,
+                    relation=semantic.relation,
+                )
+            else:
+                return self._model_grounded_edit(
+                    project_id,
+                    request.expected_revision,
+                    document,
+                    message,
+                    semantic.retrieval_query or _retrieval_query(message),
+                    IntentKind.GROUNDED_EDIT,
+                    fill_empty=semantic.intent == "fill_empty_fields",
+                    source_name=semantic.source_name,
+                )
 
         if decision.kind is IntentKind.CLARIFICATION:
             raise ChatError(
@@ -195,6 +257,38 @@ class ChatService:
             message,
             decision.retrieval_query,
             decision.kind,
+        )
+
+    def _semantic_intent(
+        self,
+        document: WorkingDocument,
+        message: str,
+    ) -> SemanticIntentDraft:
+        outline = [
+            {
+                "ordinal": index,
+                "id": node.id,
+                "kind": node.kind.value,
+                "section_id": node.section_id,
+                "text": (node.text or "")[:160],
+            }
+            for index, node in enumerate(document.nodes, start=1)
+        ]
+        return self._generate_with_schema_retry(
+            system=SEMANTIC_INTENT_SYSTEM_PROMPT,
+            user=json.dumps(
+                {
+                    "message": message,
+                    "document": {
+                        "template_id": document.template_id,
+                        "build_template_id": document.build_template_id,
+                        "nodes": outline,
+                    },
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            schema=SemanticIntentDraft,
         )
 
     def _document_glossary(
@@ -385,9 +479,18 @@ class ChatService:
         message: str,
         retrieval_query: str,
         intent_kind: IntentKind,
+        *,
+        fill_empty: bool = False,
+        source_name: str | None = None,
     ) -> ChatEditResult:
         plan, source_blocks = self._grounded_plan(
-            project_id, document, message, retrieval_query, intent_kind
+            project_id,
+            document,
+            message,
+            retrieval_query,
+            intent_kind,
+            fill_empty=fill_empty,
+            source_name=source_name,
         )
         operations = _operations_for_application(document, plan, source_blocks)
         return self._apply_operations(
@@ -404,12 +507,14 @@ class ChatService:
         message: str,
         retrieval_query: str,
         intent_kind: IntentKind,
+        *,
+        fill_empty: bool = False,
+        source_name: str | None = None,
     ) -> tuple[ChatEditPlan, list[NormalizedBlock]]:
         snapshot = _as_source_snapshot(self._source_blocks(project_id))
         snapshot, explicitly_scoped = _scope_snapshot_to_named_source(
-            snapshot, message
+            snapshot, source_name
         )
-        fill_empty = _is_fill_empty_request(message)
         if fill_empty:
             empty_query = _empty_table_field_query(document)
             if empty_query:
@@ -519,10 +624,16 @@ class ChatService:
             return self._model.generate_json(system=system, user=user, schema=schema)
         except ModelResponseFormatError:
             try:
+                schema_json = json.dumps(
+                    schema.model_json_schema(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
                 return self._model.generate_json(
                     system=(
                         f"{system}\n\n"
-                        f"{CHAT_RETRY_PROMPT.format(schema_name=schema.__name__)}"
+                        f"{CHAT_RETRY_PROMPT.format(schema_name=schema.__name__)}\n"
+                        f"JSON Schema: {schema_json}"
                     ),
                     user=user,
                     schema=schema,
@@ -773,22 +884,23 @@ def _glossary_operations(
 
 def _scope_snapshot_to_named_source(
     snapshot: SourceSnapshot,
-    message: str,
+    source_name: str | None,
 ) -> tuple[SourceSnapshot, bool]:
-    normalized_message = unicodedata.normalize("NFKC", message).casefold()
+    if source_name is None:
+        return snapshot, False
+    normalized_name = unicodedata.normalize("NFKC", source_name).casefold().strip()
     matches = [
         source
         for source in snapshot.sources
         if source.display_name.strip()
-        and unicodedata.normalize("NFKC", source.display_name).casefold()
-        in normalized_message
+        and unicodedata.normalize("NFKC", source.display_name).casefold().strip()
+        == normalized_name
     ]
     if not matches:
-        requested = _explicit_source_label(message)
-        if requested is not None and snapshot.sources:
+        if snapshot.sources:
             raise ChatError(
                 ChatErrorCode.CLARIFICATION,
-                message=f"Источник «{requested}» не найден в проекте",
+                message=f"Источник «{source_name}» не найден в проекте",
                 action="Укажи точное название источника из левой панели.",
             )
         return snapshot, False
@@ -816,31 +928,6 @@ def _scope_snapshot_to_named_source(
         ),
         True,
     )
-
-
-_QUOTED_SOURCE_RE = re.compile(
-    r"\bисточник\w*\s+[«\"](?P<label>[^»\"]+)[»\"]",
-    re.IGNORECASE,
-)
-_FILE_SOURCE_RE = re.compile(
-    r"\bисточник\w*\s+(?P<label>[^\s,;]+\.[a-z0-9]{1,10})\b",
-    re.IGNORECASE,
-)
-
-
-def _explicit_source_label(message: str) -> str | None:
-    match = _QUOTED_SOURCE_RE.search(message) or _FILE_SOURCE_RE.search(message)
-    return match.group("label").strip() if match is not None else None
-
-
-_FILL_EMPTY_RE = re.compile(
-    r"(?:\bзаполн\w*\b.*\bпуст\w*\b|\bпуст\w*\b.*\bзаполн\w*\b)",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _is_fill_empty_request(message: str) -> bool:
-    return _FILL_EMPTY_RE.search(message) is not None
 
 
 def _empty_table_field_query(document: WorkingDocument) -> str:

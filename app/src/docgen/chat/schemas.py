@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from docgen.documents.operations import DocumentOperation
@@ -48,6 +50,43 @@ class ChatEditPlan(BaseModel):
         if isinstance(value, list):
             summary = "Нет правок" if not value else "Применены правки"
             return {"summary": summary, "operations": value}
+        return value
+
+
+class SemanticIntentDraft(BaseModel):
+    """Model-selected capability; code still validates and executes it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal[
+        "grounded_edit",
+        "fill_empty_fields",
+        "document_glossary",
+        "structure",
+        "clarification",
+    ]
+    retrieval_query: str = ""
+    source_name: str | None = None
+    clarification: str | None = None
+    structure_action: Literal[
+        "sectionize", "delete", "move", "merge", "split"
+    ] | None = None
+    target_ordinals: tuple[int, ...] = ()
+    relation: Literal["before", "after"] | None = None
+
+    @field_validator("retrieval_query", "source_name", "clarification")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        return normalized or None
+
+    @field_validator("target_ordinals")
+    @classmethod
+    def validate_ordinals(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if any(ordinal < 1 for ordinal in value):
+            raise ValueError("target ordinals must be positive")
         return value
 
 

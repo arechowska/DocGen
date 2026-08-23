@@ -1,6 +1,6 @@
 import pytest
 
-from docgen.chat.intents import IntentKind, StructureAction, route_intent
+from docgen.chat.intents import IntentKind, route_intent
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 
 
@@ -17,7 +17,6 @@ def document() -> WorkingDocument:
     "message",
     [
         "Добавь в конец документа: авторское примечание",
-        "Добавь согласованный текст команды",
         "Замени Старый текст на Новый текст",
         "Название должно быть TrackCare",
     ],
@@ -28,11 +27,18 @@ def test_router_recognizes_general_authored_edits(
     assert route_intent(message, document).kind is IntentKind.AUTHORED_EDIT
 
 
+def test_router_sends_ambiguous_addition_to_semantic_model(
+    document: WorkingDocument,
+) -> None:
+    decision = route_intent("Добавь согласованный текст команды", document)
+
+    assert decision.kind is IntentKind.SEMANTIC
+
+
 def test_router_recognizes_grounded_fact_edit(document: WorkingDocument) -> None:
     decision = route_intent("Уточни лимит строго по источнику", document)
 
-    assert decision.kind is IntentKind.GROUNDED_EDIT
-    assert decision.retrieval_query == "лимит"
+    assert decision.kind is IntentKind.SEMANTIC
 
 
 def test_router_recognizes_fill_empty_fields_from_source(document: WorkingDocument) -> None:
@@ -41,7 +47,7 @@ def test_router_recognizes_fill_empty_fields_from_source(document: WorkingDocume
         document,
     )
 
-    assert decision.kind is IntentKind.GROUNDED_EDIT
+    assert decision.kind is IntentKind.SEMANTIC
 
 
 @pytest.mark.parametrize(
@@ -58,7 +64,7 @@ def test_router_recognizes_glossary_from_current_document(
     document: WorkingDocument,
     message: str,
 ) -> None:
-    assert route_intent(message, document).kind is IntentKind.DOCUMENT_GLOSSARY
+    assert route_intent(message, document).kind is IntentKind.SEMANTIC
 
 
 def test_router_keeps_faq_action_template_specific(document: WorkingDocument) -> None:
@@ -83,24 +89,22 @@ def test_router_sends_question_and_answer_phrasing_to_faq_action(
 
 
 @pytest.mark.parametrize(
-    ("message", "action"),
+    "message",
     [
-        ("Раздели документ на разделы", StructureAction.SECTIONIZE),
-        ("Удалить второй блок", StructureAction.DELETE),
-        ("Перемести третий блок перед первым", StructureAction.MOVE),
-        ("Объедини первый и второй блоки", StructureAction.MERGE),
-        ("Раздели второй блок", StructureAction.SPLIT),
+        "Раздели документ на разделы",
+        "Удалить второй блок",
+        "Перемести третий блок перед первым",
+        "Объедини первый и второй блоки",
+        "Раздели второй блок",
     ],
 )
 def test_router_uses_shared_structural_vocabulary(
     document: WorkingDocument,
     message: str,
-    action: StructureAction,
 ) -> None:
     decision = route_intent(message, document)
 
-    assert decision.kind is IntentKind.STRUCTURE
-    assert decision.structure_action is action
+    assert decision.kind is IntentKind.SEMANTIC
 
 
 def test_router_does_not_treat_negated_action_word_as_a_command(
@@ -114,7 +118,7 @@ def test_router_does_not_treat_negated_action_word_as_a_command(
         document,
     )
 
-    assert decision.kind is IntentKind.GROUNDED_EDIT
+    assert decision.kind is IntentKind.SEMANTIC
 
 
 def test_router_sends_leading_add_verb_to_grounded_edit_over_structural_word(
@@ -125,7 +129,7 @@ def test_router_sends_leading_add_verb_to_grounded_edit_over_structural_word(
     instead wrap every existing block in a generic "Раздел N" heading."""
     decision = route_intent("Добавь отсутствующие разделы в документ", document)
 
-    assert decision.kind is IntentKind.GROUNDED_EDIT
+    assert decision.kind is IntentKind.SEMANTIC
 
 
 @pytest.mark.parametrize(
@@ -139,7 +143,7 @@ def test_router_sends_leading_add_verb_to_grounded_edit_over_structural_word(
 def test_router_never_lets_structural_words_override_a_leading_grounding_verb(
     document: WorkingDocument, message: str
 ) -> None:
-    assert route_intent(message, document).kind is IntentKind.GROUNDED_EDIT
+    assert route_intent(message, document).kind is IntentKind.SEMANTIC
 
 
 def test_router_recognizes_formatting_without_sources(document: WorkingDocument) -> None:
@@ -153,5 +157,4 @@ def test_router_asks_for_clarification_instead_of_calling_model(
 ) -> None:
     decision = route_intent("Сделай документ получше", document)
 
-    assert decision.kind is IntentKind.CLARIFICATION
-    assert "уточни" in decision.clarification.casefold()
+    assert decision.kind is IntentKind.SEMANTIC

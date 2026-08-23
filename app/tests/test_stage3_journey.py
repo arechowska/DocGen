@@ -14,6 +14,7 @@ from docgen.chat.schemas import (
     ChatEditPlan,
     FaqEntryDraft,
     FaqPlacement,
+    SemanticIntentDraft,
 )
 from docgen.chat.service import ChatService
 from docgen.config import Settings
@@ -301,6 +302,16 @@ class _ReliableChatModel:
         assert system
         self.schemas.append(schema)
         payload = json.loads(user)
+        if schema is SemanticIntentDraft:
+            if payload["message"] == "Раздели документ на разделы":
+                return SemanticIntentDraft(
+                    intent="structure",
+                    structure_action="sectionize",
+                )
+            return SemanticIntentDraft(
+                intent="grounded_edit",
+                retrieval_query=payload["message"],
+            )
         if schema is FaqEntryDraft:
             evidence = next(
                 block
@@ -337,6 +348,11 @@ class _JourneyModel:
     def generate_json(self, system: str, user: str, schema: type[Any]) -> Any:
         assert system
         payload = json.loads(user)
+        if schema is SemanticIntentDraft:
+            return SemanticIntentDraft(
+                intent="grounded_edit",
+                retrieval_query=payload["message"],
+            )
         if schema is ChatEditPlan:
             assert payload["document"]["template_id"] == "faq"
             source_blocks = payload["source_blocks"]

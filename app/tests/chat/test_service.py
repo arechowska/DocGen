@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pytest
@@ -15,6 +16,7 @@ from docgen.chat.schemas import (
     FaqPlacement,
     GlossaryDraft,
     GlossaryEntryDraft,
+    SemanticIntentDraft,
 )
 from docgen.chat.service import (
     ChatGroundingError,
@@ -46,6 +48,7 @@ class FakeModel:
         self.format_failures = 0
         self.result: Any = None
         self.results: list[Any] = []
+        self.semantic_result: SemanticIntentDraft | None = None
         self.systems: list[str] = []
         self.users: list[str] = []
         self.schemas: list[type] = []
@@ -56,6 +59,12 @@ class FakeModel:
         self.users.append(user)
         self.schemas.append(schema)
         assert "Оператор" in user
+        if schema is SemanticIntentDraft:
+            message = json.loads(user)["message"]
+            return self.semantic_result or SemanticIntentDraft(
+                intent="grounded_edit",
+                retrieval_query=message,
+            )
         if self.format_failures:
             self.format_failures -= 1
             raise ModelResponseFormatError("invalid first response")
@@ -143,6 +152,7 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
     session: Session,
     fake_model: FakeModel,
 ) -> None:
+    fake_model.semantic_result = SemanticIntentDraft(intent="document_glossary")
     repository = DocumentRepository(session)
     revision = repository.save_document(
         "p1",
@@ -199,7 +209,7 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
     glossary = result.document.nodes[heading_index + 1]
     assert glossary.kind is NodeKind.LIST
     assert glossary.data["items"] == ["ЦС — цифровой счёт клиента"]
-    assert fake_model.schemas == [GlossaryDraft]
+    assert fake_model.schemas == [SemanticIntentDraft, GlossaryDraft]
 
 
 def test_glossary_retry_uses_the_requested_schema_name(
@@ -231,6 +241,10 @@ def test_chat_fills_only_empty_cells_from_explicitly_named_source(
     session: Session,
     fake_model: FakeModel,
 ) -> None:
+    fake_model.semantic_result = SemanticIntentDraft(
+        intent="fill_empty_fields",
+        source_name="requirements.docx",
+    )
     repository = DocumentRepository(session)
     revision = repository.save_document(
         "p1",
@@ -323,6 +337,10 @@ def test_fill_empty_fields_rejects_changes_to_populated_cells(
     session: Session,
     fake_model: FakeModel,
 ) -> None:
+    fake_model.semantic_result = SemanticIntentDraft(
+        intent="fill_empty_fields",
+        source_name="requirements.docx",
+    )
     repository = DocumentRepository(session)
     revision = repository.save_document(
         "p1",
@@ -614,6 +632,10 @@ def test_chat_noop_plan_is_not_reported_as_a_successful_edit(
     fake_model: FakeModel,
     session: Session,
 ) -> None:
+    fake_model.semantic_result = SemanticIntentDraft(
+        intent="clarification",
+        clarification="Уточни, что изменить",
+    )
     fake_model.result = ChatEditPlan(summary="Нет правок", operations=[])
 
     with pytest.raises(ChatError) as caught:
@@ -623,7 +645,7 @@ def test_chat_noop_plan_is_not_reported_as_a_successful_edit(
         )
 
     assert caught.value.code is ChatErrorCode.CLARIFICATION
-    assert fake_model.calls == 0
+    assert fake_model.calls == 1
     stored = DocumentRepository(session).get_document_with_revision("p1")
     assert stored is not None
     _, persisted_revision = stored
@@ -662,7 +684,7 @@ def test_chat_reports_source_state_before_model_call(
         )
 
     assert caught.value.code is expected_code
-    assert fake_model.calls == 0
+    assert fake_model.calls == 1
 
 
 def test_chat_reports_missing_thematic_fragment_before_model_call(
@@ -688,7 +710,7 @@ def test_chat_reports_missing_thematic_fragment_before_model_call(
         )
 
     assert caught.value.code is ChatErrorCode.RELEVANT_FRAGMENT_MISSING
-    assert fake_model.calls == 0
+    assert fake_model.calls == 1
 
 
 def test_chat_reports_invalid_model_json_and_preserves_document(
@@ -709,7 +731,7 @@ def test_chat_reports_invalid_model_json_and_preserves_document(
 
     assert caught.value.code is ChatErrorCode.MODEL_INVALID_JSON
     assert "raw model output" not in caught.value.message
-    assert fake_model.calls == 2
+    assert fake_model.calls == 3
     stored = DocumentRepository(session).get_document_with_revision("p1")
     assert stored is not None and stored[1] == 2
 
@@ -778,12 +800,16 @@ def test_chat_structures_document_without_model_or_sources(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
+    fake_model.semantic_result = SemanticIntentDraft(
+        intent="structure",
+        structure_action="sectionize",
+    )
     result = chat_service.edit(
         "p1",
         ChatEditRequest(message="раздели на разделы", expected_revision=2),
     )
 
-    assert fake_model.calls == 0
+    assert fake_model.calls == 1
     assert [node.kind for node in result.document.nodes] == [
         NodeKind.HEADING,
         NodeKind.HEADING,
@@ -795,6 +821,10 @@ def test_chat_ambiguous_move_requests_target_details_without_model(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
+    fake_model.semantic_result = SemanticIntentDraft(
+        intent="structure",
+        structure_action="move",
+    )
     with pytest.raises(ChatError) as caught:
         chat_service.edit(
             "p1",
@@ -802,7 +832,7 @@ def test_chat_ambiguous_move_requests_target_details_without_model(
         )
 
     assert caught.value.code is ChatErrorCode.CLARIFICATION
-    assert fake_model.calls == 0
+    assert fake_model.calls == 1
 
 
 def test_chat_applies_formatting_command_when_model_returns_noop(
@@ -1004,7 +1034,7 @@ def test_chat_missing_visual_target_preserves_document(
     assert fake_model.calls == 0
 
 
-def test_chat_unpositioned_manual_insert_bypasses_model(
+def test_chat_explicit_manual_insert_bypasses_model(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
@@ -1012,14 +1042,14 @@ def test_chat_unpositioned_manual_insert_bypasses_model(
 
     result = chat_service.edit(
         "p1",
-        ChatEditRequest(message="добавь авторский текст", expected_revision=2),
+        ChatEditRequest(message="добавь: авторский текст", expected_revision=2),
     )
 
     assert fake_model.calls == 0
     assert result.document.nodes[-1].text == "авторский текст"
 
 
-def test_chat_unpositioned_manual_insert_does_not_depend_on_model(
+def test_chat_explicit_manual_insert_does_not_depend_on_model(
     chat_service: ChatService,
     fake_model: FakeModel,
 ) -> None:
@@ -1027,7 +1057,7 @@ def test_chat_unpositioned_manual_insert_does_not_depend_on_model(
 
     result = chat_service.edit(
         "p1",
-        ChatEditRequest(message="добавь авторский текст", expected_revision=2),
+        ChatEditRequest(message="добавь: авторский текст", expected_revision=2),
     )
 
     assert fake_model.calls == 0
@@ -1294,7 +1324,7 @@ def test_chat_retries_grounded_request_after_invalid_evidence(
         ),
     )
 
-    assert fake_model.calls == 2
+    assert fake_model.calls == 3
     assert "не прошёл проверку источников" in fake_model.systems[-1].casefold()
     assert result.document.nodes[-1].data["items"] == [
         "Как оператор подтверждает заявку?"

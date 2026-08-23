@@ -16,6 +16,7 @@ class IntentKind(StrEnum):
     FORMAT = "format"
     CLARIFICATION = "clarification"
     DOCUMENT_GLOSSARY = "document_glossary"
+    SEMANTIC = "semantic"
 
 
 class StructureAction(StrEnum):
@@ -78,21 +79,6 @@ _FORMAT_TERMS = (
     "формат",
     "indent",
 )
-_STRUCTURE_RULES = (
-    (StructureAction.DELETE, ("удал",)),
-    (StructureAction.MOVE, ("перемест", "перестав")),
-    (StructureAction.MERGE, ("объедин", "соедин")),
-    (StructureAction.SECTIONIZE, ("раздел", "секци")),
-    (StructureAction.SPLIT, ("разбей", "раздел")),
-)
-_GROUNDING_MARKERS = (
-    "по источник",
-    "из источник",
-    "согласно источник",
-    "подтвержд",
-    "факт",
-)
-_GROUNDING_VERBS = ("уточн", "допол", "исправ", "обнов", "добав", "заполн")
 _QUERY_NOISE = {
     "добавь",
     "добавить",
@@ -109,37 +95,11 @@ _QUERY_NOISE = {
     "уточнить",
 }
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
-_NEGATION_BEFORE_ACTION = re.compile(r"\b(?:не|нельзя)\s+\S*$")
-_GLOSSARY_ACTION_STEMS = (
-    "добав",
-    "вынес",
-    "выдел",
-    "заполн",
-    "извлек",
-    "собер",
-    "состав",
-    "сформир",
-)
-_GLOSSARY_CONTENT_STEMS = ("глоссар", "определен", "термин")
-_DOCUMENT_CONTENT_MARKERS = (
-    "в документ",
-    "из документ",
-    "из текст",
-    "на основе документ",
-    "по документ",
-    "по текущ",
-    "по текст",
-    "текущего документ",
-    "текущем документ",
-)
 
 
 def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
     normalized = " ".join(message.strip().split())
     lowered = normalized.casefold().replace("ё", "е")
-
-    if _is_document_glossary_request(lowered):
-        return IntentDecision(IntentKind.DOCUMENT_GLOSSARY)
 
     manual = parse_manual_insert(normalized)
     if manual is not None and _is_positioned_or_complete_pair(normalized, manual):
@@ -151,28 +111,6 @@ def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
 
     if any(term in lowered for term in _FORMAT_TERMS):
         return IntentDecision(IntentKind.FORMAT)
-
-    # A message that opens with an explicit add/clarify/fix verb is asking
-    # to bring in or correct content, never to reorganize existing blocks --
-    # even when a structural word ("раздел", "удал"...) appears later as
-    # part of what should be added or explained (e.g. "добавь отсутствующие
-    # разделы", "уточни, почему нельзя удалить..."). Leading intent wins
-    # over an incidental word match anywhere in the sentence.
-    leads_with_grounding_verb = any(lowered.startswith(verb) for verb in _GROUNDING_VERBS)
-    structure = None if leads_with_grounding_verb else _structure_action(lowered)
-    if structure is not None:
-        return IntentDecision(
-            IntentKind.STRUCTURE,
-            structure_action=structure,
-            target_ordinals=_ordinals(normalized),
-            relation=(
-                "before"
-                if "перед" in lowered
-                else "after"
-                if "после" in lowered
-                else None
-            ),
-        )
 
     if _QUESTION_ACTION.search(normalized):
         query = _retrieval_query(normalized)
@@ -193,20 +131,7 @@ def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
     if manual is not None and _is_explicit_authored_insert(normalized, manual):
         return IntentDecision(IntentKind.AUTHORED_EDIT, manual_insert=manual)
 
-    if leads_with_grounding_verb or any(
-        marker in lowered for marker in _GROUNDING_MARKERS
-    ):
-        return IntentDecision(
-            IntentKind.GROUNDED_EDIT,
-            retrieval_query=_retrieval_query(normalized),
-        )
-
-    return IntentDecision(
-        IntentKind.CLARIFICATION,
-        clarification=(
-            "Уточни, что изменить: текст или факт, целевой блок, структуру либо оформление."
-        ),
-    )
+    return IntentDecision(IntentKind.SEMANTIC)
 
 
 def _is_explicit_authored_insert(
@@ -217,15 +142,6 @@ def _is_explicit_authored_insert(
         intent.explicit_position
         or ":" in message
         or ("вопрос" in lowered and "ответ" in lowered)
-        or len(intent.text.split()) >= 2
-    )
-
-
-def _is_document_glossary_request(message: str) -> bool:
-    return (
-        any(stem in message for stem in _GLOSSARY_ACTION_STEMS)
-        and any(stem in message for stem in _GLOSSARY_CONTENT_STEMS)
-        and any(marker in message for marker in _DOCUMENT_CONTENT_MARKERS)
     )
 
 
@@ -253,38 +169,6 @@ def _authored_replacement(message: str) -> AuthoredReplacement | None:
             replacement=_clean_value(declared.group("replacement")),
         )
     return None
-
-
-def _structure_action(message: str) -> StructureAction | None:
-    for action, stems in _STRUCTURE_RULES:
-        if not _has_unnegated_stem(message, stems):
-            continue
-        if action is StructureAction.SECTIONIZE and not any(
-            term in message for term in ("раздел", "секци")
-        ):
-            continue
-        if action is StructureAction.SECTIONIZE and "блок" in message:
-            continue
-        return action
-    return None
-
-
-def _has_unnegated_stem(message: str, stems: tuple[str, ...]) -> bool:
-    """True if some occurrence of a stem is not directly preceded by a
-    negation ("не"/"нельзя ...удалить") -- a stem appearing only inside a
-    negated clause (e.g. "нельзя удалить") must not trigger the action it
-    names, since the message is explaining why NOT to do it, not asking
-    for it."""
-    for stem in stems:
-        start = 0
-        while True:
-            index = message.find(stem, start)
-            if index == -1:
-                break
-            if not _NEGATION_BEFORE_ACTION.search(message[:index]):
-                return True
-            start = index + len(stem)
-    return False
 
 
 def _retrieval_query(message: str) -> str:
