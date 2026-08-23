@@ -72,9 +72,23 @@
         </select>
         <span class="select-chevron" aria-hidden="true">⌄</span>
       </div>
+      <button
+        class="tool-button editor-style-action"
+        type="button"
+        data-editor-apply-heading
+        aria-label="Применить выбранный стиль"
+        title="Применить выбранный стиль"
+      >Применить</button>
       <button class="tool-button" type="button" data-editor-command="bold" aria-label="Полужирный" title="Полужирный">{{ toolbar_icon("bold") }}</button>
       <button class="tool-button" type="button" data-editor-command="italic" aria-label="Курсив" title="Курсив">{{ toolbar_icon("italic") }}</button>
       <button class="tool-button" type="button" data-editor-command="underline" aria-label="Подчёркивание" title="Подчёркивание">{{ toolbar_icon("underline") }}</button>
+      <button
+        class="tool-button editor-style-action"
+        type="button"
+        data-editor-clear-formatting
+        aria-label="Очистить форматирование"
+        title="Очистить форматирование"
+      >Очистить</button>
     </div>
     <div class="tool-group">
       <button class="tool-button" type="button" data-editor-command="insertUnorderedList" aria-label="Маркированный список" title="Маркированный список">{{ toolbar_icon("list") }}</button>

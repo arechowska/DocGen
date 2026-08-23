@@ -227,14 +227,74 @@
     applySanitizedInlineStyles(canvas);
     editor.dataset.editorInitialized = "true";
   let lastTableContext = null;
+  let savedSelection = null;
 
   const focusCanvas = () => {
     canvas.focus();
   };
 
-  const runCommand = (command, value = null) => {
+  const selectionBelongsToCanvas = (range) => {
+    const container = range?.commonAncestorContainer;
+    if (!container) return false;
+    const element = container.nodeType === Node.ELEMENT_NODE ? container : container.parentElement;
+    return element === canvas || canvas.contains(element);
+  };
+
+  const rememberSelection = () => {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (selectionBelongsToCanvas(range)) savedSelection = range.cloneRange();
+  };
+
+  const restoreSelection = () => {
     focusCanvas();
+    if (!savedSelection || !canvas.contains(savedSelection.startContainer)) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(savedSelection);
+  };
+
+  const normalizeSemanticNodeAttributes = () => {
+    const seenNodeIds = new Set();
+    const semanticAttributes = [
+      "data-node-id",
+      "data-kind",
+      "data-section-id",
+      "data-section-title",
+    ];
+    canvas.querySelectorAll("[data-node-id]").forEach((element) => {
+      const nodeId = element.dataset.nodeId;
+      if (!nodeId || !seenNodeIds.has(nodeId)) {
+        if (nodeId) seenNodeIds.add(nodeId);
+        return;
+      }
+      // formatBlock may split a block and copy its semantic identity. The
+      // additional fragment must be saved as a new manual node instead.
+      semanticAttributes.forEach((attribute) => element.removeAttribute(attribute));
+    });
+  };
+
+  const runCommand = (command, value = null) => {
+    restoreSelection();
     document.execCommand(command, false, value);
+    normalizeSemanticNodeAttributes();
+    rememberSelection();
+  };
+
+  const applyHeadingStyle = () => {
+    runCommand("formatBlock", headingSelect?.value || "p");
+  };
+
+  const clearFormatting = () => {
+    restoreSelection();
+    document.execCommand("removeFormat", false, null);
+    document.execCommand("unlink", false, null);
+    document.execCommand("formatBlock", false, "p");
+    document.execCommand("justifyLeft", false, null);
+    normalizeSemanticNodeAttributes();
+    if (headingSelect) headingSelect.value = "";
+    rememberSelection();
   };
 
   let saveStatusTimer = null;
@@ -266,6 +326,7 @@
   const saveWorkspace = async () => {
     const saveUrl = editor.dataset.saveUrl;
     if (!saveUrl || !saveButton) return;
+    normalizeSemanticNodeAttributes();
     saveButton.disabled = true;
     setSaveStatus("Сохранение...", "pending");
     try {
@@ -424,11 +485,23 @@
   };
 
   canvas.addEventListener("keyup", () => {
+    rememberSelection();
     contextCell();
   });
 
   canvas.addEventListener("mouseup", () => {
+    rememberSelection();
     contextCell();
+  });
+
+  editor.addEventListener("mousedown", (event) => {
+    const button = event.target.closest(
+      "button[data-editor-command], button[data-editor-apply-heading], button[data-editor-clear-formatting]",
+    );
+    if (!button) return;
+    rememberSelection();
+    // Keep the caret/range in contenteditable until execCommand runs on click.
+    event.preventDefault();
   });
 
   const insertImage = (file) => {
@@ -441,6 +514,14 @@
   };
 
   editor.addEventListener("click", (event) => {
+    if (event.target.closest("[data-editor-apply-heading]")) {
+      applyHeadingStyle();
+      return;
+    }
+    if (event.target.closest("[data-editor-clear-formatting]")) {
+      clearFormatting();
+      return;
+    }
     const button = event.target.closest("[data-editor-command]");
     if (!button) return;
     const command = button.dataset.editorCommand;
@@ -475,7 +556,7 @@
   });
 
   headingSelect?.addEventListener("change", () => {
-    runCommand("formatBlock", headingSelect.value || "p");
+    applyHeadingStyle();
   });
 
   imageInput?.addEventListener("change", () => {

@@ -1339,6 +1339,13 @@
   background: #eaf1fa;
 }
 
+.editor-style-action {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .generation-progress {
   -webkit-appearance: none;
   appearance: none;
