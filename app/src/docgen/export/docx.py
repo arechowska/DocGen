@@ -427,12 +427,35 @@ class DocxExporter:
         self, nodes: list[DocumentNode]
     ) -> Iterator[DocumentNode]:
         for node in nodes:
-            if node.kind is NodeKind.HEADING and node.text:
+            if self._is_toc_entry(node):
                 yield node
             yield from self._iter_heading_nodes(node.children)
 
     @staticmethod
+    def _is_toc_entry(node: DocumentNode) -> bool:
+        """Whether `node` is a section a contents/TOC entry should point to.
+
+        Real HEADING nodes always qualify. FAQ (and other semantic-template)
+        documents represent a section as a LIST node whose own `.text` is
+        the section title instead -- `_render_list` already renders that
+        text with the same `_SECTION_STYLE` heading look, so it must count
+        here too or a properly-assembled FAQ's sections never show up. Such
+        a list only actually renders (title included) when it has items --
+        matching that here keeps every TOC entry pointed at a real bookmark.
+        """
+        if node.kind is NodeKind.HEADING:
+            return bool(node.text)
+        if node.kind is NodeKind.LIST:
+            items = node.data.get("items")
+            return bool((node.text or "").strip()) and isinstance(items, list) and bool(items)
+        return False
+
+    @staticmethod
     def _heading_level(node: DocumentNode) -> int:
+        if node.kind is NodeKind.LIST:
+            # Matches _SECTION_STYLE, the same visual weight _render_list
+            # gives a titled list -- see _is_toc_entry.
+            return 2
         level = node.data.get("level", 1)
         return level if isinstance(level, int) else 1
 
@@ -683,7 +706,7 @@ class DocxExporter:
         elif node.kind == NodeKind.PARAGRAPH:
             self._render_paragraph(docx_document, node)
         elif node.kind == NodeKind.LIST:
-            self._render_list(docx_document, node, list_num_ids)
+            self._render_list(docx_document, node, list_num_ids, toc_bookmarks)
         elif node.kind == NodeKind.TABLE:
             self._render_table(docx_document, node)
         elif node.kind == NodeKind.IMAGE:
@@ -728,6 +751,7 @@ class DocxExporter:
         docx_document: docx.document.Document,
         node: DocumentNode,
         list_num_ids: dict[bool, int],
+        toc_bookmarks: dict[int, str],
     ) -> None:
         items = node.data.get("items", [])
         if not isinstance(items, list):
@@ -737,6 +761,9 @@ class DocxExporter:
         if node.text:
             section = docx_document.add_paragraph(node.text, style=_SECTION_STYLE)
             self._apply_node_style(section, node)
+            bookmark_name = toc_bookmarks.get(id(node))
+            if bookmark_name is not None:
+                self._wrap_bookmark(section, bookmark_name)
         ordered = bool(node.data.get("ordered", False))
         num_id = self._ensure_list_num_id(docx_document, ordered, list_num_ids)
         item_styles = node.data.get("item_styles")

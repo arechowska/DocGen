@@ -266,6 +266,62 @@ def test_docx_contents_uses_document_headings(docx_template: FormattingTemplate)
     )
 
 
+def test_docx_contents_includes_titled_list_sections(
+    docx_template: FormattingTemplate,
+) -> None:
+    """Assembled FAQ documents title a section via `.text` on a LIST node,
+    not a HEADING node (see assemble.py's FAQ assembly instructions) --
+    the contents page must still find and bookmark it."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="faq",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.LIST,
+                text="Общие вопросы",
+                data={"items": ["Вопрос: А?\nОтвет: Б."]},
+            ),
+        ],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    body_section = next(
+        p for p in package.paragraphs if p.text == "Общие вопросы"
+    )
+    assert body_section.style.name == "Colvir_Подзаголовок"
+
+    toc_entry = next(
+        p for p in package.paragraphs if p.text.startswith("Общие вопросы\t")
+    )
+    assert toc_entry.style.name == "toc 2"
+
+    bookmark_name = body_section._p.find(qn("w:bookmarkStart")).get(qn("w:name"))
+    anchor_name = toc_entry._p.find(qn("w:hyperlink")).get(qn("w:anchor"))
+    assert bookmark_name == anchor_name
+
+
+def test_docx_contents_skips_untitled_and_empty_lists(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="faq",
+        nodes=[
+            DocumentNode(kind=NodeKind.LIST, data={"items": ["Обычный пункт"]}),
+            DocumentNode(kind=NodeKind.LIST, text="Пустой раздел", data={"items": []}),
+        ],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    full_text = "\n".join(p.text for p in package.paragraphs)
+    assert "Список разделов пуст" in full_text
+    assert "Пустой раздел" not in full_text
+
+
 def test_docx_contents_is_a_real_updatable_toc_field(
     docx_template: FormattingTemplate,
 ) -> None:
