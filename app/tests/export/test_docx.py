@@ -735,6 +735,37 @@ def test_docx_renders_nested_children_for_every_kind(docx_template: FormattingTe
 # --- filename / media type ---------------------------------------------------
 
 
+def test_docx_footer_shows_category_label_for_faq(docx_template: FormattingTemplate) -> None:
+    document = WorkingDocument(title="Общие вопросы", template_id="faq", nodes=[])
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    footer_text = "\n".join(p.text for p in package.sections[0].footer.paragraphs)
+    assert "FAQ" in footer_text
+    assert "Руководство" not in footer_text
+
+
+def test_docx_footer_keeps_default_label_without_category(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(title="Документ", template_id="colvir-docx", nodes=[])
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    footer_text = "\n".join(p.text for p in package.sections[0].footer.paragraphs)
+    assert "Руководство" in footer_text
+
+
+def test_docx_filename_includes_category_label(docx_template: FormattingTemplate) -> None:
+    document = WorkingDocument(title="Общие вопросы", template_id="faq", nodes=[])
+
+    rendered = DocxExporter().render(document, docx_template)
+
+    assert rendered.filename.startswith("FAQ-")
+
+
 def test_docx_filename_and_media_type(docx_template: FormattingTemplate) -> None:
     document = WorkingDocument(
         title="Мой прекрасный документ", template_id="colvir-docx", nodes=[]

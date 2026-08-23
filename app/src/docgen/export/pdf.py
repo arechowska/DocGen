@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 
 from docgen.documents.schemas import WorkingDocument
 from docgen.export._naming import make_safe_filename
-from docgen.export.docx import DocxExporter
+from docgen.export.docx import DocxExporter, filename_title
 from docgen.export.html import HtmlExporter, ImageAsset, ImageLoader, local_storage_image_loader
 from docgen.export.protocol import ExportError, RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
@@ -152,7 +152,7 @@ class PdfExporter:
 
         return RenderedFile(
             filename=make_safe_filename(
-                document.title, ".pdf", reserved_suffix=f"-{template.id}"
+                filename_title(document), ".pdf", reserved_suffix=f"-{template.id}"
             ),
             media_type=_MEDIA_TYPE,
             content=pdf_bytes,

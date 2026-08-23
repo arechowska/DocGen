@@ -35,11 +35,32 @@ from docgen.templates_catalog.use_case import (
     USE_CASE_TECHNICAL_HEADERS,
 )
 
-__all__ = ["DocxExporter", "ImageAsset", "ImageLoader", "local_storage_image_loader"]
+__all__ = [
+    "DocxExporter",
+    "ImageAsset",
+    "ImageLoader",
+    "document_category_label",
+    "filename_title",
+    "local_storage_image_loader",
+]
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "formatting" / "templates"
 
 _MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+# Human labels for the semantic build templates (see
+# templates_catalog/semantic/*.yaml's own `name:`), used to swap the
+# corporate footer's generic "Руководство" for the document's actual
+# category and to prefix it onto the exported filename. Documents with no
+# recognized category (manual/imported/no-template) keep both as-is.
+_BUILD_TEMPLATE_LABELS = {
+    "faq": "FAQ",
+    "release-notes": "Release notes",
+    "use-case": "Use Case",
+    "technical-spec": "Техническая спецификация",
+    "api-docs": "Документация API",
+}
+_DEFAULT_FOOTER_LABEL = "Руководство"
 
 # Fixed conventions shared with markdown.py/html.py: gap nodes never carry
 # real text in production (assembled from missing-source detection), and the
@@ -132,6 +153,9 @@ class DocxExporter:
         self._enable_field_auto_update(docx_document)
         self._prepare_template_body(docx_document, _cover_title(document.title))
         self._prepare_headers(docx_document, _cover_title(document.title))
+        category_label = document_category_label(document)
+        if category_label is not None:
+            self._prepare_footer(docx_document, category_label)
         docx_document.core_properties.title = document.title
 
         # Use Case documents render their section headers as fixed form
@@ -161,7 +185,7 @@ class DocxExporter:
 
         return RenderedFile(
             filename=make_safe_filename(
-                document.title, ".docx", reserved_suffix=f"-{template.id}"
+                filename_title(document), ".docx", reserved_suffix=f"-{template.id}"
             ),
             media_type=_MEDIA_TYPE,
             content=buffer.getvalue(),
@@ -275,6 +299,24 @@ class DocxExporter:
                     WD_TAB_ALIGNMENT.RIGHT,
                 )
                 paragraph.text = f"Colvir Banking System\t{title}"
+
+    def _prepare_footer(
+        self, docx_document: docx.document.Document, label: str
+    ) -> None:
+        """Swap the template's generic footer label for the document's category.
+
+        The corporate footer literally reads "Руководство" (Guide/Manual) --
+        fine for a generic document, wrong for e.g. a FAQ export. Only the
+        label run is replaced; the page-number field beside it (and its
+        own tab/spacing) is left untouched.
+        """
+        for section in docx_document.sections:
+            for paragraph in section.footer.paragraphs:
+                if _DEFAULT_FOOTER_LABEL not in paragraph.text:
+                    continue
+                for run in paragraph.runs:
+                    if run.text == _DEFAULT_FOOTER_LABEL:
+                        run.text = label
 
     def _render_contents(
         self,
@@ -960,6 +1002,29 @@ class DocxExporter:
         num_pr.append(ilvl_element)
         num_pr.append(num_id_element)
         p_pr.append(num_pr)
+
+
+def document_category_label(document: WorkingDocument) -> str | None:
+    """The corporate label for `document`'s build template, or None.
+
+    None means the document has no recognized category (manual/imported/
+    no-template) -- callers should leave the template's own generic
+    "Руководство" footer and the plain title-derived filename alone.
+    """
+    if document.build_template_id is None:
+        return None
+    return _BUILD_TEMPLATE_LABELS.get(document.build_template_id)
+
+
+def filename_title(document: WorkingDocument) -> str:
+    """`document.title`, prefixed with its category label when it has one.
+
+    Shared by `DocxExporter` and `PdfExporter._render_from_docx_template`
+    (which converts the same DOCX render) so a FAQ export is recognizable
+    as "FAQ-..." in a folder of downloads on both formats, not just DOCX.
+    """
+    label = document_category_label(document)
+    return document.title if label is None else f"{label}-{document.title}"
 
 
 def _cover_title(title: str) -> str:

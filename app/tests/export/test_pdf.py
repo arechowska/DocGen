@@ -123,6 +123,19 @@ def test_colvir_pdf_has_valid_header_and_expected_text(
     assert "Оглавление" in text
 
 
+def test_colvir_pdf_footer_and_filename_reflect_document_category(
+    colvir_pdf_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(title="Общие вопросы", template_id="faq", nodes=[])
+
+    rendered = PdfExporter().render(document, colvir_pdf_template)
+
+    assert rendered.filename.startswith("FAQ-")
+    text = _open_pdf_text(rendered.content)
+    assert "FAQ" in text
+    assert "Руководство" not in text
+
+
 def test_colvir_pdf_preserves_complete_use_case_form_and_separate_flow_items(
     colvir_pdf_template: FormattingTemplate,
 ) -> None:
