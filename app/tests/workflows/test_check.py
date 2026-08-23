@@ -578,6 +578,40 @@ def test_standalone_check_does_not_replace_current_document_when_report_is_inval
     assert "save-document" not in events
 
 
+def test_standalone_check_attaches_report_without_replacing_unrelated_current_document(
+    semantic_template: SemanticTemplate,
+    document: WorkingDocument,
+) -> None:
+    """Checking a source must never overwrite an existing working document that
+    belongs to a different source -- only the report is attached to it."""
+    events: list[str] = []
+    documents = FakeDocuments(document, events)
+    workflow = CheckWorkflow(
+        projects=FakeProjects(),
+        normalization=FakeNormalization(
+            _target_block("text", BlockKind.TEXT, "Новое описание"), events
+        ),
+        templates=FakeCatalog(semantic_template),
+        text_model=FakeModel(
+            CheckReport(
+                template_id="use-case",
+                passed_rule_ids=[rule.id for rule in semantic_template.rules],
+            ),
+            events,
+        ),
+        vision_model=NoImageVision(),
+        grounding=GroundingValidator(),
+        documents=documents,
+    )
+
+    report = workflow.run(_job(target_source_id="source-1"), ProgressSpy(events))
+
+    assert documents.document is document
+    assert "save-document" not in events
+    assert "save" in events
+    assert documents.report is report
+
+
 def _finding(
     code: str,
     rule_id: str,

@@ -17,6 +17,39 @@
     });
   });
 
+  const scrollToNode = (nodeId) => {
+    if (!nodeId) return false;
+    const canvas = document.querySelector("#docgen2DocumentCanvas");
+    const target = canvas?.querySelector(`[data-node-id="${CSS.escape(nodeId)}"]`);
+    if (!target) return false;
+    document.querySelector('.mobile-tab[data-panel="docgen2Editor"]')?.click();
+    target.scrollIntoView({behavior: "smooth", block: "center"});
+    target.classList.remove("docgen-node-highlight");
+    void target.offsetWidth;
+    target.classList.add("docgen-node-highlight");
+    setTimeout(() => target.classList.remove("docgen-node-highlight"), 1600);
+    return true;
+  };
+
+  const nodeIdFromHash = (hash) => {
+    const match = /^#doc-node-(.+)$/.exec(hash || "");
+    return match ? decodeURIComponent(match[1]) : null;
+  };
+
+  const scrollToHashNode = () => {
+    const hash = typeof window === "undefined" ? null : window.location?.hash;
+    const nodeId = nodeIdFromHash(hash);
+    if (nodeId) scrollToNode(nodeId);
+  };
+
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-node-target]");
+    if (!link) return;
+    if (scrollToNode(link.dataset.nodeTarget)) event.preventDefault();
+  });
+  document.addEventListener("htmx:afterSwap", scrollToHashNode);
+  scrollToHashNode();
+
   const templateSource = document.querySelector("[data-template-source]");
   const synchronizeConversion = () => {
     const buildButton = document.querySelector("#buildButton");

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
 from docgen.ai.grounding import GroundingValidator
@@ -842,13 +843,55 @@ def test_report_view_groups_findings_and_links_to_document_nodes(
     assert "completeness-2" in response.text
     assert "terminology-3" in response.text
     assert (
-        f'href="/projects/{project_with_source.id}/document#node-node-1"'
+        f'data-node-target="node-1" href="/projects/{project_with_source.id}#doc-node-node-1"'
         in response.text
     )
     assert (
-        f'href="/projects/{project_with_source.id}/document#document-start"'
+        f'href="/projects/{project_with_source.id}#docgen2Editor"'
         in response.text
     )
+
+
+def test_report_renders_evidence_and_suggestion_as_separate_blocks(
+    client: TestClient, project_with_source: Project
+) -> None:
+    """A finding's quote and its proposed fix must not be folded into one
+    paragraph with the problem statement -- each is its own labelled block."""
+    _save_document(client, project_with_source.id, _document())
+    report = CheckReport(
+        template_id="use-case",
+        findings=[
+            CheckFinding(
+                code="confirmed",
+                severity=Severity.ERROR,
+                confidence=0.9,
+                message="Шаг не пронумерован",
+                evidence="Пользователь открывает форму и заполняет поля",
+                suggestion="Добавьте номер шага перед описанием действия",
+                node_id="node-1",
+                rule_id="structure-1",
+            ),
+            CheckFinding(
+                code="no-detail",
+                severity=Severity.WARNING,
+                confidence=0.9,
+                message="Замечание без цитаты и без предложения",
+                node_id="node-1",
+                rule_id="style-5",
+            ),
+        ],
+    )
+    _save_report(client, project_with_source.id, report)
+
+    response = client.get(f"/projects/{project_with_source.id}/report")
+
+    assert response.status_code == 200
+    page = BeautifulSoup(response.text, "html.parser")
+    blockquotes = [tag.get_text(strip=True) for tag in page.find_all("blockquote")]
+    assert blockquotes == ["Пользователь открывает форму и заполняет поля"]
+    assert "Как исправить:" in response.text
+    assert "Добавьте номер шага перед описанием действия" in response.text
+    assert "Замечание без цитаты и без предложения" in response.text
 
 
 def test_succeeded_assemble_job_updates_docgen2_editor_out_of_band(
@@ -1004,12 +1047,12 @@ def test_empty_report_never_claims_that_all_rules_were_checked(
     assert "Нет сведений о покрытии правил" in response.text
 
 
-def test_report_renders_explicit_passed_rules(
+def test_report_does_not_render_passed_rules(
     client: TestClient, project_with_source: Project
 ) -> None:
-    """Passed rule ids must render as their human-readable instruction text
-    (from the semantic template), not the bare machine id -- a bare id like
-    "use-case-flow-branches" means nothing to someone reading the report."""
+    """Passed rules are not user-facing output -- the report only surfaces
+    problems (confirmed findings, low-confidence findings) and unchecked
+    rules, never the rules that already passed."""
     _save_document(client, project_with_source.id, _document())
     _save_report(
         client,
@@ -1022,9 +1065,9 @@ def test_report_renders_explicit_passed_rules(
 
     response = client.get(f"/projects/{project_with_source.id}/report")
 
-    assert "Успешно пройденные правила" in response.text
-    assert "нумерованным основным потоком" in response.text
-    assert "один переход состояния" in response.text
+    assert "Успешно пройденные правила" not in response.text
+    assert "нумерованным основным потоком" not in response.text
+    assert "один переход состояния" not in response.text
     assert "use-case-structure" not in response.text
     assert "use-case-style" not in response.text
 

@@ -22,7 +22,6 @@ from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import (
     CheckReport,
     DocumentNode,
-    DocumentOrigin,
     NodeKind,
     WorkingDocument,
 )
@@ -182,13 +181,7 @@ def test_formatta_workspace_preserves_template_through_edit_and_recheck(
         report_page = restarted.get(f"{project_url}/report")
         assert report_page.status_code == 200
         source_result = _stored_document(restarted, project_id)
-        assert source_result.template_id == "no-template"
-        assert source_result.build_template_id is None
-        assert source_result.origin is DocumentOrigin.IMPORTED
-        assert source_result.source_id == source_id
-        assert source_result.title == "Formatta"
-        assert source_result.nodes
-        assert all(node.provenance for node in source_result.nodes)
+        assert source_result == persisted
         document_page = restarted.get(f"{project_url}/document")
         assert document_page.status_code == 200
         assert "Formatta" in document_page.text

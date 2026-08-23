@@ -105,6 +105,8 @@ class CheckFinding(BaseModel):
     severity: Severity
     confidence: float = Field(ge=0, le=1)
     message: str
+    evidence: str | None = None
+    suggestion: str | None = None
     node_id: str | None = None
     rule_id: str | None = None
 

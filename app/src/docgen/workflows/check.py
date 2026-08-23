@@ -127,14 +127,20 @@ class CheckWorkflow:
 
         progress(100, "Сохранение отчёта")
         progress.checkpoint()
-        if target_kind is CheckTargetKind.SOURCE and document_revision is None:
-            self._documents.save_document_and_report(job.project_id, document, report)
-        else:
-            assert document_revision is not None
+        if document_revision is not None:
             self._documents.save_report(
                 job.project_id,
                 report,
                 expected_document_revision=document_revision,
+                target_source_id=job.target_source_id,
+            )
+        elif current is None:
+            self._documents.save_document_and_report(job.project_id, document, report)
+        else:
+            self._documents.save_report(
+                job.project_id,
+                report,
+                expected_document_revision=current_revision,
                 target_source_id=job.target_source_id,
             )
         return report

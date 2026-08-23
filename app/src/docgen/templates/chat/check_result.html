@@ -14,9 +14,16 @@
         <li>
           <p class="check-result-rule">{{ rule_instructions.get(finding.rule_id, finding.rule_id) }}</p>
           <p class="check-result-message">{{ finding.message }}</p>
+          {% if finding.evidence %}
+            <blockquote class="check-result-evidence">{{ finding.evidence }}</blockquote>
+          {% endif %}
+          {% if finding.suggestion %}
+            <p class="check-result-suggestion"><strong>Как исправить:</strong> {{ finding.suggestion }}</p>
+          {% endif %}
           <a
             class="check-result-link"
-            href="/projects/{{ project_id }}/document#{% if finding.node_id %}node-{{ finding.node_id }}{% else %}document-start{% endif %}"
+            {% if finding.node_id %}data-node-target="{{ finding.node_id }}"{% endif %}
+            href="/projects/{{ project_id }}#{% if finding.node_id %}doc-node-{{ finding.node_id }}{% else %}docgen2Editor{% endif %}"
           >К узлу документа</a>
         </li>
       {% endfor %}

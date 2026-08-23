@@ -1080,6 +1080,21 @@
   font-size: 13px;
 }
 
+.check-result-evidence {
+  margin: 8px 0 0;
+  padding: 6px 0 6px 10px;
+  border-left: 2px solid var(--lk-border);
+  color: var(--lk-text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.check-result-suggestion {
+  margin: 8px 0 0;
+  color: var(--lk-ink);
+  font-size: 13px;
+}
+
 .check-result-note {
   margin: 10px 0 0;
   color: var(--lk-text-muted);
@@ -1101,6 +1116,18 @@
 
 .check-result-full {
   margin-top: 12px;
+}
+
+.docgen-node-highlight {
+  outline: 2px solid var(--lk-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+  animation: docgen-node-flash 1.6s ease-out;
+}
+
+@keyframes docgen-node-flash {
+  0% { background: rgba(27, 94, 170, .18); }
+  100% { background: transparent; }
 }
 
 .error-banner {
