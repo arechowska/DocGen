@@ -66,8 +66,6 @@
     }
     if (!buildButton) return;
     buildButton.setAttribute("form", withoutTemplate ? "conversionForm" : "assembleForm");
-    const label = buildButton.querySelector("[data-build-label]");
-    if (label) label.textContent = withoutTemplate ? "Открыть" : "Собрать";
     const sourceAvailable = buildButton.dataset.sourceAvailable === "true";
     const conversionReady = Boolean(formatSource?.value && conversionTemplate?.value);
     buildButton.disabled = !sourceAvailable || (withoutTemplate && !conversionReady);
