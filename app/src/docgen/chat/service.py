@@ -16,7 +16,7 @@ from docgen.chat.executors import (
     formatting_operations,
     structural_operations,
 )
-from docgen.chat.intents import IntentKind, route_intent
+from docgen.chat.intents import IntentKind, _retrieval_query, route_intent
 from docgen.chat.manual_insert import (
     ManualInsertError,
 )
@@ -41,7 +41,7 @@ from docgen.documents.operations import (
     find_node,
 )
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import CheckFinding, DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import NormalizedBlock, Provenance
 
 CHAT_SYSTEM_PROMPT = """
@@ -156,11 +156,65 @@ class ChatService:
                 summary="Документ структурирован",
             )
 
+        return self._model_grounded_edit(
+            project_id,
+            request.expected_revision,
+            document,
+            message,
+            decision.retrieval_query,
+            decision.kind,
+        )
+
+    def apply_finding_fix(
+        self,
+        project_id: str,
+        finding: CheckFinding,
+        expected_revision: int,
+    ) -> ChatEditResult:
+        """Apply a check report finding's suggested fix through the same
+        grounded-edit pipeline as a regular chat message -- the source
+        verification is identical, so a suggestion can never be applied
+        without the same evidence a human-typed request would need."""
+        if not finding.suggestion:
+            raise ChatValidationError("Для этой проблемы нет предложенного исправления")
+        stored = self._documents.get_document_with_revision(project_id)
+        if stored is None:
+            raise ChatValidationError("Документ не найден")
+        document, current_revision = stored
+        if current_revision != expected_revision:
+            raise ChatError(ChatErrorCode.REVISION_CONFLICT)
+
+        message = " ".join(
+            part for part in (finding.message, finding.suggestion) if part
+        )
+        retrieval_text = " ".join(
+            part
+            for part in (finding.message, finding.evidence, finding.suggestion)
+            if part
+        )
+        return self._model_grounded_edit(
+            project_id,
+            expected_revision,
+            document,
+            message,
+            _retrieval_query(retrieval_text),
+            IntentKind.GROUNDED_EDIT,
+        )
+
+    def _model_grounded_edit(
+        self,
+        project_id: str,
+        expected_revision: int,
+        document: WorkingDocument,
+        message: str,
+        retrieval_query: str,
+        intent_kind: IntentKind,
+    ) -> ChatEditResult:
         snapshot = _as_source_snapshot(self._source_blocks(project_id))
-        retrieved = retrieve_relevant_blocks(snapshot, decision.retrieval_query)
+        retrieved = retrieve_relevant_blocks(snapshot, retrieval_query)
         source_blocks = retrieved.blocks
 
-        if decision.kind is IntentKind.TEMPLATE_ACTION:
+        if intent_kind is IntentKind.TEMPLATE_ACTION:
             try:
                 plan = self._faq_plan(document, source_blocks, message)
             except ChatGroundingError:
@@ -179,11 +233,11 @@ class ChatService:
 
         if not plan.operations:
             raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
-        _validate_plan_for_intent(decision.kind, document, plan)
+        _validate_plan_for_intent(intent_kind, document, plan)
         try:
             _validate_plan(document, source_blocks, plan)
         except ChatGroundingError:
-            if decision.kind is IntentKind.TEMPLATE_ACTION:
+            if intent_kind is IntentKind.TEMPLATE_ACTION:
                 plan = self._faq_plan(
                     document,
                     source_blocks,
@@ -198,13 +252,13 @@ class ChatService:
                 )
             if not plan.operations:
                 raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
-            _validate_plan_for_intent(decision.kind, document, plan)
+            _validate_plan_for_intent(intent_kind, document, plan)
             _validate_plan(document, source_blocks, plan)
 
         operations = _operations_for_application(document, plan, source_blocks)
         return self._apply_operations(
             project_id,
-            request.expected_revision,
+            expected_revision,
             operations,
             summary=plan.summary,
         )

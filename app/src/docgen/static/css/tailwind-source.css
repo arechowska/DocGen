@@ -1110,8 +1110,32 @@
   text-decoration: none;
 }
 
-.check-result-findings .check-result-link {
+.check-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
   margin-top: 8px;
+}
+
+.check-result-actions .check-result-link {
+  margin-top: 0;
+}
+
+.check-result-apply {
+  padding: 5px 12px;
+  border: 1px solid var(--lk-primary);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--lk-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.check-result-apply:hover {
+  background: var(--lk-primary);
+  color: #fff;
 }
 
 .check-result-full {

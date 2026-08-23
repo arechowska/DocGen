@@ -894,6 +894,67 @@ def test_report_renders_evidence_and_suggestion_as_separate_blocks(
     assert "Замечание без цитаты и без предложения" in response.text
 
 
+def test_report_card_reinjects_the_actionable_chat_card(
+    client: TestClient, project_with_source: Project
+) -> None:
+    """Chat history is not persisted, so re-visiting the workspace after a
+    check must still be able to bring the report -- with its working
+    "К узлу документа"/"Внести правку" actions -- back into the chat."""
+    _save_document(client, project_with_source.id, _document())
+    report = CheckReport(
+        template_id="use-case",
+        findings=[
+            CheckFinding(
+                code="confirmed",
+                severity=Severity.ERROR,
+                confidence=0.9,
+                message="Шаг не пронумерован",
+                suggestion="Добавьте номер шага перед описанием действия",
+                node_id="node-1",
+                rule_id="structure-1",
+            ),
+        ],
+    )
+    _save_report(client, project_with_source.id, report)
+
+    response = client.get(f"/projects/{project_with_source.id}/report/card")
+
+    assert response.status_code == 200
+    assert 'hx-swap-oob="beforeend:#chat-messages"' in response.text
+    assert "Шаг не пронумерован" in response.text
+    assert (
+        f'hx-post="/projects/{project_with_source.id}/report/findings/structure-1/apply-fix"'
+        in response.text
+    )
+
+
+def test_report_card_missing_returns_404(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.get(f"/projects/{project_with_source.id}/report/card")
+
+    assert response.status_code == 404
+
+
+def test_project_page_shows_persistent_report_link_only_when_report_exists(
+    client: TestClient, project_with_source: Project
+) -> None:
+    _save_document(client, project_with_source.id, _document())
+
+    before = client.get(f"/projects/{project_with_source.id}")
+    assert 'id="reportLink"' not in before.text
+
+    _save_report(
+        client,
+        project_with_source.id,
+        CheckReport(template_id="use-case", passed_rule_ids=["use-case-structure"]),
+    )
+
+    after = client.get(f"/projects/{project_with_source.id}")
+    assert 'id="reportLink"' in after.text
+    assert f'hx-get="/projects/{project_with_source.id}/report/card"' in after.text
+
+
 def test_succeeded_assemble_job_updates_docgen2_editor_out_of_band(
     client: TestClient, project_with_source: Project
 ) -> None:

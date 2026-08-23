@@ -1,0 +1,16 @@
+{% if has_report %}
+  <button
+    id="reportLink"
+    class="button secondary"
+    type="button"
+    hx-get="/projects/{{ project_id }}/report/card"
+    hx-target="#chat-messages"
+    hx-swap="beforeend"
+    {% if report_link_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+  >
+    <span class="button-icon eye-icon" aria-hidden="true"></span>
+    <span>Отчёт</span>
+  </button>
+{% elif report_link_oob | default(false) %}
+  <span id="reportLink" hx-swap-oob="true" hidden></span>
+{% endif %}

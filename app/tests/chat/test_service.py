@@ -23,7 +23,13 @@ from docgen.db import Base
 from docgen.documents.models import ProjectArtifact
 from docgen.documents.operations import DeleteNode, InsertNode, UpdateData, UpdateText, find_node
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import (
+    CheckFinding,
+    DocumentNode,
+    NodeKind,
+    Severity,
+    WorkingDocument,
+)
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job
 from docgen.projects.models import Project
@@ -124,6 +130,78 @@ def test_chat_applies_grounded_plan(chat_service: ChatService, fake_model: FakeM
 
     assert result.revision == 3
     assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
+
+
+def test_apply_finding_fix_runs_through_grounded_edit_pipeline(
+    chat_service: ChatService, fake_model: FakeModel
+) -> None:
+    """A finding's suggested fix must go through the same source-grounded
+    plan/validate path as a normal chat message, not bypass it."""
+    fake_model.result = ChatEditPlan(
+        summary="Уточнён актор",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateText(
+                    node_id="actor",
+                    text="Оператор подтверждает заявку",
+                ),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+    finding = CheckFinding(
+        code="c1",
+        severity=Severity.WARNING,
+        confidence=0.9,
+        message="Не указано, что делает актор",
+        evidence="Заявка подтверждается оператором",
+        suggestion="Уточни, что оператор подтверждает заявку",
+        node_id="actor",
+        rule_id="structure-1",
+    )
+
+    result = chat_service.apply_finding_fix("p1", finding, expected_revision=2)
+
+    assert result.revision == 3
+    assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
+
+
+def test_apply_finding_fix_rejects_finding_without_suggestion(
+    chat_service: ChatService, fake_model: FakeModel
+) -> None:
+    finding = CheckFinding(
+        code="c1",
+        severity=Severity.WARNING,
+        confidence=0.9,
+        message="Не указано, что делает актор",
+        node_id="actor",
+        rule_id="structure-1",
+    )
+
+    with pytest.raises(ChatValidationError):
+        chat_service.apply_finding_fix("p1", finding, expected_revision=2)
+
+    assert fake_model.calls == 0
+
+
+def test_apply_finding_fix_rejects_stale_revision(
+    chat_service: ChatService, fake_model: FakeModel
+) -> None:
+    finding = CheckFinding(
+        code="c1",
+        severity=Severity.WARNING,
+        confidence=0.9,
+        message="Не указано, что делает актор",
+        suggestion="Уточни, что оператор подтверждает заявку",
+        node_id="actor",
+        rule_id="structure-1",
+    )
+
+    with pytest.raises(ChatError) as caught:
+        chat_service.apply_finding_fix("p1", finding, expected_revision=1)
+
+    assert caught.value.code is ChatErrorCode.REVISION_CONFLICT
+    assert fake_model.calls == 0
 
 
 def test_chat_noop_plan_is_not_reported_as_a_successful_edit(

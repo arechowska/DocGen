@@ -223,6 +223,33 @@ def report_view(request: Request, project_id: str, session: SessionDependency) -
     return _report_response(request, project_id, report, standalone=True)
 
 
+@router.get("/{project_id}/report/card")
+def report_card(request: Request, project_id: str, session: SessionDependency) -> Response:
+    """Re-inject the last check report into the chat as the same actionable
+    card shown right after a check completes -- chat history is not
+    persisted, so this is how the report is reached again after navigating
+    away and back."""
+    _project_or_404(session, project_id)
+    report = DocumentRepository(session).get_report(project_id)
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Отчёт не найден",
+        )
+    confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
+    low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
+    return templates.TemplateResponse(
+        request=request,
+        name="chat/check_result.html",
+        context={
+            "project_id": project_id,
+            "confirmed": confirmed,
+            "low_confidence": low_confidence,
+            "rule_instructions": _rule_instructions(request, report.template_id),
+        },
+    )
+
+
 def _start_job(
     request: Request,
     session: Session,

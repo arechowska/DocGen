@@ -11,7 +11,14 @@ from docgen.chat.schemas import ChatEditRequest, ChatEditResult
 from docgen.chat.service import ChatGroundingError
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import (
+    CheckFinding,
+    CheckReport,
+    DocumentNode,
+    NodeKind,
+    Severity,
+    WorkingDocument,
+)
 from docgen.main import create_app
 from docgen.models import Project
 
@@ -32,6 +39,21 @@ class FakeChat:
                 nodes=[DocumentNode(id="n1", kind=NodeKind.HEADING, text="Коротко")],
             ),
             revision=request.expected_revision + 1,
+        )
+
+    def apply_finding_fix(
+        self, project_id: str, finding: CheckFinding, expected_revision: int
+    ) -> ChatEditResult:
+        assert project_id
+        assert finding.suggestion
+        return ChatEditResult(
+            summary="Правка внесена по отчёту",
+            document=WorkingDocument(
+                title="Документ",
+                template_id="use-case",
+                nodes=[DocumentNode(id="n1", kind=NodeKind.HEADING, text="Исправлено")],
+            ),
+            revision=expected_revision + 1,
         )
 
 
@@ -66,6 +88,88 @@ def project_with_document(client: TestClient) -> Project:
         return project
     finally:
         session.close()
+
+
+@pytest.fixture
+def project_with_report(client: TestClient, project_with_document: Project) -> Project:
+    session = client.app.state.session_factory()
+    try:
+        report = CheckReport(
+            template_id="use-case",
+            findings=[
+                CheckFinding(
+                    code="c1",
+                    severity=Severity.WARNING,
+                    confidence=0.9,
+                    message="Заголовок слишком длинный",
+                    suggestion="Сократи заголовок",
+                    node_id="n1",
+                    rule_id="structure-1",
+                ),
+                CheckFinding(
+                    code="c2",
+                    severity=Severity.INFO,
+                    confidence=0.8,
+                    message="Замечание без предложенного исправления",
+                    node_id="n1",
+                    rule_id="terminology-1",
+                ),
+            ],
+        )
+        DocumentRepository(session).save_report(
+            project_with_document.id, report, expected_document_revision=1
+        )
+        session.commit()
+        return project_with_document
+    finally:
+        session.close()
+
+
+def test_apply_finding_fix_returns_message_and_refreshes_document(
+    client: TestClient, project_with_report: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_report.id}/report/findings/structure-1/apply-fix",
+        data={"revision": "1"},
+    )
+
+    assert response.status_code == 200
+    assert "Правка внесена по отчёту" in response.text
+    assert "HX-Trigger" in response.headers
+
+
+def test_apply_finding_fix_without_suggestion_is_rejected(
+    client: TestClient, project_with_report: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_report.id}/report/findings/terminology-1/apply-fix",
+        data={"revision": "1"},
+    )
+
+    assert response.status_code == 404
+    assert "нет предложенного исправления" in response.text
+
+
+def test_apply_finding_fix_for_unknown_rule_is_rejected(
+    client: TestClient, project_with_report: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_report.id}/report/findings/unknown-rule/apply-fix",
+        data={"revision": "1"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_apply_finding_fix_without_revision_returns_readable_error(
+    client: TestClient, project_with_report: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_report.id}/report/findings/structure-1/apply-fix",
+    )
+
+    assert response.status_code == 422
+    assert "ревизию" in response.text
 
 
 def test_chat_returns_message_and_refreshes_document(

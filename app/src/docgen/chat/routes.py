@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, Request, status
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from docgen.ai.client import ModelConfigurationError, ModelError, build_text_model
 from docgen.chat.errors import ChatError
 from docgen.chat.retrieval import SourceSnapshot, SourceSnapshotCache
-from docgen.chat.schemas import ChatEditRequest
+from docgen.chat.schemas import ChatEditRequest, ChatEditResult
 from docgen.chat.service import ChatService
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
@@ -45,12 +46,66 @@ def post_chat(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
-    chat = _chat_service(request, session)
-    try:
-        result = chat.edit(
+    return _run_chat_edit(
+        request,
+        session,
+        project_id,
+        revision,
+        lambda chat: chat.edit(
             project_id,
             ChatEditRequest(message=message, expected_revision=revision),
+        ),
+    )
+
+
+@router.post("/{project_id}/report/findings/{rule_id}/apply-fix")
+def post_apply_finding_fix(
+    request: Request,
+    project_id: str,
+    rule_id: str,
+    session: SessionDependency,
+    revision: Annotated[int | None, Form()] = None,
+) -> Response:
+    if revision is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Не удалось определить ревизию документа"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
+
+    report = DocumentRepository(session).get_report(project_id)
+    finding = next(
+        (item for item in report.findings if item.rule_id == rule_id),
+        None,
+    ) if report is not None else None
+    if finding is None or not finding.suggestion:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Для этой проблемы нет предложенного исправления"},
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    return _run_chat_edit(
+        request,
+        session,
+        project_id,
+        revision,
+        lambda chat: chat.apply_finding_fix(project_id, finding, revision),
+    )
+
+
+def _run_chat_edit(
+    request: Request,
+    session: Session,
+    project_id: str,
+    revision: int,
+    run: Callable[[ChatService], ChatEditResult],
+) -> Response:
+    chat = _chat_service(request, session)
+    try:
+        result = run(chat)
     except ChatError as error:
         session.rollback()
         return templates.TemplateResponse(
@@ -81,6 +136,7 @@ def post_chat(
         )
 
     session.commit()
+    documents = DocumentRepository(session)
     response = templates.TemplateResponse(
         request=request,
         name="chat/message.html",
@@ -91,11 +147,12 @@ def post_chat(
             "project_id": project_id,
             "document": result.document,
             "workspace_html": (
-                DocumentRepository(session).get_workspace_html(project_id)
+                documents.get_workspace_html(project_id)
                 if result.revision == revision
                 else None
             ),
             "editor_oob": True,
+            "has_report": documents.get_report(project_id) is not None,
         },
     )
     response.headers["HX-Trigger"] = json.dumps(

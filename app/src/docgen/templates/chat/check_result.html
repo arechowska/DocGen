@@ -20,11 +20,23 @@
           {% if finding.suggestion %}
             <p class="check-result-suggestion"><strong>Как исправить:</strong> {{ finding.suggestion }}</p>
           {% endif %}
-          <a
-            class="check-result-link"
-            {% if finding.node_id %}data-node-target="{{ finding.node_id }}"{% endif %}
-            href="/projects/{{ project_id }}#{% if finding.node_id %}doc-node-{{ finding.node_id }}{% else %}docgen2Editor{% endif %}"
-          >К узлу документа</a>
+          <div class="check-result-actions">
+            <a
+              class="check-result-link"
+              {% if finding.node_id %}data-node-target="{{ finding.node_id }}"{% endif %}
+              href="/projects/{{ project_id }}#{% if finding.node_id %}doc-node-{{ finding.node_id }}{% else %}docgen2Editor{% endif %}"
+            >К узлу документа</a>
+            {% if finding.suggestion and finding.rule_id %}
+              <button
+                type="button"
+                class="check-result-apply"
+                hx-post="/projects/{{ project_id }}/report/findings/{{ finding.rule_id }}/apply-fix"
+                hx-include="#chatForm input[name='revision']"
+                hx-target="#chat-messages"
+                hx-swap="beforeend"
+              >Внести правку</button>
+            {% endif %}
+          </div>
         </li>
       {% endfor %}
     </ul>
