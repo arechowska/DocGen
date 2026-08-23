@@ -128,6 +128,35 @@ def test_workspace_forms_share_selected_template_contract(client: TestClient) ->
         assert field["value"] == selected_template["value"]
 
 
+def test_workspace_preselects_the_documents_own_template_on_reload(
+    client: TestClient,
+) -> None:
+    """Reloading the workspace page (e.g. returning from a stale-report
+    link) must not reset "Шаблон" to "Без шаблона" -- that silently
+    disables "Проверить по шаблону" even though the document was built
+    with a real template."""
+    created = client.post("/projects", data={"name": "Реюз шаблона"}, follow_redirects=False)
+    project_url = created.headers["location"]
+    project_id = project_url.rsplit("/", 1)[-1]
+    with client.app.state.session_factory() as session:
+        DocumentRepository(session).save_document(
+            project_id,
+            WorkingDocument(
+                title="Сценарий",
+                template_id="use-case",
+                nodes=[DocumentNode(id="intro", kind=NodeKind.PARAGRAPH, text="Введение")],
+            ),
+        )
+        session.commit()
+
+    page = BeautifulSoup(client.get(project_url).text, "html.parser")
+    template_select = page.find("select", id="templateSelect")
+    assert template_select is not None
+    selected_template = template_select.find("option", selected=True)
+    assert selected_template is not None
+    assert selected_template["value"] == "use-case"
+
+
 def test_workspace_source_update_swaps_review_button_state(client: TestClient) -> None:
     created = client.post("/projects", data={"name": "Обновление источников"}, follow_redirects=False)
     project_url = created.headers["location"]

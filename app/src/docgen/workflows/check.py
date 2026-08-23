@@ -423,9 +423,9 @@ def _structure_mismatch_message(
     if not differences:
         return None
     return (
-        f"Структура документа не совпадает с полной формой «{template.name}»: "
-        + "; ".join(differences)
-        + ". Пустые значения допустимы — нужно добавить именно отсутствующие "
+        f"Структура документа не совпадает с полной формой «{template.name}»:\n"
+        + "\n".join(differences)
+        + "\n\nПустые значения допустимы — нужно добавить именно отсутствующие "
         "элементы формы."
     )
 
@@ -488,31 +488,15 @@ def _form_gap_operations(
     document: WorkingDocument,
     contract: SemanticStructureCheck,
 ) -> list[DocumentOperation]:
+    # Missing headings are deliberately NOT auto-inserted here: unlike an
+    # assembled document (where a section_id ties every node to its slot),
+    # an imported/free-form document's existing text is often already the
+    # missing section's content, just not wrapped in a matching heading.
+    # Blindly adding an empty "Описание" heading next to unlabeled content
+    # that IS the description creates a duplicate, meaningless skeleton --
+    # deciding where existing prose belongs needs judgment, not a rule.
     operations: list[DocumentOperation] = []
     next_index = len(document.nodes)
-    existing_headings = {
-        _normalized_heading(node.text)
-        for node in _walk_nodes(document.nodes)
-        if node.kind is NodeKind.HEADING and node.text
-    }
-    for heading in contract.required_headings:
-        if _normalized_heading(heading) in existing_headings:
-            continue
-        heading_id = f"section-{uuid4()}"
-        operations.append(
-            InsertNode(
-                index=next_index,
-                node=DocumentNode(
-                    id=heading_id,
-                    kind=NodeKind.HEADING,
-                    text=heading,
-                    flags=["structural-edit"],
-                ),
-            )
-        )
-        next_index += 1
-        operations.append(_gap_insert(parent_id=heading_id))
-
     table_cells = _table_cells(document)
     for required_table in contract.required_tables:
         expected = {

@@ -19,9 +19,9 @@
       <label class="control template-control" title="Шаблон определяет структуру документа">
         <span>Шаблон</span>
         <select id="templateSelect" data-template-source>
-          <option value="no-template" selected>Без шаблона</option>
+          <option value="no-template" {% if not document or not document.build_template_id %}selected{% endif %}>Без шаблона</option>
           {% for semantic_template in templates %}
-            <option value="{{ semantic_template.id }}">{{ semantic_template.name }}</option>
+            <option value="{{ semantic_template.id }}" {% if document and document.build_template_id == semantic_template.id %}selected{% endif %}>{{ semantic_template.name }}</option>
           {% endfor %}
         </select>
       </label>

@@ -1078,6 +1078,11 @@
   margin: 4px 0 0;
   color: var(--lk-ink);
   font-size: 13px;
+  white-space: pre-line;
+}
+
+.whitespace-pre-line {
+  white-space: pre-line;
 }
 
 .check-result-evidence {

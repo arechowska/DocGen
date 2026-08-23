@@ -776,12 +776,16 @@ def test_use_case_form_check_reports_missing_structure_even_when_model_passes() 
     assert "«Общие сведения»" in finding.message
     assert "«История изменений»" in finding.message
     assert "use-case-template-form" not in report.passed_rule_ids
+    # Each gap (missing headings, each missing/incomplete table) is its own
+    # line -- a single run-on "; "-joined sentence is unreadable once there
+    # are several gaps.
+    assert finding.message.count("\n") >= 2
+    assert "; " not in finding.message
 
 
-def test_structure_gap_operations_fill_missing_headings_and_tables_without_a_model() -> None:
-    """The deterministic fixer must resolve the exact gaps the structure
-    check reports -- re-running the check on the filled-in document must
-    find nothing missing."""
+def test_structure_gap_operations_fill_missing_tables_without_a_model() -> None:
+    """The deterministic fixer resolves every missing table -- re-running
+    the check on the filled-in document must find no table gaps left."""
     template = TemplateCatalog().get("use-case")
     contract = template.structure_check
     assert contract is not None
@@ -797,8 +801,38 @@ def test_structure_gap_operations_fill_missing_headings_and_tables_without_a_mod
     assert operations
 
     filled = apply_operations(document, operations)
+    message = _structure_mismatch_message(template, filled)
 
-    assert _structure_mismatch_message(template, filled) is None
+    assert message is not None
+    assert "отсутствует таблица" not in message
+    assert "отсутствуют поля" not in message
+    assert "отсутствуют разделы" in message
+
+
+def test_structure_gap_operations_never_auto_insert_missing_headings() -> None:
+    """A missing heading in an imported/free-form document is never
+    auto-filled: existing unlabeled text is often already that section's
+    content, and deciding where it belongs needs judgment, not a rule."""
+    template = TemplateCatalog().get("use-case")
+    document = WorkingDocument(
+        title="Исходный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                text="1. Пользователь открывает задачу «Ведение картотеки клиентов».",
+            )
+        ],
+    )
+
+    operations = structure_gap_operations(document, template)
+
+    assert not any(
+        isinstance(operation, InsertNode) and operation.node.kind is NodeKind.HEADING
+        for operation in operations
+    )
 
 
 def test_structure_gap_operations_insert_header_row_tables_as_one_wide_table() -> None:

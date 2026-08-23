@@ -1,6 +1,6 @@
 {% macro render_finding(finding) %}
   <p class="text-sm font-medium text-[#5f6873]">{{ rule_instructions.get(finding.rule_id, finding.rule_id) }}</p>
-  <p class="mt-1">{{ finding.message }}</p>
+  <p class="mt-1 whitespace-pre-line">{{ finding.message }}</p>
   {% if finding.evidence %}
     <blockquote class="mt-2 border-l-2 border-[#d6e5f8] pl-3 text-sm italic text-[#5f6873]">{{ finding.evidence }}</blockquote>
   {% endif %}
