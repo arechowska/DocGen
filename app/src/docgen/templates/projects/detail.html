@@ -18,10 +18,10 @@
 
       <label class="control template-control" title="Шаблон определяет структуру документа">
         <span>Шаблон</span>
-        <select id="templateSelect" data-template-source>
-          <option value="no-template" {% if not document or not document.build_template_id %}selected{% endif %}>Без шаблона</option>
+        <select id="templateSelect" data-template-source data-template-storage-key="docgen:template:{{ project_id }}">
+          <option value="no-template" {% if selected_template_id == "no-template" %}selected{% endif %}>Без шаблона</option>
           {% for semantic_template in templates %}
-            <option value="{{ semantic_template.id }}" {% if document and document.build_template_id == semantic_template.id %}selected{% endif %}>{{ semantic_template.name }}</option>
+            <option value="{{ semantic_template.id }}" {% if selected_template_id == semantic_template.id %}selected{% endif %}>{{ semantic_template.name }}</option>
           {% endfor %}
         </select>
       </label>

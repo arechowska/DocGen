@@ -5,7 +5,7 @@
   form="checkForm"
   data-template-required
   data-check-available="{% if has_document or check_targets %}true{% else %}false{% endif %}"
-  disabled
+  {% if not (has_document or check_targets) or (selected_template_id | default("no-template")) == "no-template" %}disabled{% endif %}
   {% if review_button_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
 >
   <span class="button-icon shield-icon" aria-hidden="true"></span>

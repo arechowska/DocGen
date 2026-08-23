@@ -107,7 +107,7 @@
     hx-swap="outerHTML"
     {% if has_document %}hx-confirm="Пересобрать документ? Текущее содержимое и правки через чат будут заменены новым результатом."{% endif %}
   >
-    <input type="hidden" name="template_id" value="no-template" data-template-target>
+    <input type="hidden" name="template_id" value="{{ selected_template_id | default('no-template') }}" data-template-target>
   </form>
   <form
     id="conversionForm"
@@ -126,7 +126,7 @@
     hx-target="#generation-status"
     hx-swap="outerHTML"
   >
-    <input type="hidden" name="template_id" value="no-template" data-template-target>
+    <input type="hidden" name="template_id" value="{{ selected_template_id | default('no-template') }}" data-template-target>
   </form>
   <div id="generation-status" aria-live="polite">
     {% if generation_error %}

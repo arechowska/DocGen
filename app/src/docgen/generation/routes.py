@@ -31,7 +31,7 @@ from docgen.jobs.repository import (
 )
 from docgen.models import Project, Source, SourceKind
 from docgen.projects.repository import ProjectRepository
-from docgen.projects.routes import get_session
+from docgen.projects.routes import get_session, selected_template_id
 from docgen.sources.repository import SourceRepository
 from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import (
@@ -460,6 +460,7 @@ def _setup_error(
         stored_document = documents.get_document_with_revision(project.id)
         document = stored_document[0] if stored_document is not None else None
         revision = stored_document[1] if stored_document is not None else None
+        latest_report = documents.get_latest_report_record(project.id)
         return templates.TemplateResponse(
             request=request,
             name="projects/detail.html",
@@ -474,10 +475,11 @@ def _setup_error(
                 "generation_error": message,
                 "setup_fragment": False,
                 "document": document,
+                "selected_template_id": selected_template_id(document, latest_report),
                 "revision": revision,
                 "workspace_html": documents.get_workspace_html(project.id),
                 "has_document": document is not None,
-                "has_report": documents.get_latest_report_record(project.id) is not None,
+                "has_report": latest_report is not None,
                 "source_error": None,
             },
             status_code=status_code,
@@ -759,6 +761,7 @@ def _workspace_completion_context(
     project = _project_or_404(session, project_id)
     sources = SourceRepository(session).list_for_project(project_id)
     documents = DocumentRepository(session)
+    latest_report = documents.get_latest_report_record(project_id)
     template_catalog = TemplateCatalog(
         external_directory=request.app.state.settings.template_dir
     )
@@ -771,10 +774,11 @@ def _workspace_completion_context(
         ],
         "templates": template_catalog.list(),
         "document": document,
+        "selected_template_id": selected_template_id(document, latest_report),
         "revision": revision,
         "workspace_html": documents.get_workspace_html(project_id),
         "has_document": True,
-        "has_report": documents.get_latest_report_record(project_id) is not None,
+        "has_report": latest_report is not None,
         "source_error": None,
         "generation_error": None,
     }

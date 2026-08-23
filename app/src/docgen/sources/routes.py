@@ -11,7 +11,11 @@ from docgen.documents.repository import DocumentRepository
 from docgen.generation.targets import supported_check_targets
 from docgen.jobs.repository import ActiveProjectJobExists
 from docgen.projects.repository import ProjectRepository
-from docgen.projects.routes import SessionDependency, project_detail_response
+from docgen.projects.routes import (
+    SessionDependency,
+    project_detail_response,
+    selected_template_id,
+)
 from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.web import templates
 
@@ -101,6 +105,7 @@ def _source_list_response(
             raise LookupError("Проект не найден")
         documents = DocumentRepository(session)
         document = documents.get_document(project_id)
+        latest_report = documents.get_latest_report_record(project_id)
         sources = service.list(project_id)
         return templates.TemplateResponse(
             request=request,
@@ -112,6 +117,7 @@ def _source_list_response(
                 "check_targets": supported_check_targets(sources),
                 "templates": TemplateCatalog().list(),
                 "document": document,
+                "selected_template_id": selected_template_id(document, latest_report),
                 "has_document": document is not None,
                 "generation_error": None,
                 "source_error": None,

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from docgen.chat.errors import ChatError, ChatErrorCode
 from docgen.chat.routes import _source_blocks_from_project
 from docgen.chat.schemas import ChatEditRequest, ChatEditResult, FindingFixProposal
-from docgen.chat.service import ChatGroundingError
+from docgen.chat.service import ChatGroundingError, ChatService
 from docgen.config import Settings
 from docgen.documents.operations import UpdateText
 from docgen.documents.repository import DocumentRepository
@@ -22,6 +22,7 @@ from docgen.documents.schemas import (
 )
 from docgen.main import create_app
 from docgen.models import Project
+from docgen.templates_catalog.loader import TemplateCatalog
 
 
 class FakeChat:
@@ -47,6 +48,7 @@ class FakeChat:
         project_id: str,
         finding: CheckFinding,
         expected_revision: int,
+        **_: object,
     ) -> FindingFixProposal:
         assert project_id
         assert finding.suggestion
@@ -152,6 +154,8 @@ def test_finding_fix_is_previewed_then_applied_and_keeps_stale_report(
     assert "Правка применена" in applied.text
     assert "Документ изменён после этой проверки" in applied.text
     assert "Проверить снова" in applied.text
+    assert 'hx-trigger="load"' in applied.text
+    assert 'name="target_source_id"' not in applied.text
     assert "HX-Trigger" in applied.headers
 
     session = client.app.state.session_factory()
@@ -168,6 +172,103 @@ def test_finding_fix_is_previewed_then_applied_and_keeps_stale_report(
                 project_with_report.id
             )
             is not None
+        )
+    finally:
+        session.close()
+
+
+def test_structure_fix_appends_only_missing_fields_through_preview_and_apply(
+    client: TestClient, project_with_document: Project
+) -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    metadata = next(table for table in contract.required_tables if table.id == "metadata")
+    original_row = [metadata.required_labels[0], "UC-77"]
+    session = client.app.state.session_factory()
+    try:
+        documents = DocumentRepository(session)
+        revision = documents.save_document(
+            project_with_document.id,
+            WorkingDocument(
+                title="Текущий документ",
+                template_id="no-template",
+                nodes=[
+                    DocumentNode(
+                        id="metadata-table",
+                        kind=NodeKind.TABLE,
+                        data={"rows": [original_row]},
+                    ),
+                    DocumentNode(
+                        id="body", kind=NodeKind.PARAGRAPH, text="Неизменяемый текст"
+                    ),
+                ],
+            ),
+        )
+        documents.save_report(
+            project_with_document.id,
+            CheckReport(
+                template_id="use-case",
+                findings=[
+                    CheckFinding(
+                        code="template-structure-mismatch",
+                        severity=Severity.ERROR,
+                        confidence=1,
+                        message="В таблице отсутствуют обязательные поля",
+                        suggestion="Добавить отсутствующие поля",
+                        rule_id=contract.rule_id,
+                    )
+                ],
+            ),
+            expected_document_revision=revision,
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    class ModelMustNotRun:
+        def generate_json(self, **_: object) -> object:
+            raise AssertionError("Модель не должна вызываться для точечной структуры")
+
+    client.app.state.chat_service_factory = lambda request, session: ChatService(
+        documents=DocumentRepository(session),
+        model=ModelMustNotRun(),  # type: ignore[arg-type]
+        source_blocks=lambda _: [],
+    )
+    preview = client.post(
+        f"/projects/{project_with_document.id}/report/findings/{contract.rule_id}/propose-fix",
+        data={"revision": str(revision)},
+    )
+
+    assert preview.status_code == 200
+    assert "Предлагаемая правка" in preview.text
+    assert "UC-77" in preview.text
+    assert metadata.required_labels[1] in preview.text
+    assert '&quot;rows&quot;' not in preview.text
+    proposal_id = preview.text.split("/report/fix-proposals/", 1)[1].split(
+        "/apply", 1
+    )[0]
+
+    applied = client.post(
+        f"/projects/{project_with_document.id}/report/fix-proposals/{proposal_id}/apply"
+    )
+
+    assert applied.status_code == 200
+    assert 'hx-trigger="load"' in applied.text
+    session = client.app.state.session_factory()
+    try:
+        stored = DocumentRepository(session).get_document_with_revision(
+            project_with_document.id
+        )
+        assert stored is not None
+        assert stored[1] == revision + 1
+        table = next(node for node in stored[0].nodes if node.id == "metadata-table")
+        assert table.data["rows"][0] == original_row
+        assert [row[0] for row in table.data["rows"][1:]] == list(
+            metadata.required_labels[1:]
+        )
+        assert next(node for node in stored[0].nodes if node.id == "body").text == (
+            "Неизменяемый текст"
         )
     finally:
         session.close()

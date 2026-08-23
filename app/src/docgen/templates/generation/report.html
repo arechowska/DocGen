@@ -9,8 +9,8 @@
   {% endif %}
   {% if finding.node_id %}
     <a class="mt-2 inline-block text-sm font-medium text-[#1b5eaa]" data-node-target="{{ finding.node_id }}" href="/projects/{{ project_id }}#doc-node-{{ finding.node_id }}">К узлу документа</a>
-  {% else %}
-    <a class="mt-2 inline-block text-sm font-medium text-[#1b5eaa]" href="/projects/{{ project_id }}#docgen2Editor">К документу</a>
+  {% elif finding.code != "template-structure-mismatch" %}
+    <a class="mt-2 inline-block text-sm font-medium text-[#1b5eaa]" href="/projects/{{ project_id }}#docgen2Editor">Открыть редактор</a>
   {% endif %}
 {% endmacro %}
 {% if standalone %}

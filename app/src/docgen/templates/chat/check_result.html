@@ -31,12 +31,16 @@
             <p class="check-result-suggestion"><strong>Как исправить:</strong> {{ finding.suggestion }}</p>
           {% endif %}
           <div class="check-result-actions">
-            <a
-              class="check-result-link"
-              {% if finding.node_id %}data-node-target="{{ finding.node_id }}"{% endif %}
-              href="/projects/{{ project_id }}#{% if finding.node_id %}doc-node-{{ finding.node_id }}{% else %}docgen2Editor{% endif %}"
-            >К узлу документа</a>
-            {% if not (stale | default(false)) and finding.suggestion and finding.rule_id and finding.node_id and finding.code != "template-structure-mismatch" %}
+            {% if finding.node_id %}
+              <a
+                class="check-result-link"
+                data-node-target="{{ finding.node_id }}"
+                href="/projects/{{ project_id }}#doc-node-{{ finding.node_id }}"
+              >К узлу документа</a>
+            {% elif finding.code != "template-structure-mismatch" %}
+              <a class="check-result-link" href="/projects/{{ project_id }}#docgen2Editor">Открыть редактор</a>
+            {% endif %}
+            {% if not (stale | default(false)) and finding.suggestion and finding.rule_id and (finding.node_id or finding.code == "template-structure-mismatch") %}
               <button
                 type="button"
                 class="check-result-apply"
@@ -68,6 +72,7 @@
       hx-post="/projects/{{ project_id }}/jobs/check"
       hx-target="#generation-status"
       hx-swap="outerHTML"
+      {% if auto_recheck | default(false) %}hx-trigger="load"{% endif %}
     >
       <input type="hidden" name="template_id" value="{{ report.template_id }}">
       {% if report_target_source_id %}<input type="hidden" name="target_source_id" value="{{ report_target_source_id }}">{% endif %}

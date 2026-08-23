@@ -226,15 +226,13 @@ class ChatService:
         project_id: str,
         finding: CheckFinding,
         expected_revision: int,
+        *,
+        template: SemanticTemplate | None = None,
     ) -> FindingFixProposal:
         """Build a source-grounded, target-scoped proposal without saving it."""
-        if not finding.suggestion or not finding.rule_id or not finding.node_id:
+        if not finding.suggestion or not finding.rule_id:
             raise ChatValidationError(
                 "Для этого расхождения нельзя подготовить безопасную точечную правку"
-            )
-        if finding.code == "template-structure-mismatch":
-            raise ChatValidationError(
-                "Полную форму нельзя безопасно добавить как точечную правку"
             )
         stored = self._documents.get_document_with_revision(project_id)
         if stored is None:
@@ -242,6 +240,24 @@ class ChatService:
         document, current_revision = stored
         if current_revision != expected_revision:
             raise ChatError(ChatErrorCode.REVISION_CONFLICT)
+        if finding.code == "template-structure-mismatch":
+            if template is None:
+                raise ChatValidationError("Шаблон проверки не найден")
+            from docgen.workflows.check import structure_gap_operations
+
+            operations = structure_gap_operations(document, template)
+            _validate_structural_fix_scope(document, operations)
+            try:
+                candidate = apply_operations(document, operations)
+            except EditValidationError as error:
+                raise ChatValidationError(str(error)) from error
+            return FindingFixProposal(
+                summary="Добавлены только отсутствующие поля существующей таблицы",
+                operations=operations,
+                document=candidate,
+            )
+        if not finding.node_id:
+            raise ChatValidationError("У расхождения нет точного целевого блока")
         if find_node(document, finding.node_id) is None:
             raise ChatValidationError("Узел расхождения не найден в документе")
 
@@ -490,8 +506,65 @@ def _validate_plan_for_intent(
 def validate_finding_fix_scope(
     finding: CheckFinding,
     operations: list[DocumentOperation],
+    *,
+    document: WorkingDocument | None = None,
+    template: SemanticTemplate | None = None,
 ) -> None:
+    if finding.code == "template-structure-mismatch":
+        if document is None:
+            raise ChatValidationError("Документ для проверки правки не найден")
+        if template is None:
+            raise ChatValidationError("Шаблон проверки не найден")
+        from docgen.workflows.check import structure_gap_operations
+
+        if operations != structure_gap_operations(document, template):
+            raise ChatValidationError(
+                "Предложение больше не совпадает с отсутствующими полями шаблона"
+            )
+        _validate_structural_fix_scope(document, operations)
+        return
     _validate_finding_fix_scope(finding, operations)
+
+
+def _validate_structural_fix_scope(
+    document: WorkingDocument,
+    operations: list[DocumentOperation],
+) -> None:
+    if not operations:
+        raise ChatValidationError(
+            "Не удалось однозначно определить существующую таблицу для дополнения"
+        )
+    for operation in operations:
+        if not isinstance(operation, UpdateData):
+            raise ChatValidationError(
+                "Структурная правка может только дополнить существующую таблицу"
+            )
+        node = find_node(document, operation.node_id)
+        if node is None or node.kind is not NodeKind.TABLE:
+            raise ChatValidationError("Целевая таблица не найдена")
+        _validate_table_additions(node.data, operation.data)
+
+
+def _validate_table_additions(before: dict, after: dict) -> None:
+    if {key: value for key, value in before.items() if key not in {"rows", "headers"}} != {
+        key: value for key, value in after.items() if key not in {"rows", "headers"}
+    }:
+        raise ChatValidationError("Правка пытается изменить оформление таблицы")
+    before_headers = before.get("headers", [])
+    after_headers = after.get("headers", [])
+    if not isinstance(before_headers, list) or not isinstance(after_headers, list):
+        raise ChatValidationError("Некорректные заголовки таблицы")
+    if after_headers[: len(before_headers)] != before_headers:
+        raise ChatValidationError("Правка пытается изменить существующие заголовки")
+    before_rows = before.get("rows", [])
+    after_rows = after.get("rows", [])
+    if not isinstance(before_rows, list) or not isinstance(after_rows, list):
+        raise ChatValidationError("Некорректные строки таблицы")
+    for index, row in enumerate(before_rows):
+        if index >= len(after_rows) or after_rows[index][: len(row)] != row:
+            raise ChatValidationError("Правка пытается изменить заполненные ячейки")
+    if before == after:
+        raise ChatValidationError("Правка не добавляет отсутствующие поля")
 
 
 def _validate_finding_fix_scope(

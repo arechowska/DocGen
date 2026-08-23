@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import CheckReport, DocumentNode, NodeKind, WorkingDocument
 from docgen.jobs.models import JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.projects.models import Project
@@ -155,6 +155,46 @@ def test_workspace_preselects_the_documents_own_template_on_reload(
     selected_template = template_select.find("option", selected=True)
     assert selected_template is not None
     assert selected_template["value"] == "use-case"
+    review = page.find("button", id="reviewButton")
+    assert review is not None
+    assert not review.has_attr("disabled")
+    assert page.find("form", id="checkForm").find(
+        "input", attrs={"name": "template_id"}
+    )["value"] == "use-case"
+
+
+def test_workspace_restores_last_check_template_for_manual_document(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/projects", data={"name": "Ручной документ"}, follow_redirects=False
+    )
+    project_url = created.headers["location"]
+    project_id = project_url.rsplit("/", 1)[-1]
+    with client.app.state.session_factory() as session:
+        documents = DocumentRepository(session)
+        revision = documents.save_document(
+            project_id,
+            WorkingDocument(
+                title="Документ",
+                template_id="no-template",
+                nodes=[DocumentNode(id="intro", kind=NodeKind.PARAGRAPH, text="Текст")],
+            ),
+        )
+        documents.save_report(
+            project_id,
+            CheckReport(template_id="use-case"),
+            expected_document_revision=revision,
+        )
+        session.commit()
+
+    page = BeautifulSoup(client.get(project_url).text, "html.parser")
+    selected_template = page.find("select", id="templateSelect").find(
+        "option", selected=True
+    )
+    assert selected_template is not None
+    assert selected_template["value"] == "use-case"
+    assert not page.find("button", id="reviewButton").has_attr("disabled")
 
 
 def test_workspace_source_update_swaps_review_button_state(client: TestClient) -> None:

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from docgen.ai.grounding import GroundingValidator
-from docgen.documents.operations import InsertNode, apply_operations
+from docgen.documents.operations import InsertNode, UpdateData
 from docgen.documents.schemas import (
     CheckFinding,
     CheckReport,
@@ -781,16 +781,15 @@ def test_use_case_form_check_reports_missing_structure_even_when_model_passes() 
     # are several gaps.
     assert finding.message.count("\n") >= 2
     assert "; " not in finding.message
-    # A whole-form mismatch is not offered as an automatic fix: an empty
-    # skeleton would not resolve the finding or place existing content.
+    # The user does not have to locate an external "full form": the selected
+    # template already owns it, so the next step is phrased as a system action.
     assert finding.suggestion is not None
-    assert "вручную" in finding.suggestion
-    assert "автоматически не добавляются" in finding.suggestion
+    assert "Добавить отсутствующие поля" in finding.suggestion
+    assert "полной форм" not in finding.suggestion
+    assert "вручную" not in finding.suggestion
 
 
-def test_structure_gap_operations_fill_missing_tables_without_a_model() -> None:
-    """The deterministic fixer resolves every missing table -- re-running
-    the check on the filled-in document must find no table gaps left."""
+def test_structure_gap_operations_do_not_guess_where_absent_tables_belong() -> None:
     template = TemplateCatalog().get("use-case")
     contract = template.structure_check
     assert contract is not None
@@ -803,15 +802,7 @@ def test_structure_gap_operations_fill_missing_tables_without_a_model() -> None:
     )
 
     operations = structure_gap_operations(document, template)
-    assert operations
-
-    filled = apply_operations(document, operations)
-    message = _structure_mismatch_message(template, filled)
-
-    assert message is not None
-    assert "отсутствует таблица" not in message
-    assert "отсутствуют поля" not in message
-    assert "отсутствуют разделы" in message
+    assert operations == []
 
 
 def test_structure_gap_operations_never_auto_insert_missing_headings() -> None:
@@ -840,11 +831,7 @@ def test_structure_gap_operations_never_auto_insert_missing_headings() -> None:
     )
 
 
-def test_structure_gap_operations_insert_header_row_tables_as_one_wide_table() -> None:
-    """A required table whose labels are column headers (technical specs,
-    links, change history) must be inserted as one table with those labels
-    as headers -- not as one separate two-cell row per label, which is
-    only correct for the key-value forms (metadata, description)."""
+def test_structure_gap_operations_do_not_insert_an_absent_wide_table() -> None:
     template = TemplateCatalog().get("use-case")
     contract = template.structure_check
     assert contract is not None
@@ -861,22 +848,10 @@ def test_structure_gap_operations_insert_header_row_tables_as_one_wide_table() -
     )
 
     operations = structure_gap_operations(document, template)
-    inserted = next(
-        operation
-        for operation in operations
-        if isinstance(operation, InsertNode)
-        and operation.node.kind is NodeKind.TABLE
-        and operation.node.text == technical_specs.title
-    )
-
-    assert inserted.node.data["headers"] == list(technical_specs.required_labels)
-    assert inserted.node.data["rows"] == [["" for _ in technical_specs.required_labels]]
+    assert operations == []
 
 
-def test_structure_gap_operations_do_not_touch_a_table_with_some_fields_present() -> None:
-    """A table that already has some required fields must not be touched
-    automatically -- adding columns to real content is too risky to do
-    without review."""
+def test_structure_gap_operations_append_only_missing_key_value_rows() -> None:
     template = TemplateCatalog().get("use-case")
     contract = template.structure_check
     assert contract is not None
@@ -897,11 +872,67 @@ def test_structure_gap_operations_do_not_touch_a_table_with_some_fields_present(
 
     operations = structure_gap_operations(document, template)
 
-    assert all(
-        not (isinstance(operation, InsertNode) and operation.node.kind is NodeKind.TABLE)
-        or operation.node.text != metadata_table.title
+    update = next(
+        operation
         for operation in operations
+        if isinstance(operation, UpdateData) and operation.node_id == "partial-metadata"
     )
+    assert update.data["rows"][0] == [metadata_table.required_labels[0], "УК-1"]
+    assert [row[0] for row in update.data["rows"][1:]] == list(
+        metadata_table.required_labels[1:]
+    )
+    assert all(row[1] == "" for row in update.data["rows"][1:])
+
+
+def test_structure_gap_operations_append_columns_without_changing_existing_cells() -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    table_contract = next(
+        table for table in contract.required_tables if table.id == "technical-specifications"
+    )
+    original_headers = list(table_contract.required_labels[:2])
+    original_row = ["Название API", "REST"]
+    document = WorkingDocument(
+        title="Документ",
+        template_id=NO_TEMPLATE_ID,
+        nodes=[
+            DocumentNode(
+                id="spec-table",
+                kind=NodeKind.TABLE,
+                data={"headers": original_headers, "rows": [original_row]},
+            )
+        ],
+    )
+
+    operations = structure_gap_operations(document, template)
+
+    update = next(
+        operation
+        for operation in operations
+        if isinstance(operation, UpdateData) and operation.node_id == "spec-table"
+    )
+    assert update.data["headers"][:2] == original_headers
+    assert update.data["headers"][2:] == list(table_contract.required_labels[2:])
+    assert update.data["rows"][0][:2] == original_row
+    assert update.data["rows"][0][2:] == [""] * len(table_contract.required_labels[2:])
+
+
+def test_structure_gap_operations_skip_ambiguous_generic_table() -> None:
+    template = TemplateCatalog().get("use-case")
+    document = WorkingDocument(
+        title="Документ",
+        template_id=NO_TEMPLATE_ID,
+        nodes=[
+            DocumentNode(
+                id="ambiguous-table",
+                kind=NodeKind.TABLE,
+                data={"rows": [["Примечание", "Сохранить"]]},
+            )
+        ],
+    )
+
+    assert structure_gap_operations(document, template) == []
 
 
 def test_structure_check_recognizes_a_header_row_table_by_its_headers() -> None:

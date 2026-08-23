@@ -928,7 +928,7 @@ def test_report_card_reinjects_the_actionable_chat_card(
     )
 
 
-def test_whole_form_mismatch_is_never_offered_as_an_automatic_fix(
+def test_whole_form_mismatch_offers_scoped_fix_instead_of_rebuild(
     client: TestClient, project_with_source: Project
 ) -> None:
     _save_document(client, project_with_source.id, _document())
@@ -955,7 +955,12 @@ def test_whole_form_mismatch_is_never_offered_as_an_automatic_fix(
 
     assert response.status_code == 200
     assert "Не хватает полной формы" in response.text
-    assert "Предложить правку" not in response.text
+    assert "Предложить правку" in response.text
+    assert "Пересобрать по шаблону" not in response.text
+    assert (
+        f'hx-post="/projects/{project_with_source.id}/report/findings/use-case-template-form/propose-fix"'
+        in response.text
+    )
 
 
 def test_report_card_missing_returns_friendly_banner_not_raw_json(

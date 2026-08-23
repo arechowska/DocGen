@@ -56,6 +56,18 @@
   scrollToHashNode();
 
   const templateSource = document.querySelector("[data-template-source]");
+  const templateStorageKey = templateSource?.dataset?.templateStorageKey;
+  if (templateSource && templateStorageKey) {
+    try {
+      const storedTemplate = window.localStorage.getItem(templateStorageKey);
+      const storedTemplateExists = Array.from(templateSource.options).some(
+        (option) => option.value === storedTemplate,
+      );
+      if (storedTemplate && storedTemplateExists) templateSource.value = storedTemplate;
+    } catch (_) {
+      // Storage can be unavailable in privacy modes; server state remains usable.
+    }
+  }
   const synchronizeConversion = () => {
     const buildButton = document.querySelector("#buildButton");
     const formatSource = document.querySelector("#formatSelect");
@@ -90,7 +102,16 @@
 
   if (templateSource) {
     synchronizeTemplate();
-    templateSource.addEventListener("change", synchronizeTemplate);
+    templateSource.addEventListener("change", () => {
+      if (templateStorageKey) {
+        try {
+          window.localStorage.setItem(templateStorageKey, templateSource.value);
+        } catch (_) {
+          // Keep the selected value for this page even when storage is unavailable.
+        }
+      }
+      synchronizeTemplate();
+    });
   }
   document.addEventListener("change", (event) => {
     if (event.target?.matches?.("#formatSelect, #export-template-select select")) {

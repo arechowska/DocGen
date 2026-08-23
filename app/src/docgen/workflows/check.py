@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from docgen.ai.client import TextModel, VisionModel
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import CHECK_SYSTEM_PROMPT
-from docgen.documents.operations import DocumentOperation, InsertNode
+from docgen.documents.operations import DocumentOperation, InsertNode, UpdateData
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import (
     CheckFinding,
@@ -383,7 +383,9 @@ def _structure_mismatch_message(
         for heading in contract.required_headings
         if _normalized_heading(heading) not in headings
     ]
-    table_cells = _table_cells(document)
+    table_nodes = [
+        node for node in _walk_nodes(document.nodes) if node.kind is NodeKind.TABLE
+    ]
     differences: list[str] = []
     if missing_headings:
         differences.append(
@@ -395,7 +397,8 @@ def _structure_mismatch_message(
             label: _normalized_label(label) for label in required_table.required_labels
         }
         best_matches: set[str] = set()
-        for cells in table_cells:
+        for table in table_nodes:
+            cells = _node_table_cells(table)
             matches = {
                 label
                 for label, normalized in expected.items()
@@ -445,17 +448,11 @@ def _autofix_suggestion(
     document: WorkingDocument,
     template: SemanticTemplate,
 ) -> str | None:
-    """Explain the safe manual action for a whole-form mismatch.
-
-    A form mismatch can aggregate many missing headings and tables. Adding
-    an empty skeleton does not resolve it and can obscure the source text,
-    so this finding is intentionally never exposed as an automatic fix.
-    """
+    """Explain the concrete next action for a whole-form mismatch."""
     if document.origin is DocumentOrigin.ASSEMBLED and document.build_template_id == template.id:
-        return "Заполните недостающие разделы по источникам и повторите проверку"
+        return "Добавить отсутствующие элементы в текущий документ"
     return (
-        "Сопоставьте существующее содержание с полной формой вручную; "
-        "пустые таблицы автоматически не добавляются"
+        "Добавить отсутствующие поля в текущую форму, сохранив существующий текст"
     )
 
 
@@ -509,48 +506,69 @@ def _form_gap_operations(
     # that IS the description creates a duplicate, meaningless skeleton --
     # deciding where existing prose belongs needs judgment, not a rule.
     operations: list[DocumentOperation] = []
-    next_index = len(document.nodes)
-    table_cells = _table_cells(document)
-    for required_table in contract.required_tables:
-        expected = {
-            label: _normalized_label(label) for label in required_table.required_labels
-        }
-        best_matches: set[str] = set()
-        for cells in table_cells:
+    table_nodes = [
+        node for node in _walk_nodes(document.nodes) if node.kind is NodeKind.TABLE
+    ]
+    for table in table_nodes:
+        cells = _node_table_cells(table)
+        candidates: list[tuple[SemanticTableCheck, set[str]]] = []
+        for required_table in contract.required_tables:
             matches = {
                 label
-                for label, normalized in expected.items()
-                if any(normalized in cell for cell in cells)
+                for label in required_table.required_labels
+                if any(_normalized_label(label) in cell for cell in cells)
             }
-            if len(matches) > len(best_matches):
-                best_matches = matches
-        if best_matches:
-            # Table exists with at least some required fields -- adding
-            # columns to it automatically risks corrupting real content, so
-            # only entirely absent tables are auto-filled.
+            if matches:
+                candidates.append((required_table, matches))
+        if not candidates:
             continue
+        best_size = max(len(matches) for _, matches in candidates)
+        best = [item for item in candidates if len(item[1]) == best_size]
+        if len(best) != 1:
+            # A generic label such as "Примечание" can occur in several
+            # contracts. Never guess which form table it represents.
+            continue
+        required_table, matches = best[0]
+        if len(matches) == len(required_table.required_labels):
+            continue
+        missing_labels = [
+            label for label in required_table.required_labels if label not in matches
+        ]
         operations.append(
-            InsertNode(
-                index=next_index,
-                node=DocumentNode(
-                    kind=NodeKind.TABLE,
-                    text=required_table.title,
-                    data=_empty_table_data(required_table),
-                    flags=["structural-edit"],
+            UpdateData(
+                node_id=table.id,
+                data=_table_data_with_missing_labels(
+                    table.data, required_table, missing_labels
                 ),
             )
         )
-        next_index += 1
     return operations
 
 
-def _empty_table_data(required_table: SemanticTableCheck) -> dict:
+def _table_data_with_missing_labels(
+    data: dict,
+    required_table: SemanticTableCheck,
+    missing_labels: list[str],
+) -> dict:
+    updated = dict(data)
     if required_table.layout == "key_value":
-        return {"rows": [[label, ""] for label in required_table.required_labels]}
-    return {
-        "headers": list(required_table.required_labels),
-        "rows": [["" for _ in required_table.required_labels]],
-    }
+        rows = [list(row) for row in data.get("rows", []) if isinstance(row, list)]
+        width = max(2, max((len(row) for row in rows), default=0))
+        updated["rows"] = [
+            row + [""] * (width - len(row)) for row in rows
+        ] + [[label] + [""] * (width - 1) for label in missing_labels]
+        return updated
+
+    headers = list(data.get("headers", []))
+    rows = [list(row) for row in data.get("rows", []) if isinstance(row, list)]
+    headers.extend(missing_labels)
+    updated["headers"] = headers
+    updated["rows"] = (
+        [row + [""] * (len(headers) - len(row)) for row in rows]
+        if rows
+        else [[""] * len(headers)]
+    )
+    return updated
 
 
 def _gap_insert(*, parent_id: str) -> InsertNode:
@@ -561,26 +579,17 @@ def _gap_insert(*, parent_id: str) -> InsertNode:
     )
 
 
-def _table_cells(document: WorkingDocument) -> list[list[str]]:
-    """Per-table normalized cell text, gathered from both row values (a
-    key-value form: label in one cell, value in the next) and header
-    labels (a wide table: labels are column headers, not row content)."""
-    cells: list[list[str]] = []
-    for node in _walk_nodes(document.nodes):
-        if node.kind is not NodeKind.TABLE:
-            continue
-        rows = node.data.get("rows", [])
-        headers = node.data.get("headers", [])
-        table_cells = [
-            _normalized_label(cell)
-            for row in rows
-            if isinstance(row, list)
-            for cell in row
-        ]
-        if isinstance(headers, list):
-            table_cells.extend(_normalized_label(header) for header in headers)
-        if table_cells:
-            cells.append(table_cells)
+def _node_table_cells(node: DocumentNode) -> list[str]:
+    rows = node.data.get("rows", [])
+    headers = node.data.get("headers", [])
+    cells = [
+        _normalized_label(cell)
+        for row in rows
+        if isinstance(row, list)
+        for cell in row
+    ]
+    if isinstance(headers, list):
+        cells.extend(_normalized_label(header) for header in headers)
     return cells
 
 

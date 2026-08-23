@@ -232,6 +232,60 @@ def test_propose_finding_fix_rejects_change_to_another_node(
         chat_service.propose_finding_fix("p1", finding, expected_revision=2)
 
 
+def test_propose_structure_fix_only_appends_missing_fields_to_existing_table(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+    session: Session,
+) -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    metadata = next(table for table in contract.required_tables if table.id == "metadata")
+    original_row = [metadata.required_labels[0], "UC-42"]
+    revision = DocumentRepository(session).save_document(
+        "p1",
+        WorkingDocument(
+            title="Импортированный документ",
+            template_id="no-template",
+            nodes=[
+                DocumentNode(
+                    id="metadata-table",
+                    kind=NodeKind.TABLE,
+                    data={"rows": [original_row]},
+                ),
+                DocumentNode(id="body", kind=NodeKind.PARAGRAPH, text="Старый текст"),
+            ],
+        ),
+    )
+    session.commit()
+    finding = CheckFinding(
+        code="template-structure-mismatch",
+        severity=Severity.ERROR,
+        confidence=1,
+        message="В таблице отсутствуют обязательные поля",
+        suggestion="Добавить отсутствующие поля",
+        rule_id=contract.rule_id,
+    )
+
+    proposal = chat_service.propose_finding_fix(
+        "p1", finding, expected_revision=revision, template=template
+    )
+
+    table = find_node(proposal.document, "metadata-table")
+    assert table is not None
+    assert table.data["rows"][0] == original_row
+    assert [row[0] for row in table.data["rows"][1:]] == list(
+        metadata.required_labels[1:]
+    )
+    assert find_node(proposal.document, "body").text == "Старый текст"
+    assert all(isinstance(operation, UpdateData) for operation in proposal.operations)
+    assert fake_model.calls == 0
+    persisted = DocumentRepository(session).get_document_with_revision("p1")
+    assert persisted is not None
+    assert persisted[1] == revision
+    assert find_node(persisted[0], "metadata-table").data["rows"] == [original_row]
+
+
 def test_apply_finding_fix_rejects_finding_without_suggestion(
     chat_service: ChatService, fake_model: FakeModel
 ) -> None:

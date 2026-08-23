@@ -25,7 +25,7 @@ from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
 from docgen.sources.repository import SourceRepository
 from docgen.sources.storage import LocalStorage
-from docgen.templates_catalog.loader import TemplateCatalog
+from docgen.templates_catalog.loader import TemplateCatalog, TemplateConfigurationError
 from docgen.web import templates
 from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
@@ -91,7 +91,7 @@ def post_propose_finding_fix(
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    if finding.code == "template-structure-mismatch" or not finding.node_id:
+    if finding.code != "template-structure-mismatch" and not finding.node_id:
         return templates.TemplateResponse(
             request=request,
             name="chat/error.html",
@@ -104,7 +104,17 @@ def post_propose_finding_fix(
 
     chat = _chat_service(request, session)
     try:
-        proposal = chat.propose_finding_fix(project_id, finding, revision)
+        semantic_template = None
+        if finding.code == "template-structure-mismatch":
+            semantic_template = TemplateCatalog(
+                external_directory=request.app.state.settings.template_dir
+            ).get(report.template_id)
+        proposal = chat.propose_finding_fix(
+            project_id,
+            finding,
+            revision,
+            template=semantic_template,
+        )
     except ChatError as error:
         session.rollback()
         return _chat_error_response(request, error)
@@ -124,6 +134,14 @@ def post_propose_finding_fix(
             context={"message": str(error)},
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    except TemplateConfigurationError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Шаблон из отчёта больше недоступен"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
 
     report_record = DocumentRepository(session).get_latest_report_record(project_id)
     if report_record is None or report_record.document_revision != revision:
@@ -141,8 +159,27 @@ def post_propose_finding_fix(
         operations=proposal.operations,
     )
     before_document = DocumentRepository(session).get_document(project_id)
-    before = find_node(before_document, finding.node_id) if before_document else None
-    after = find_node(proposal.document, finding.node_id)
+    if finding.code == "template-structure-mismatch":
+        target_ids = list(
+            dict.fromkeys(
+                operation.node_id
+                for operation in proposal.operations
+                if hasattr(operation, "node_id")
+            )
+        )
+        before_preview = "\n\n".join(
+            _node_preview(find_node(before_document, node_id))
+            for node_id in target_ids
+        )
+        after_preview = "\n\n".join(
+            _node_preview(find_node(proposal.document, node_id))
+            for node_id in target_ids
+        )
+    else:
+        before = find_node(before_document, finding.node_id) if before_document else None
+        after = find_node(proposal.document, finding.node_id)
+        before_preview = _node_preview(before)
+        after_preview = _node_preview(after)
     session.commit()
     return templates.TemplateResponse(
         request=request,
@@ -151,8 +188,8 @@ def post_propose_finding_fix(
             "project_id": project_id,
             "proposal": stored,
             "finding": finding,
-            "before": _node_preview(before),
-            "after": _node_preview(after),
+            "before": before_preview,
+            "after": after_preview,
         },
     )
 
@@ -206,8 +243,25 @@ def post_apply_finding_fix_proposal(
             status_code=status.HTTP_404_NOT_FOUND,
         )
     operations = proposals.operations(proposal)
+    current_document = documents.get_document_at_revision(
+        project_id, proposal.document_revision
+    )
+    if current_document is None:
+        return _chat_error_response(
+            request, ChatError(ChatErrorCode.REVISION_CONFLICT)
+        )
     try:
-        validate_finding_fix_scope(finding, operations)
+        semantic_template = None
+        if finding.code == "template-structure-mismatch":
+            semantic_template = TemplateCatalog(
+                external_directory=request.app.state.settings.template_dir
+            ).get(report_record.report.template_id)
+        validate_finding_fix_scope(
+            finding,
+            operations,
+            document=current_document,
+            template=semantic_template,
+        )
         result = DocumentEditService(documents).apply(
             project_id, proposal.document_revision, operations
         )
@@ -225,6 +279,14 @@ def post_apply_finding_fix_proposal(
             request,
             ChatError(ChatErrorCode.INVALID_OPERATION, message=str(error)),
         )
+    except TemplateConfigurationError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Шаблон из отчёта больше недоступен"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
     proposal.applied = True
     session.commit()
     stale_report = report_record.report
@@ -234,7 +296,7 @@ def post_apply_finding_fix_proposal(
         request=request,
         name="chat/message.html",
         context={
-            "summary": "Правка применена. Перепроверь документ по шаблону.",
+            "summary": "Правка применена. Запускаю повторную проверку по шаблону.",
             "revision": result.revision,
             "project": ProjectRepository(session).get(project_id),
             "project_id": project_id,
@@ -248,8 +310,9 @@ def post_apply_finding_fix_proposal(
             "low_confidence": low_confidence,
             "rule_instructions": _rule_instructions(request, stale_report.template_id),
             "stale": True,
+            "auto_recheck": True,
             "replace_report": True,
-            "report_target_source_id": report_record.target_source_id,
+            "report_target_source_id": None,
         },
     )
     response.headers["HX-Trigger"] = json.dumps(
@@ -337,6 +400,19 @@ def _node_preview(node: object) -> str:
         return text.strip()
     data = getattr(node, "data", None)
     if isinstance(data, dict) and data:
+        table_lines: list[str] = []
+        headers = data.get("headers")
+        if isinstance(headers, list) and headers:
+            table_lines.append(" | ".join(str(cell) for cell in headers))
+        rows = data.get("rows")
+        if isinstance(rows, list):
+            table_lines.extend(
+                " | ".join(str(cell) for cell in row)
+                for row in rows
+                if isinstance(row, list)
+            )
+        if table_lines:
+            return "\n".join(table_lines)
         return json.dumps(data, ensure_ascii=False, indent=2)
     return "Пустой блок"
 

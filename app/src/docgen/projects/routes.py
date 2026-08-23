@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
-from docgen.documents.repository import DocumentRepository
+from docgen.documents.repository import DocumentRepository, StoredCheckReport
+from docgen.documents.schemas import WorkingDocument
 from docgen.generation.targets import supported_check_targets
 from docgen.jobs.repository import ActiveProjectJobExists
 from docgen.sources.service import SourceService
@@ -59,6 +60,17 @@ def _project_or_404(repository: ProjectRepository, project_id: str):
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
     return project
+
+
+def selected_template_id(
+    document: WorkingDocument | None,
+    latest_report: StoredCheckReport | None,
+) -> str:
+    if document is not None and document.build_template_id:
+        return document.build_template_id
+    if latest_report is not None:
+        return latest_report.report.template_id
+    return "no-template"
 
 
 @router.get("")
@@ -115,6 +127,7 @@ def project_detail_response(
     stored_document = documents.get_document_with_revision(project_id)
     document = stored_document[0] if stored_document is not None else None
     revision = stored_document[1] if stored_document is not None else None
+    latest_report = documents.get_latest_report_record(project_id)
     sources = source_service.list(project_id)
     return templates.TemplateResponse(
         request=request,
@@ -130,10 +143,11 @@ def project_detail_response(
             "generation_error": None,
             "setup_fragment": False,
             "document": document,
+            "selected_template_id": selected_template_id(document, latest_report),
             "revision": revision,
             "workspace_html": documents.get_workspace_html(project_id),
             "has_document": document is not None,
-            "has_report": documents.get_latest_report_record(project_id) is not None,
+            "has_report": latest_report is not None,
             "source_error": source_error,
         },
         status_code=status_code,
