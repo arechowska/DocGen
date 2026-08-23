@@ -322,7 +322,6 @@ def _merge_structure_check(
     if message is None:
         passed.add(contract.rule_id)
     else:
-        can_autofix = bool(structure_gap_operations(document, template))
         findings.insert(
             0,
             CheckFinding(
@@ -330,11 +329,7 @@ def _merge_structure_check(
                 severity=Severity(rule.severity),
                 confidence=1.0,
                 message=message,
-                suggestion=(
-                    "Добавить недостающие разделы и таблицы формы"
-                    if can_autofix
-                    else None
-                ),
+                suggestion=_autofix_suggestion(document, template),
                 rule_id=contract.rule_id,
             ),
         )
@@ -444,6 +439,23 @@ def structure_gap_operations(
     if document.origin is DocumentOrigin.ASSEMBLED and document.build_template_id == template.id:
         return _assembled_section_gap_operations(document, template, contract)
     return _form_gap_operations(document, contract)
+
+
+def _autofix_suggestion(
+    document: WorkingDocument,
+    template: SemanticTemplate,
+) -> str | None:
+    """Describe exactly what the "Внести правку" button will do -- it must
+    never promise more than structure_gap_operations actually performs."""
+    if not structure_gap_operations(document, template):
+        return None
+    if document.origin is DocumentOrigin.ASSEMBLED and document.build_template_id == template.id:
+        return "Добавить недостающие разделы формы"
+    return (
+        "Добавить недостающие таблицы формы (пустые заголовки разделов "
+        "нужно расставить вручную — правильное место для существующего "
+        "текста определить автоматически нельзя)"
+    )
 
 
 def _assembled_section_gap_operations(
