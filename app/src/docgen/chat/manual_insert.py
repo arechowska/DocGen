@@ -45,7 +45,8 @@ _MANUAL_COMMAND_PATTERN = re.compile(
 _GENERATIVE_REQUEST_PATTERN = re.compile(
     r"^\s*(?:больше\s+)?(?:вопрос(?:ы|ов)|ответ(?:ы|ов)|пример(?:ы|ов)|"
     r"раздел(?:ы|ов)|пункт(?:ы|ов)|шаг(?:и|ов)|страниц(?:ы|у)?)\b"
-    r"|\b(?:из|по|на\s+основе)\s+источник(?:а|ов|ами)?\b",
+    r"|\b(?:из|по|на\s+основе)\s+источник(?:а|ов|ами)?\b"
+    r"|\bвопрос\b\s*(?:и|или)\s*\bответ\b",
     re.IGNORECASE | re.DOTALL,
 )
 _QUESTION_ANSWER_PATTERN = re.compile(

@@ -44,6 +44,18 @@ def test_router_keeps_faq_action_template_specific(document: WorkingDocument) ->
     assert route_intent("Добавь вопрос о лимите", document).kind is IntentKind.CLARIFICATION
 
 
+def test_router_sends_question_and_answer_phrasing_to_faq_action(
+    document: WorkingDocument,
+) -> None:
+    faq = document.model_copy(
+        update={"template_id": "faq", "build_template_id": "faq"}
+    )
+
+    decision = route_intent("Добавь вопрос и ответ: Что такое AMS?", faq)
+
+    assert decision.kind is IntentKind.TEMPLATE_ACTION
+
+
 @pytest.mark.parametrize(
     ("message", "action"),
     [

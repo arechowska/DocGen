@@ -313,6 +313,8 @@ def test_parse_manual_insert_ignores_non_manual_commands(message: str) -> None:
         "добавь больше вопросов по источникам",
         "добавь вопросы из источников",
         "добавь раздел на основе источников",
+        "Добавь вопрос и ответ: Что такое AMS?",
+        "добавь вопрос или ответ про лимиты",
     ],
 )
 def test_parse_manual_insert_does_not_capture_grounded_generation_requests(
