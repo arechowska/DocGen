@@ -131,6 +131,7 @@ structure_check:
   required_tables:
     - id: metadata
       title: Общие сведения
+      layout: key_value
       required_labels:
         - Код документа
         - Наименование
@@ -144,6 +145,7 @@ structure_check:
         - Аналитик
     - id: description
       title: Описание сценария
+      layout: key_value
       required_labels:
         - Область действия
         - Уровень цели

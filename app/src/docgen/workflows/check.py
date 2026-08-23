@@ -25,7 +25,11 @@ from docgen.jobs.models import CheckTargetKind, Job, JobKind
 from docgen.jobs.runner import ProgressSink
 from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
-from docgen.templates_catalog.schemas import SemanticStructureCheck, SemanticTemplate
+from docgen.templates_catalog.schemas import (
+    SemanticStructureCheck,
+    SemanticTableCheck,
+    SemanticTemplate,
+)
 
 from .assemble import enrich_images, normalize_sources, public_blocks
 from .errors import WorkflowError
@@ -384,16 +388,7 @@ def _structure_mismatch_message(
         for heading in contract.required_headings
         if _normalized_heading(heading) not in headings
     ]
-    table_cells = [
-        [
-            _normalized_label(cell)
-            for row in node.data.get("rows", [])
-            if isinstance(row, list)
-            for cell in row
-        ]
-        for node in _walk_nodes(document.nodes)
-        if node.kind is NodeKind.TABLE and isinstance(node.data.get("rows"), list)
-    ]
+    table_cells = _table_cells(document)
     differences: list[str] = []
     if missing_headings:
         differences.append(
@@ -518,16 +513,7 @@ def _form_gap_operations(
         next_index += 1
         operations.append(_gap_insert(parent_id=heading_id))
 
-    table_cells = [
-        [
-            _normalized_label(cell)
-            for row in node.data.get("rows", [])
-            if isinstance(row, list)
-            for cell in row
-        ]
-        for node in _walk_nodes(document.nodes)
-        if node.kind is NodeKind.TABLE and isinstance(node.data.get("rows"), list)
-    ]
+    table_cells = _table_cells(document)
     for required_table in contract.required_tables:
         expected = {
             label: _normalized_label(label) for label in required_table.required_labels
@@ -552,11 +538,7 @@ def _form_gap_operations(
                 node=DocumentNode(
                     kind=NodeKind.TABLE,
                     text=required_table.title,
-                    data={
-                        "rows": [
-                            [label, ""] for label in required_table.required_labels
-                        ],
-                    },
+                    data=_empty_table_data(required_table),
                     flags=["structural-edit"],
                 ),
             )
@@ -565,12 +547,44 @@ def _form_gap_operations(
     return operations
 
 
+def _empty_table_data(required_table: SemanticTableCheck) -> dict:
+    if required_table.layout == "key_value":
+        return {"rows": [[label, ""] for label in required_table.required_labels]}
+    return {
+        "headers": list(required_table.required_labels),
+        "rows": [["" for _ in required_table.required_labels]],
+    }
+
+
 def _gap_insert(*, parent_id: str) -> InsertNode:
     return InsertNode(
         parent_id=parent_id,
         index=0,
         node=DocumentNode(kind=NodeKind.GAP, flags=["structural-edit"]),
     )
+
+
+def _table_cells(document: WorkingDocument) -> list[list[str]]:
+    """Per-table normalized cell text, gathered from both row values (a
+    key-value form: label in one cell, value in the next) and header
+    labels (a wide table: labels are column headers, not row content)."""
+    cells: list[list[str]] = []
+    for node in _walk_nodes(document.nodes):
+        if node.kind is not NodeKind.TABLE:
+            continue
+        rows = node.data.get("rows", [])
+        headers = node.data.get("headers", [])
+        table_cells = [
+            _normalized_label(cell)
+            for row in rows
+            if isinstance(row, list)
+            for cell in row
+        ]
+        if isinstance(headers, list):
+            table_cells.extend(_normalized_label(header) for header in headers)
+        if table_cells:
+            cells.append(table_cells)
+    return cells
 
 
 def _normalized_label(value: object) -> str:

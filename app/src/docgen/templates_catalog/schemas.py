@@ -91,6 +91,11 @@ class SemanticTableCheck(BaseModel):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     required_labels: tuple[str, ...] = Field(min_length=1)
+    # "header_row": required_labels are column headers of one wide table
+    # (e.g. Наименование | Спецификация | Примечание).
+    # "key_value": required_labels are row labels, one per row, each
+    # paired with a value cell (e.g. Код документа | <value>).
+    layout: Literal["header_row", "key_value"] = "header_row"
 
     @field_validator("title")
     @classmethod

@@ -801,6 +801,39 @@ def test_structure_gap_operations_fill_missing_headings_and_tables_without_a_mod
     assert _structure_mismatch_message(template, filled) is None
 
 
+def test_structure_gap_operations_insert_header_row_tables_as_one_wide_table() -> None:
+    """A required table whose labels are column headers (technical specs,
+    links, change history) must be inserted as one table with those labels
+    as headers -- not as one separate two-cell row per label, which is
+    only correct for the key-value forms (metadata, description)."""
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    technical_specs = next(
+        table for table in contract.required_tables if table.id == "technical-specifications"
+    )
+    assert technical_specs.layout == "header_row"
+    document = WorkingDocument(
+        title="Исходный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[DocumentNode(kind=NodeKind.PARAGRAPH, text="Описание сценария")],
+    )
+
+    operations = structure_gap_operations(document, template)
+    inserted = next(
+        operation
+        for operation in operations
+        if isinstance(operation, InsertNode)
+        and operation.node.kind is NodeKind.TABLE
+        and operation.node.text == technical_specs.title
+    )
+
+    assert inserted.node.data["headers"] == list(technical_specs.required_labels)
+    assert inserted.node.data["rows"] == [["" for _ in technical_specs.required_labels]]
+
+
 def test_structure_gap_operations_do_not_touch_a_table_with_some_fields_present() -> None:
     """A table that already has some required fields must not be touched
     automatically -- adding columns to real content is too risky to do
@@ -830,6 +863,37 @@ def test_structure_gap_operations_do_not_touch_a_table_with_some_fields_present(
         or operation.node.text != metadata_table.title
         for operation in operations
     )
+
+
+def test_structure_check_recognizes_a_header_row_table_by_its_headers() -> None:
+    """A table whose labels live in "headers" (a real corporate-form wide
+    table: one header row, data rows below) must count as present -- the
+    labels are never duplicated into row values in that layout."""
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    links_table = next(table for table in contract.required_tables if table.id == "links")
+    document = WorkingDocument(
+        title="Исходный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.TABLE,
+                data={
+                    "headers": list(links_table.required_labels),
+                    "rows": [["" for _ in links_table.required_labels]],
+                },
+            )
+        ],
+    )
+
+    message = _structure_mismatch_message(template, document)
+
+    assert message is not None
+    assert "отсутствует таблица «Ссылки»" not in message
+    assert "в таблице «Ссылки» отсутствуют" not in message
 
 
 def test_use_case_form_check_accepts_empty_values_in_complete_form() -> None:
