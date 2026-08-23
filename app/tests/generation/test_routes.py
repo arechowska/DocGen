@@ -928,12 +928,30 @@ def test_report_card_reinjects_the_actionable_chat_card(
     )
 
 
-def test_report_card_missing_returns_404(
+def test_report_card_missing_returns_friendly_banner_not_raw_json(
     client: TestClient, project_with_source: Project
 ) -> None:
+    """A stale/missing report must render as a readable chat banner, not
+    the bare {"detail": "..."} JSON FastAPI produces for a raw HTTPException."""
     response = client.get(f"/projects/{project_with_source.id}/report/card")
 
     assert response.status_code == 404
+    assert "text/html" in response.headers["content-type"]
+    assert '"detail"' not in response.text
+    assert "документ изменился после последней проверки" in response.text
+    assert "Запусти проверку по шаблону ещё раз" in response.text
+
+
+def test_report_view_missing_returns_friendly_page_not_raw_json(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.get(f"/projects/{project_with_source.id}/report")
+
+    assert response.status_code == 404
+    assert "text/html" in response.headers["content-type"]
+    assert '"detail"' not in response.text
+    assert "Отчёт недоступен" in response.text
+    assert f'href="/projects/{project_with_source.id}#docgen2Editor"' in response.text
 
 
 def test_project_page_shows_persistent_report_link_only_when_report_exists(

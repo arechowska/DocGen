@@ -43,6 +43,8 @@ from docgen.documents.operations import (
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckFinding, DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import NormalizedBlock, Provenance
+from docgen.templates_catalog.schemas import SemanticTemplate
+from docgen.workflows.check import structure_gap_operations
 
 CHAT_SYSTEM_PROMPT = """
 Вы редактируете DocGen-документ на русском языке.
@@ -170,11 +172,19 @@ class ChatService:
         project_id: str,
         finding: CheckFinding,
         expected_revision: int,
+        *,
+        template: SemanticTemplate | None = None,
     ) -> ChatEditResult:
-        """Apply a check report finding's suggested fix through the same
-        grounded-edit pipeline as a regular chat message -- the source
-        verification is identical, so a suggestion can never be applied
-        without the same evidence a human-typed request would need."""
+        """Apply a check report finding's suggested fix.
+
+        A structure-check finding (a missing corporate-form heading or
+        table) is resolved deterministically -- it names a structural fact
+        about the document, not a claim needing source evidence, and the
+        grounded-edit validator rejects heading/table inserts outright.
+        Every other finding goes through the same grounded-edit pipeline as
+        a regular chat message, so a suggestion can never be applied
+        without the same evidence a human-typed request would need.
+        """
         if not finding.suggestion:
             raise ChatValidationError("Для этой проблемы нет предложенного исправления")
         stored = self._documents.get_document_with_revision(project_id)
@@ -183,6 +193,24 @@ class ChatService:
         document, current_revision = stored
         if current_revision != expected_revision:
             raise ChatError(ChatErrorCode.REVISION_CONFLICT)
+
+        if (
+            template is not None
+            and template.structure_check is not None
+            and finding.rule_id == template.structure_check.rule_id
+        ):
+            operations = structure_gap_operations(document, template)
+            if not operations:
+                raise ChatGroundingError(
+                    "В документе уже нет структурных расхождений с формой",
+                    code=ChatErrorCode.EVIDENCE_MISSING,
+                )
+            return self._apply_operations(
+                project_id,
+                expected_revision,
+                operations,
+                summary="Добавлены недостающие элементы формы",
+            )
 
         message = " ".join(
             part for part in (finding.message, finding.suggestion) if part

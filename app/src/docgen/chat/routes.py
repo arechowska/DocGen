@@ -22,6 +22,7 @@ from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
 from docgen.sources.repository import SourceRepository
 from docgen.sources.storage import LocalStorage
+from docgen.templates_catalog.loader import TemplateCatalog
 from docgen.web import templates
 from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
@@ -87,12 +88,18 @@ def post_apply_finding_fix(
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
+    template = TemplateCatalog(
+        external_directory=request.app.state.settings.template_dir
+    ).get(report.template_id)
+
     return _run_chat_edit(
         request,
         session,
         project_id,
         revision,
-        lambda chat: chat.apply_finding_fix(project_id, finding, revision),
+        lambda chat: chat.apply_finding_fix(
+            project_id, finding, revision, template=template
+        ),
     )
 
 

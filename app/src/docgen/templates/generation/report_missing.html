@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Отчёт проверки — Formatta</title>
+    <link rel="stylesheet" href="/static/css/docgen.css">
+  </head>
+  <body class="bg-[#f4f7fa] font-[Inter,system-ui] text-[#202428]">
+    <main id="report-start" class="mx-auto max-w-4xl px-6 py-12 sm:px-10">
+      <a href="/projects/{{ project_id }}" class="text-sm font-medium text-[#1b5eaa]">К проекту</a>
+      <section class="mt-6 rounded-[28px] bg-white p-7 sm:p-10">
+        <p class="text-sm font-medium text-[#5f6873]">Результат проверки</p>
+        <h1 class="mt-2 text-3xl font-semibold tracking-tight">Отчёт недоступен</h1>
+        <p class="mt-4 text-[#5f6873]">
+          Документ изменился после последней проверки, поэтому прежний отчёт больше не
+          описывает его текущее содержимое.
+        </p>
+        <a
+          class="docgen-primary-button mt-5 inline-flex"
+          href="/projects/{{ project_id }}#docgen2Editor"
+        >К документу — запустить проверку заново</a>
+      </section>
+    </main>
+  </body>
+</html>

@@ -34,6 +34,7 @@ from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.jobs.models import Job
 from docgen.projects.models import Project
 from docgen.sources.models import Source
+from docgen.templates_catalog.loader import TemplateCatalog
 
 
 class FakeModel:
@@ -202,6 +203,33 @@ def test_apply_finding_fix_rejects_stale_revision(
 
     assert caught.value.code is ChatErrorCode.REVISION_CONFLICT
     assert fake_model.calls == 0
+
+
+def test_apply_finding_fix_resolves_structural_gaps_without_calling_the_model(
+    chat_service: ChatService, fake_model: FakeModel
+) -> None:
+    """A structure-check finding names a missing corporate-form heading or
+    table -- a structural fact, not a claim needing source evidence -- so
+    it must be resolved deterministically, never through the LLM."""
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    finding = CheckFinding(
+        code="template-structure-mismatch",
+        severity=Severity.ERROR,
+        confidence=1.0,
+        message="В документе отсутствуют разделы формы",
+        suggestion="Добавить недостающие разделы и таблицы формы",
+        rule_id=contract.rule_id,
+    )
+
+    result = chat_service.apply_finding_fix(
+        "p1", finding, expected_revision=2, template=template
+    )
+
+    assert result.revision == 3
+    assert fake_model.calls == 0
+    assert any(node.flags == ["structural-edit"] for node in result.document.nodes)
 
 
 def test_chat_noop_plan_is_not_reported_as_a_successful_edit(

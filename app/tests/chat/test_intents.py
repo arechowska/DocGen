@@ -91,6 +91,31 @@ def test_router_does_not_treat_negated_action_word_as_a_command(
     assert decision.kind is IntentKind.GROUNDED_EDIT
 
 
+def test_router_sends_leading_add_verb_to_grounded_edit_over_structural_word(
+    document: WorkingDocument,
+) -> None:
+    """"добавь отсутствующие разделы" asks to fill in missing content --
+    the word "раздел" must not hijack this into SECTIONIZE, which would
+    instead wrap every existing block in a generic "Раздел N" heading."""
+    decision = route_intent("Добавь отсутствующие разделы в документ", document)
+
+    assert decision.kind is IntentKind.GROUNDED_EDIT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Уточни, почему нельзя объединить эти поля",
+        "Обнови раздел с учётом нового лимита",
+        "Исправь описание, раздели формулировку по источнику",
+    ],
+)
+def test_router_never_lets_structural_words_override_a_leading_grounding_verb(
+    document: WorkingDocument, message: str
+) -> None:
+    assert route_intent(message, document).kind is IntentKind.GROUNDED_EDIT
+
+
 def test_router_recognizes_formatting_without_sources(document: WorkingDocument) -> None:
     decision = route_intent("Сделай второй абзац жирным и синим", document)
 

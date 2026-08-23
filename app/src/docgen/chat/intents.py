@@ -126,7 +126,14 @@ def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
     if any(term in lowered for term in _FORMAT_TERMS):
         return IntentDecision(IntentKind.FORMAT)
 
-    structure = _structure_action(lowered)
+    # A message that opens with an explicit add/clarify/fix verb is asking
+    # to bring in or correct content, never to reorganize existing blocks --
+    # even when a structural word ("раздел", "удал"...) appears later as
+    # part of what should be added or explained (e.g. "добавь отсутствующие
+    # разделы", "уточни, почему нельзя удалить..."). Leading intent wins
+    # over an incidental word match anywhere in the sentence.
+    leads_with_grounding_verb = any(lowered.startswith(verb) for verb in _GROUNDING_VERBS)
+    structure = None if leads_with_grounding_verb else _structure_action(lowered)
     if structure is not None:
         return IntentDecision(
             IntentKind.STRUCTURE,
@@ -160,8 +167,8 @@ def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
     if manual is not None and _is_explicit_authored_insert(normalized, manual):
         return IntentDecision(IntentKind.AUTHORED_EDIT, manual_insert=manual)
 
-    if any(marker in lowered for marker in _GROUNDING_MARKERS) or any(
-        lowered.startswith(verb) for verb in _GROUNDING_VERBS
+    if leads_with_grounding_verb or any(
+        marker in lowered for marker in _GROUNDING_MARKERS
     ):
         return IntentDecision(
             IntentKind.GROUNDED_EDIT,

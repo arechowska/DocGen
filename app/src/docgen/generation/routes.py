@@ -216,9 +216,11 @@ def report_view(request: Request, project_id: str, session: SessionDependency) -
     _project_or_404(session, project_id)
     report = DocumentRepository(session).get_report(project_id)
     if report is None:
-        raise HTTPException(
+        return templates.TemplateResponse(
+            request=request,
+            name="generation/report_missing.html",
+            context={"project_id": project_id},
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Отчёт не найден",
         )
     return _report_response(request, project_id, report, standalone=True)
 
@@ -232,9 +234,16 @@ def report_card(request: Request, project_id: str, session: SessionDependency) -
     _project_or_404(session, project_id)
     report = DocumentRepository(session).get_report(project_id)
     if report is None:
-        raise HTTPException(
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={
+                "message": (
+                    "Отчёт недоступен: документ изменился после последней проверки"
+                ),
+                "action": "Запусти проверку по шаблону ещё раз.",
+            },
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Отчёт не найден",
         )
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]

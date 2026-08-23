@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from docgen.ai.grounding import GroundingValidator
+from docgen.documents.operations import InsertNode, apply_operations
 from docgen.documents.schemas import (
     CheckFinding,
     CheckReport,
@@ -25,9 +26,11 @@ from docgen.workflows.check import (
     CheckWorkflow,
     _check_prompt,
     _merge_structure_check,
+    _structure_mismatch_message,
     _target_document,
     _template_for_model_check,
     _validated_report,
+    structure_gap_operations,
 )
 from docgen.workflows.normalize import NormalizedProject
 
@@ -773,6 +776,60 @@ def test_use_case_form_check_reports_missing_structure_even_when_model_passes() 
     assert "«Общие сведения»" in finding.message
     assert "«История изменений»" in finding.message
     assert "use-case-template-form" not in report.passed_rule_ids
+
+
+def test_structure_gap_operations_fill_missing_headings_and_tables_without_a_model() -> None:
+    """The deterministic fixer must resolve the exact gaps the structure
+    check reports -- re-running the check on the filled-in document must
+    find nothing missing."""
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    document = WorkingDocument(
+        title="Исходный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[DocumentNode(kind=NodeKind.PARAGRAPH, text="Описание сценария")],
+    )
+
+    operations = structure_gap_operations(document, template)
+    assert operations
+
+    filled = apply_operations(document, operations)
+
+    assert _structure_mismatch_message(template, filled) is None
+
+
+def test_structure_gap_operations_do_not_touch_a_table_with_some_fields_present() -> None:
+    """A table that already has some required fields must not be touched
+    automatically -- adding columns to real content is too risky to do
+    without review."""
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    metadata_table = next(table for table in contract.required_tables if table.id == "metadata")
+    document = WorkingDocument(
+        title="Исходный Use Case",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[
+            DocumentNode(
+                id="partial-metadata",
+                kind=NodeKind.TABLE,
+                data={"rows": [[metadata_table.required_labels[0], "УК-1"]]},
+            )
+        ],
+    )
+
+    operations = structure_gap_operations(document, template)
+
+    assert all(
+        not (isinstance(operation, InsertNode) and operation.node.kind is NodeKind.TABLE)
+        or operation.node.text != metadata_table.title
+        for operation in operations
+    )
 
 
 def test_use_case_form_check_accepts_empty_values_in_complete_form() -> None:

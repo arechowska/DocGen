@@ -315,6 +315,8 @@ def test_parse_manual_insert_ignores_non_manual_commands(message: str) -> None:
         "добавь раздел на основе источников",
         "Добавь вопрос и ответ: Что такое AMS?",
         "добавь вопрос или ответ про лимиты",
+        "добавь отсутствующие разделы в документ",
+        "добавь недостающие вопросы по теме",
     ],
 )
 def test_parse_manual_insert_does_not_capture_grounded_generation_requests(

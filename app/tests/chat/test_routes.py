@@ -42,7 +42,12 @@ class FakeChat:
         )
 
     def apply_finding_fix(
-        self, project_id: str, finding: CheckFinding, expected_revision: int
+        self,
+        project_id: str,
+        finding: CheckFinding,
+        expected_revision: int,
+        *,
+        template=None,
     ) -> ChatEditResult:
         assert project_id
         assert finding.suggestion

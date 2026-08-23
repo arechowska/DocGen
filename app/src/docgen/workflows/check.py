@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from docgen.ai.client import TextModel, VisionModel
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import CHECK_SYSTEM_PROMPT
+from docgen.documents.operations import DocumentOperation, InsertNode
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import (
     CheckFinding,
@@ -23,7 +25,7 @@ from docgen.jobs.models import CheckTargetKind, Job, JobKind
 from docgen.jobs.runner import ProgressSink
 from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
-from docgen.templates_catalog.schemas import SemanticTemplate
+from docgen.templates_catalog.schemas import SemanticStructureCheck, SemanticTemplate
 
 from .assemble import enrich_images, normalize_sources, public_blocks
 from .errors import WorkflowError
@@ -316,6 +318,7 @@ def _merge_structure_check(
     if message is None:
         passed.add(contract.rule_id)
     else:
+        can_autofix = bool(structure_gap_operations(document, template))
         findings.insert(
             0,
             CheckFinding(
@@ -323,6 +326,11 @@ def _merge_structure_check(
                 severity=Severity(rule.severity),
                 confidence=1.0,
                 message=message,
+                suggestion=(
+                    "Добавить недостающие разделы и таблицы формы"
+                    if can_autofix
+                    else None
+                ),
                 rule_id=contract.rule_id,
             ),
         )
@@ -427,6 +435,144 @@ def _structure_mismatch_message(
     )
 
 
+def structure_gap_operations(
+    document: WorkingDocument,
+    template: SemanticTemplate,
+) -> list[DocumentOperation]:
+    """Deterministically insert whatever the structure-check contract says
+    is missing -- no model call, so a missing heading or table can never be
+    rejected as "unconfirmed": it is a structural fact about the document,
+    not a claim that needs source evidence."""
+    contract = template.structure_check
+    if contract is None:
+        return []
+    if document.origin is DocumentOrigin.ASSEMBLED and document.build_template_id == template.id:
+        return _assembled_section_gap_operations(document, template, contract)
+    return _form_gap_operations(document, contract)
+
+
+def _assembled_section_gap_operations(
+    document: WorkingDocument,
+    template: SemanticTemplate,
+    contract: SemanticStructureCheck,
+) -> list[DocumentOperation]:
+    nodes_by_section = {
+        node.section_id: node
+        for node in document.nodes
+        if node.kind is NodeKind.HEADING and node.section_id
+    }
+    titles = {section.id: section.title for section in template.sections}
+    operations: list[DocumentOperation] = []
+    next_index = len(document.nodes)
+    for section_id in contract.assembled_section_ids:
+        existing = nodes_by_section.get(section_id)
+        if existing is not None and existing.children:
+            continue
+        if existing is not None:
+            operations.append(_gap_insert(parent_id=existing.id))
+            continue
+        heading_id = f"section-{uuid4()}"
+        operations.append(
+            InsertNode(
+                index=next_index,
+                node=DocumentNode(
+                    id=heading_id,
+                    kind=NodeKind.HEADING,
+                    text=titles.get(section_id, section_id),
+                    section_id=section_id,
+                    flags=["structural-edit"],
+                ),
+            )
+        )
+        next_index += 1
+        operations.append(_gap_insert(parent_id=heading_id))
+    return operations
+
+
+def _form_gap_operations(
+    document: WorkingDocument,
+    contract: SemanticStructureCheck,
+) -> list[DocumentOperation]:
+    operations: list[DocumentOperation] = []
+    next_index = len(document.nodes)
+    existing_headings = {
+        _normalized_heading(node.text)
+        for node in _walk_nodes(document.nodes)
+        if node.kind is NodeKind.HEADING and node.text
+    }
+    for heading in contract.required_headings:
+        if _normalized_heading(heading) in existing_headings:
+            continue
+        heading_id = f"section-{uuid4()}"
+        operations.append(
+            InsertNode(
+                index=next_index,
+                node=DocumentNode(
+                    id=heading_id,
+                    kind=NodeKind.HEADING,
+                    text=heading,
+                    flags=["structural-edit"],
+                ),
+            )
+        )
+        next_index += 1
+        operations.append(_gap_insert(parent_id=heading_id))
+
+    table_cells = [
+        [
+            _normalized_label(cell)
+            for row in node.data.get("rows", [])
+            if isinstance(row, list)
+            for cell in row
+        ]
+        for node in _walk_nodes(document.nodes)
+        if node.kind is NodeKind.TABLE and isinstance(node.data.get("rows"), list)
+    ]
+    for required_table in contract.required_tables:
+        expected = {
+            label: _normalized_label(label) for label in required_table.required_labels
+        }
+        best_matches: set[str] = set()
+        for cells in table_cells:
+            matches = {
+                label
+                for label, normalized in expected.items()
+                if any(normalized in cell for cell in cells)
+            }
+            if len(matches) > len(best_matches):
+                best_matches = matches
+        if best_matches:
+            # Table exists with at least some required fields -- adding
+            # columns to it automatically risks corrupting real content, so
+            # only entirely absent tables are auto-filled.
+            continue
+        operations.append(
+            InsertNode(
+                index=next_index,
+                node=DocumentNode(
+                    kind=NodeKind.TABLE,
+                    text=required_table.title,
+                    data={
+                        "rows": [
+                            [label, ""] for label in required_table.required_labels
+                        ],
+                    },
+                    flags=["structural-edit"],
+                ),
+            )
+        )
+        next_index += 1
+    return operations
+
+
+def _gap_insert(*, parent_id: str) -> InsertNode:
+    return InsertNode(
+        parent_id=parent_id,
+        index=0,
+        node=DocumentNode(kind=NodeKind.GAP, flags=["structural-edit"]),
+    )
+
+
 def _normalized_label(value: object) -> str:
     return " ".join(str(value).split()).casefold()
 
@@ -474,4 +620,4 @@ def _check_prompt(
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
-__all__ = ["CheckWorkflow"]
+__all__ = ["CheckWorkflow", "structure_gap_operations"]

@@ -43,7 +43,10 @@ _MANUAL_COMMAND_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _GENERATIVE_REQUEST_PATTERN = re.compile(
-    r"^\s*(?:больше\s+)?(?:вопрос(?:ы|ов)|ответ(?:ы|ов)|пример(?:ы|ов)|"
+    # A qualifier like "отсутствующие"/"недостающие разделы" still names
+    # what to generate, not literal text to insert -- allow a few leading
+    # words before the generative noun rather than requiring it first.
+    r"^\s*(?:\S+\s+){0,3}(?:вопрос(?:ы|ов)|ответ(?:ы|ов)|пример(?:ы|ов)|"
     r"раздел(?:ы|ов)|пункт(?:ы|ов)|шаг(?:и|ов)|страниц(?:ы|у)?)\b"
     r"|\b(?:из|по|на\s+основе)\s+источник(?:а|ов|ами)?\b"
     r"|\bвопрос\b\s*(?:и|или)\s*\bответ\b",
