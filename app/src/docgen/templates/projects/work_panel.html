@@ -63,8 +63,9 @@
       <label class="visually-hidden" for="heading-level">Стиль абзаца</label>
       <div class="heading-select-wrap">
         <select id="heading-level" class="heading-select" data-editor-heading aria-label="Стиль абзаца">
-          <option value="">Обычный текст</option>
-          <option value="h1" {% if not document %}selected{% endif %}>Заголовок H1</option>
+          <option value="" selected>Стиль текста</option>
+          <option value="p">Обычный текст</option>
+          <option value="h1">Заголовок H1</option>
           <option value="h2">Заголовок H2</option>
           <option value="h3">Заголовок H3</option>
           <option value="h4">Заголовок H4</option>
@@ -72,13 +73,6 @@
         </select>
         <span class="select-chevron" aria-hidden="true">⌄</span>
       </div>
-      <button
-        class="tool-button editor-style-action"
-        type="button"
-        data-editor-apply-heading
-        aria-label="Применить выбранный стиль"
-        title="Применить выбранный стиль"
-      >Применить</button>
       <button class="tool-button" type="button" data-editor-command="bold" aria-label="Полужирный" title="Полужирный">{{ toolbar_icon("bold") }}</button>
       <button class="tool-button" type="button" data-editor-command="italic" aria-label="Курсив" title="Курсив">{{ toolbar_icon("italic") }}</button>
       <button class="tool-button" type="button" data-editor-command="underline" aria-label="Подчёркивание" title="Подчёркивание">{{ toolbar_icon("underline") }}</button>

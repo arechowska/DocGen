@@ -1629,6 +1629,22 @@
   text-decoration: underline;
 }
 
+.document-canvas ul {
+  margin: 1em 0;
+  padding-left: 1.6em;
+  list-style: disc;
+}
+
+.document-canvas ol {
+  margin: 1em 0;
+  padding-left: 1.8em;
+  list-style: decimal;
+}
+
+.document-canvas li {
+  display: list-item;
+}
+
 .document-canvas img {
   max-width: 100%;
   height: auto;

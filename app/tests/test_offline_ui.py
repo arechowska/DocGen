@@ -426,12 +426,12 @@ def test_docgen2_editor_toolbar_preserves_canvas_selection(client: TestClient) -
     source = script.text
     assert "savedSelection = range.cloneRange()" in source
     assert "selection?.addRange(savedSelection)" in source
-    assert '"button[data-editor-command], button[data-editor-apply-heading]' in source
+    assert '"button[data-editor-command], button[data-editor-clear-formatting]' in source
     assert "event.preventDefault()" in source
     assert "restoreSelection();" in source
 
 
-def test_docgen2_editor_toolbar_can_reapply_and_clear_formatting(client: TestClient) -> None:
+def test_docgen2_editor_toolbar_reapplies_headings_and_clears_formatting(client: TestClient) -> None:
     script = client.get("/static/js/docgen2-editor.js")
     template = (
         Path(__file__).parents[1]
@@ -443,14 +443,30 @@ def test_docgen2_editor_toolbar_can_reapply_and_clear_formatting(client: TestCli
     ).read_text(encoding="utf-8")
 
     assert script.status_code == 200
-    assert "data-editor-apply-heading" in template
+    assert "data-editor-apply-heading" not in template
     assert "data-editor-clear-formatting" in template
-    assert 'runCommand("formatBlock", headingSelect?.value || "p")' in script.text
+    assert 'headingSelect.value = ""' in script.text
+    assert "replaceBlockTag(block, tagName)" in script.text
     assert 'document.execCommand("removeFormat", false, null)' in script.text
     assert 'document.execCommand("formatBlock", false, "p")' in script.text
     assert "normalizeSemanticNodeAttributes();" in script.text
     assert "seenNodeIds.has(nodeId)" in script.text
     assert "element.removeAttribute(attribute)" in script.text
+
+
+def test_docgen2_editor_uses_visible_lists_and_direct_block_alignment(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    stylesheet = client.get("/static/css/docgen.css")
+
+    assert script.status_code == 200
+    assert stylesheet.status_code == 200
+    assert "toggleList" in script.text
+    assert "applyAlignment" in script.text
+    assert "block.style.textAlign = alignment" in script.text
+    assert ".document-canvas ul{" in stylesheet.text
+    assert "list-style:disc" in stylesheet.text
+    assert ".document-canvas ol{" in stylesheet.text
+    assert "list-style:decimal" in stylesheet.text
 
 
 def test_shared_ui_script_confirms_project_delete_forms(client: TestClient) -> None:

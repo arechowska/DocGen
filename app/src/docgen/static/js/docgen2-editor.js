@@ -282,8 +282,116 @@
     rememberSelection();
   };
 
+  const canvasBlockForNode = (node) => {
+    let element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    while (element && element.parentElement !== canvas) element = element.parentElement;
+    return element?.parentElement === canvas ? element : null;
+  };
+
+  const selectedCanvasBlocks = () => {
+    restoreSelection();
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return [];
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) {
+      const block = canvasBlockForNode(range.startContainer);
+      return block ? [block] : [];
+    }
+    return Array.from(canvas.children).filter((element) => {
+      try {
+        return range.intersectsNode(element);
+      } catch (_) {
+        return false;
+      }
+    });
+  };
+
+  const selectBlockContents = (first, last = first) => {
+    if (!first || !last) return;
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(last, last.childNodes.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    savedSelection = range.cloneRange();
+  };
+
+  const replaceBlockTag = (block, tagName) => {
+    if (block.tagName.toLowerCase() === tagName) return block;
+    const replacement = document.createElement(tagName);
+    Array.from(block.attributes).forEach((attribute) => {
+      replacement.setAttribute(attribute.name, attribute.value);
+    });
+    replacement.innerHTML = block.innerHTML;
+    replacement.dataset.kind = tagName === "p" ? "paragraph" : "heading";
+    block.replaceWith(replacement);
+    return replacement;
+  };
+
   const applyHeadingStyle = () => {
-    runCommand("formatBlock", headingSelect?.value || "p");
+    const tagName = headingSelect?.value;
+    if (!tagName) return;
+    const supportedBlock = /^(P|DIV|H[1-6])$/;
+    const replacements = selectedCanvasBlocks()
+      .filter((block) => supportedBlock.test(block.tagName))
+      .map((block) => replaceBlockTag(block, tagName));
+    normalizeSemanticNodeAttributes();
+    if (replacements.length) selectBlockContents(replacements[0], replacements.at(-1));
+    headingSelect.value = "";
+  };
+
+  const copySemanticAttributes = (source, target) => {
+    ["data-node-id", "data-section-id", "data-section-title"].forEach((attribute) => {
+      const value = source.getAttribute(attribute);
+      if (value !== null) target.setAttribute(attribute, value);
+    });
+  };
+
+  const toggleList = (tagName) => {
+    const blocks = selectedCanvasBlocks();
+    if (!blocks.length) return;
+    if (blocks.length === 1 && blocks[0].tagName.toLowerCase() === tagName) {
+      const list = blocks[0];
+      const paragraphs = Array.from(list.children).map((item, index) => {
+        const paragraph = document.createElement("p");
+        paragraph.innerHTML = item.innerHTML;
+        if (item.getAttribute("style")) paragraph.setAttribute("style", item.getAttribute("style"));
+        if (index === 0) copySemanticAttributes(list, paragraph);
+        paragraph.dataset.kind = "paragraph";
+        return paragraph;
+      });
+      list.replaceWith(...paragraphs);
+      normalizeSemanticNodeAttributes();
+      if (paragraphs.length) selectBlockContents(paragraphs[0], paragraphs.at(-1));
+      return;
+    }
+
+    const list = document.createElement(tagName);
+    copySemanticAttributes(blocks[0], list);
+    list.dataset.kind = "list";
+    blocks[0].before(list);
+    blocks.forEach((block) => {
+      if (/^(UL|OL)$/.test(block.tagName)) {
+        Array.from(block.children).forEach((item) => list.appendChild(item));
+      } else {
+        const item = document.createElement("li");
+        item.innerHTML = block.innerHTML;
+        if (block.getAttribute("style")) item.setAttribute("style", block.getAttribute("style"));
+        list.appendChild(item);
+      }
+      block.remove();
+    });
+    normalizeSemanticNodeAttributes();
+    selectBlockContents(list);
+  };
+
+  const applyAlignment = (alignment) => {
+    const blocks = selectedCanvasBlocks();
+    blocks.forEach((block) => {
+      block.style.textAlign = alignment;
+    });
+    rememberSelection();
   };
 
   const clearFormatting = () => {
@@ -496,7 +604,7 @@
 
   editor.addEventListener("mousedown", (event) => {
     const button = event.target.closest(
-      "button[data-editor-command], button[data-editor-apply-heading], button[data-editor-clear-formatting]",
+      "button[data-editor-command], button[data-editor-clear-formatting]",
     );
     if (!button) return;
     rememberSelection();
@@ -514,10 +622,6 @@
   };
 
   editor.addEventListener("click", (event) => {
-    if (event.target.closest("[data-editor-apply-heading]")) {
-      applyHeadingStyle();
-      return;
-    }
     if (event.target.closest("[data-editor-clear-formatting]")) {
       clearFormatting();
       return;
@@ -537,6 +641,15 @@
     }
     if (command === "table") {
       toggleTableMenu();
+      return;
+    }
+    if (command === "insertUnorderedList" || command === "insertOrderedList") {
+      toggleList(command === "insertOrderedList" ? "ol" : "ul");
+      return;
+    }
+    if (command === "justifyLeft" || command === "justifyCenter" || command === "justifyRight") {
+      const alignment = command.replace("justify", "").toLowerCase();
+      applyAlignment(alignment);
       return;
     }
     runCommand(command);
