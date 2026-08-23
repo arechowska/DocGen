@@ -823,6 +823,21 @@ def test_docx_filename_includes_category_label(docx_template: FormattingTemplate
     assert rendered.filename.startswith("FAQ-")
 
 
+def test_docx_filename_does_not_double_up_a_title_that_already_has_the_label(
+    docx_template: FormattingTemplate,
+) -> None:
+    """assemble.py defaults a FAQ's title to "FAQ по материалам источников" --
+    the label must not be prefixed again on top of that."""
+    document = WorkingDocument(
+        title="FAQ Интеграция с INHOUSE через AMS", template_id="faq", nodes=[]
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+
+    assert rendered.filename.startswith("FAQ-Интеграция")
+    assert "FAQ-FAQ" not in rendered.filename
+
+
 def test_docx_filename_and_media_type(docx_template: FormattingTemplate) -> None:
     document = WorkingDocument(
         title="Мой прекрасный документ", template_id="colvir-docx", nodes=[]

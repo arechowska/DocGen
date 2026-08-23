@@ -1037,9 +1037,14 @@ def filename_title(document: WorkingDocument) -> str:
     Shared by `DocxExporter` and `PdfExporter._render_from_docx_template`
     (which converts the same DOCX render) so a FAQ export is recognizable
     as "FAQ-..." in a folder of downloads on both formats, not just DOCX.
+    Skips the prefix when the title already starts with it (e.g. assemble.py
+    defaults a FAQ's title to "FAQ по материалам источников") -- otherwise
+    it would double up into "FAQ-FAQ ...".
     """
     label = document_category_label(document)
-    return document.title if label is None else f"{label}-{document.title}"
+    if label is None or document.title.strip().casefold().startswith(label.casefold()):
+        return document.title
+    return f"{label}-{document.title}"
 
 
 def _cover_title(title: str) -> str:
