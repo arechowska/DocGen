@@ -7,6 +7,17 @@
   {% if finding.suggestion %}
     <p class="mt-2 text-sm"><strong>Как исправить:</strong> {{ finding.suggestion }}</p>
   {% endif %}
+  {% if not (stale | default(false)) and revision and finding.rule_id in (actionable_rule_ids | default([])) %}
+    <button
+      type="button"
+      class="docgen-primary-button mt-3"
+      hx-post="/projects/{{ project_id }}/report/findings/{{ finding.rule_id }}/propose-fix"
+      hx-include="#reportRevision"
+      hx-target="#report-fix-preview-{{ finding.rule_id }}"
+      hx-swap="innerHTML"
+    >Предложить правку</button>
+    <div id="report-fix-preview-{{ finding.rule_id }}" class="mt-3" aria-live="polite"></div>
+  {% endif %}
   {% if finding.node_id %}
     <a class="mt-2 inline-block text-sm font-medium text-[#1b5eaa]" data-node-target="{{ finding.node_id }}" href="/projects/{{ project_id }}#doc-node-{{ finding.node_id }}">К узлу документа</a>
   {% elif finding.code != "template-structure-mismatch" %}
@@ -20,11 +31,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Отчёт проверки — Formatta</title>
-    <link rel="stylesheet" href="/static/css/docgen.css">
+    <link rel="stylesheet" href="/static/css/docgen.css?v={{ static_asset_version }}">
+    <script defer src="/static/vendor/htmx-2.0.8.min.js"></script>
+    <script defer src="/static/js/docgen2-editor.js?v={{ static_asset_version }}"></script>
   </head>
   <body class="bg-[#f4f7fa] font-[Inter,system-ui] text-[#202428]">
 {% endif %}
 <main id="{% if standalone %}report-start{% else %}generation-status{% endif %}" class="mx-auto max-w-4xl px-6 py-12 sm:px-10">
+  {% if revision %}<input id="reportRevision" type="hidden" name="revision" value="{{ revision }}">{% endif %}
   <a href="/projects/{{ project_id }}" class="text-sm font-medium text-[#1b5eaa]">К проекту</a>
   {% if warnings %}
     <section class="mt-6 rounded-2xl bg-[#fff8e6] p-5" aria-label="Предупреждения">

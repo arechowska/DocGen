@@ -40,6 +40,7 @@ from docgen.templates_catalog.loader import (
     TemplateConfigurationError,
 )
 from docgen.web import templates
+from docgen.workflows.check import structure_gap_operations
 from docgen.workflows.conversion import conversion_document
 from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
@@ -230,6 +231,16 @@ def report_view(request: Request, project_id: str, session: SessionDependency) -
         record.report,
         standalone=True,
         stale=current is None or current[1] != record.document_revision,
+        revision=(
+            current[1]
+            if current is not None and current[1] == record.document_revision
+            else None
+        ),
+        document=(
+            current[0]
+            if current is not None and current[1] == record.document_revision
+            else None
+        ),
         report_target_source_id=record.target_source_id,
     )
 
@@ -692,10 +703,31 @@ def _report_response(
     standalone: bool,
     warnings: tuple[str, ...] = (),
     stale: bool = False,
+    revision: int | None = None,
+    document: WorkingDocument | None = None,
     report_target_source_id: str | None = None,
 ) -> Response:
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
+    actionable_rule_ids = {
+        finding.rule_id
+        for finding in report.findings
+        if finding.suggestion and finding.node_id and finding.rule_id
+    }
+    if document is not None:
+        catalog = TemplateCatalog(
+            external_directory=request.app.state.settings.template_dir
+        )
+        try:
+            semantic_template = catalog.get(report.template_id)
+        except TemplateConfigurationError:
+            semantic_template = None
+        if (
+            semantic_template is not None
+            and semantic_template.structure_check is not None
+            and structure_gap_operations(document, semantic_template)
+        ):
+            actionable_rule_ids.add(semantic_template.structure_check.rule_id)
     return templates.TemplateResponse(
         request=request,
         name="generation/report.html",
@@ -708,6 +740,8 @@ def _report_response(
             "standalone": standalone,
             "warnings": warnings,
             "stale": stale,
+            "revision": revision,
+            "actionable_rule_ids": actionable_rule_ids,
             "report_target_source_id": report_target_source_id,
         },
     )

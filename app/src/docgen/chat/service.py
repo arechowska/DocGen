@@ -252,7 +252,10 @@ class ChatService:
             except EditValidationError as error:
                 raise ChatValidationError(str(error)) from error
             return FindingFixProposal(
-                summary="Добавлены только отсутствующие поля существующей таблицы",
+                summary=(
+                    "Восстановлены отсутствующие элементы формы и порядок полей "
+                    "без изменения заполненных значений"
+                ),
                 operations=operations,
                 document=candidate,
             )
@@ -535,9 +538,21 @@ def _validate_structural_fix_scope(
             "Не удалось однозначно определить существующую таблицу для дополнения"
         )
     for operation in operations:
+        if isinstance(operation, InsertNode):
+            if (
+                operation.parent_id is not None
+                or operation.node.kind is not NodeKind.HEADING
+                or not operation.node.text.strip()
+                or set(operation.node.flags)
+                != {"structural-edit", "empty-template-section"}
+            ):
+                raise ChatValidationError(
+                    "Структурная правка пытается добавить неразрешённый блок"
+                )
+            continue
         if not isinstance(operation, UpdateData):
             raise ChatValidationError(
-                "Структурная правка может только дополнить существующую таблицу"
+                "Структурная правка может дополнить таблицу или добавить пустой раздел"
             )
         node = find_node(document, operation.node_id)
         if node is None or node.kind is not NodeKind.TABLE:
@@ -550,21 +565,26 @@ def _validate_table_additions(before: dict, after: dict) -> None:
         key: value for key, value in after.items() if key not in {"rows", "headers"}
     }:
         raise ChatValidationError("Правка пытается изменить оформление таблицы")
-    before_headers = before.get("headers", [])
-    after_headers = after.get("headers", [])
-    if not isinstance(before_headers, list) or not isinstance(after_headers, list):
-        raise ChatValidationError("Некорректные заголовки таблицы")
-    if after_headers[: len(before_headers)] != before_headers:
-        raise ChatValidationError("Правка пытается изменить существующие заголовки")
-    before_rows = before.get("rows", [])
-    after_rows = after.get("rows", [])
-    if not isinstance(before_rows, list) or not isinstance(after_rows, list):
-        raise ChatValidationError("Некорректные строки таблицы")
-    for index, row in enumerate(before_rows):
-        if index >= len(after_rows) or after_rows[index][: len(row)] != row:
-            raise ChatValidationError("Правка пытается изменить заполненные ячейки")
+    before_values = Counter(_table_values(before))
+    after_values = Counter(_table_values(after))
+    if any(after_values[value] < count for value, count in before_values.items()):
+        raise ChatValidationError("Правка пытается изменить заполненные ячейки")
     if before == after:
         raise ChatValidationError("Правка не добавляет отсутствующие поля")
+
+
+def _table_values(data: dict) -> list[str]:
+    values: list[str] = []
+    headers = data.get("headers", [])
+    rows = data.get("rows", [])
+    if not isinstance(headers, list) or not isinstance(rows, list):
+        raise ChatValidationError("Некорректная структура таблицы")
+    values.extend(str(value) for value in headers)
+    for row in rows:
+        if not isinstance(row, list):
+            raise ChatValidationError("Некорректная строка таблицы")
+        values.extend(str(value) for value in row)
+    return values
 
 
 def _validate_finding_fix_scope(

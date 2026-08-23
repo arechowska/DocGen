@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import ValidationError
 
@@ -397,6 +397,7 @@ def _structure_mismatch_message(
             label: _normalized_label(label) for label in required_table.required_labels
         }
         best_matches: set[str] = set()
+        best_table: DocumentNode | None = None
         for table in table_nodes:
             cells = _node_table_cells(table)
             matches = {
@@ -406,7 +407,18 @@ def _structure_mismatch_message(
             }
             if len(matches) > len(best_matches):
                 best_matches = matches
+                best_table = table
         if len(best_matches) == len(expected):
+            if (
+                best_table is not None
+                and _table_uses_contract_layout(best_table.data, required_table)
+                and _ordered_table_data(best_table.data, required_table)
+                != best_table.data
+            ):
+                differences.append(
+                    f"в таблице «{required_table.title}» поля расположены "
+                    "не в порядке шаблона"
+                )
             continue
         missing_labels = [
             label for label in required_table.required_labels if label not in best_matches
@@ -509,6 +521,8 @@ def _form_gap_operations(
     table_nodes = [
         node for node in _walk_nodes(document.nodes) if node.kind is NodeKind.TABLE
     ]
+    matched_tables: list[tuple[int, DocumentNode, SemanticTableCheck]] = []
+    top_level_indexes = {node.id: index for index, node in enumerate(document.nodes)}
     for table in table_nodes:
         cells = _node_table_cells(table)
         candidates: list[tuple[SemanticTableCheck, set[str]]] = []
@@ -528,47 +542,199 @@ def _form_gap_operations(
             # A generic label such as "Примечание" can occur in several
             # contracts. Never guess which form table it represents.
             continue
-        required_table, matches = best[0]
-        if len(matches) == len(required_table.required_labels):
+        required_table, _matches = best[0]
+        if not _table_uses_contract_layout(table.data, required_table):
             continue
-        missing_labels = [
-            label for label in required_table.required_labels if label not in matches
-        ]
+        ordered_data = _ordered_table_data(table.data, required_table)
+        if ordered_data != table.data:
+            operations.append(UpdateData(node_id=table.id, data=ordered_data))
+        if table.id in top_level_indexes:
+            matched_tables.append(
+                (top_level_indexes[table.id], table, required_table)
+            )
+
+    # A recognised form table is a safe layout anchor. Restore missing empty
+    # section headings around those anchors (including diagram sections), but
+    # never manufacture a full form in an unrelated free-form document.
+    heading_operations = _missing_form_heading_operations(
+        document, contract, matched_tables
+    )
+    return [*heading_operations, *operations]
+
+
+def _missing_form_heading_operations(
+    document: WorkingDocument,
+    contract: SemanticStructureCheck,
+    matched_tables: list[tuple[int, DocumentNode, SemanticTableCheck]],
+) -> list[InsertNode]:
+    if not matched_tables:
+        return []
+    existing = {
+        _normalized_heading(node.text)
+        for node in _walk_nodes(document.nodes)
+        if node.kind is NodeKind.HEADING and node.text
+    }
+    heading_indexes = {
+        heading: index for index, heading in enumerate(contract.required_headings)
+    }
+    anchors: list[tuple[int, int]] = []
+    for node_index, _node, table in matched_tables:
+        heading_index = _table_heading_index(table, contract.required_headings)
+        if heading_index is not None:
+            anchors.append((heading_index, node_index))
+    if not anchors:
+        return []
+    anchors.sort()
+    last_table_index = max(node_index for node_index, _node, _table in matched_tables)
+    inserted_at_base: dict[int, int] = {}
+    operations: list[InsertNode] = []
+    for heading in contract.required_headings:
+        if _normalized_heading(heading) in existing:
+            continue
+        heading_index = heading_indexes[heading]
+        base_index = next(
+            (
+                node_index
+                for anchor_heading_index, node_index in anchors
+                if anchor_heading_index >= heading_index
+            ),
+            last_table_index + 1,
+        )
+        offset = sum(
+            count for index, count in inserted_at_base.items() if index <= base_index
+        )
         operations.append(
-            UpdateData(
-                node_id=table.id,
-                data=_table_data_with_missing_labels(
-                    table.data, required_table, missing_labels
+            InsertNode(
+                index=base_index + offset,
+                node=DocumentNode(
+                    id=f"structural-heading:{uuid5(NAMESPACE_URL, f'{contract.rule_id}:{heading}')}",
+                    kind=NodeKind.HEADING,
+                    text=heading,
+                    flags=["structural-edit", "empty-template-section"],
                 ),
             )
         )
+        inserted_at_base[base_index] = inserted_at_base.get(base_index, 0) + 1
     return operations
 
 
-def _table_data_with_missing_labels(
+def _table_heading_index(
+    table: SemanticTableCheck,
+    headings: tuple[str, ...],
+) -> int | None:
+    title = _normalized_heading(table.title)
+    matches = [
+        index
+        for index, heading in enumerate(headings)
+        if title in _normalized_heading(heading)
+        or _normalized_heading(heading) in title
+    ]
+    return matches[0] if matches else None
+
+
+def _ordered_table_data(
     data: dict,
     required_table: SemanticTableCheck,
-    missing_labels: list[str],
 ) -> dict:
     updated = dict(data)
     if required_table.layout == "key_value":
         rows = [list(row) for row in data.get("rows", []) if isinstance(row, list)]
         width = max(2, max((len(row) for row in rows), default=0))
-        updated["rows"] = [
-            row + [""] * (width - len(row)) for row in rows
-        ] + [[label] + [""] * (width - 1) for label in missing_labels]
+        rows = [row + [""] * (width - len(row)) for row in rows]
+        used: set[int] = set()
+        ordered: list[list[object]] = []
+        for label in required_table.required_labels:
+            index = _matching_label_index(rows, label, used, cell_index=0)
+            if index is None:
+                ordered.append([label] + [""] * (width - 1))
+            else:
+                used.add(index)
+                ordered.append(rows[index])
+        ordered.extend(row for index, row in enumerate(rows) if index not in used)
+        updated["rows"] = ordered
         return updated
 
     headers = list(data.get("headers", []))
     rows = [list(row) for row in data.get("rows", []) if isinstance(row, list)]
-    headers.extend(missing_labels)
-    updated["headers"] = headers
-    updated["rows"] = (
-        [row + [""] * (len(headers) - len(row)) for row in rows]
-        if rows
-        else [[""] * len(headers)]
-    )
+    width = max(len(headers), max((len(row) for row in rows), default=0))
+    headers.extend([""] * (width - len(headers)))
+    rows = [row + [""] * (width - len(row)) for row in rows]
+    used_columns: set[int] = set()
+    column_order: list[int | None] = []
+    ordered_headers: list[object] = []
+    for label in required_table.required_labels:
+        index = _matching_value_index(headers, label, used_columns)
+        column_order.append(index)
+        ordered_headers.append(label if index is None else headers[index])
+        if index is not None:
+            used_columns.add(index)
+    for index, header in enumerate(headers):
+        if index not in used_columns:
+            column_order.append(index)
+            ordered_headers.append(header)
+    updated["headers"] = ordered_headers
+    updated["rows"] = [
+        ["" if index is None else row[index] for index in column_order]
+        for row in (rows or [[""] * width])
+    ]
     return updated
+
+
+def _table_uses_contract_layout(
+    data: dict,
+    required_table: SemanticTableCheck,
+) -> bool:
+    if required_table.layout == "key_value":
+        return isinstance(data.get("rows", []), list)
+    return bool(data.get("headers")) and isinstance(data.get("headers"), list)
+
+
+def _matching_label_index(
+    rows: list[list[object]],
+    label: str,
+    used: set[int],
+    *,
+    cell_index: int,
+) -> int | None:
+    expected = _normalized_label(label)
+    exact = [
+        index
+        for index, row in enumerate(rows)
+        if index not in used
+        and len(row) > cell_index
+        and _normalized_label(row[cell_index]) == expected
+    ]
+    if exact:
+        return exact[0]
+    return next(
+        (
+            index
+            for index, row in enumerate(rows)
+            if index not in used
+            and len(row) > cell_index
+            and expected in _normalized_label(row[cell_index])
+        ),
+        None,
+    )
+
+
+def _matching_value_index(
+    values: list[object],
+    label: str,
+    used: set[int],
+) -> int | None:
+    expected = _normalized_label(label)
+    for index, value in enumerate(values):
+        if index not in used and _normalized_label(value) == expected:
+            return index
+    return next(
+        (
+            index
+            for index, value in enumerate(values)
+            if index not in used and expected in _normalized_label(value)
+        ),
+        None,
+    )
 
 
 def _gap_insert(*, parent_id: str) -> InsertNode:

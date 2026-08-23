@@ -18,52 +18,10 @@
     </p>
   {% endif %}
 
-  {% if confirmed %}
-    <ul class="check-result-findings">
-      {% for finding in confirmed %}
-        <li>
-          <p class="check-result-rule">{{ rule_instructions.get(finding.rule_id, finding.rule_id) }}</p>
-          <p class="check-result-message">{{ finding.message }}</p>
-          {% if finding.evidence %}
-            <blockquote class="check-result-evidence">{{ finding.evidence }}</blockquote>
-          {% endif %}
-          {% if finding.suggestion %}
-            <p class="check-result-suggestion"><strong>Как исправить:</strong> {{ finding.suggestion }}</p>
-          {% endif %}
-          <div class="check-result-actions">
-            {% if finding.node_id %}
-              <a
-                class="check-result-link"
-                data-node-target="{{ finding.node_id }}"
-                href="/projects/{{ project_id }}#doc-node-{{ finding.node_id }}"
-              >К узлу документа</a>
-            {% elif finding.code != "template-structure-mismatch" %}
-              <a class="check-result-link" href="/projects/{{ project_id }}#docgen2Editor">Открыть редактор</a>
-            {% endif %}
-            {% if not (stale | default(false)) and finding.suggestion and finding.rule_id and (finding.node_id or finding.code == "template-structure-mismatch") %}
-              <button
-                type="button"
-                class="check-result-apply"
-                hx-post="/projects/{{ project_id }}/report/findings/{{ finding.rule_id }}/propose-fix"
-                hx-include="#chatForm input[name='revision']"
-                hx-target="#chat-messages"
-                hx-swap="beforeend"
-              >Предложить правку</button>
-            {% endif %}
-          </div>
-        </li>
-      {% endfor %}
-    </ul>
-  {% endif %}
-
-  {% if low_confidence %}
-    <p class="check-result-note">
-      Ещё {{ low_confidence|length }} {{ "замечание" if low_confidence|length == 1 else "замечания" if low_confidence|length in [2, 3, 4] else "замечаний" }}
-      с низкой уверенностью — смотрите в полном отчёте.
-    </p>
-  {% endif %}
-
-  <a class="check-result-link check-result-full" href="/projects/{{ project_id }}/report">Полный отчёт →</a>
+  <p class="check-result-note">
+    Подробности, расхождения и предложения правок открываются на широкой странице отчёта.
+  </p>
+  <a class="check-result-apply check-result-full" href="/projects/{{ project_id }}/report">Открыть отчёт</a>
   {% if stale | default(false) %}
     <form
       class="check-result-actions"

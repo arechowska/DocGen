@@ -151,7 +151,7 @@ def test_finding_fix_is_previewed_then_applied_and_keeps_stale_report(
     )
 
     assert applied.status_code == 200
-    assert "Правка применена" in applied.text
+    assert "изменения добавлены в редактор" in applied.text
     assert "Документ изменён после этой проверки" in applied.text
     assert "Проверить снова" in applied.text
     assert 'hx-trigger="load"' in applied.text
@@ -238,6 +238,7 @@ def test_structure_fix_appends_only_missing_fields_through_preview_and_apply(
     preview = client.post(
         f"/projects/{project_with_document.id}/report/findings/{contract.rule_id}/propose-fix",
         data={"revision": str(revision)},
+        headers={"HX-Target": "report-fix-preview-use-case-template-form"},
     )
 
     assert preview.status_code == 200
@@ -245,16 +246,20 @@ def test_structure_fix_appends_only_missing_fields_through_preview_and_apply(
     assert "UC-77" in preview.text
     assert metadata.required_labels[1] in preview.text
     assert '&quot;rows&quot;' not in preview.text
+    assert 'hx-target="#report-fix-preview-use-case-template-form"' in preview.text
     proposal_id = preview.text.split("/report/fix-proposals/", 1)[1].split(
         "/apply", 1
     )[0]
 
     applied = client.post(
-        f"/projects/{project_with_document.id}/report/fix-proposals/{proposal_id}/apply"
+        f"/projects/{project_with_document.id}/report/fix-proposals/{proposal_id}/apply",
+        headers={"HX-Target": "report-fix-preview-use-case-template-form"},
     )
 
     assert applied.status_code == 200
-    assert 'hx-trigger="load"' in applied.text
+    assert "Добавлено в редактор" in applied.text
+    assert "Вернуться в чат" in applied.text
+    assert 'hx-trigger="load"' not in applied.text
     session = client.app.state.session_factory()
     try:
         stored = DocumentRepository(session).get_document_with_revision(

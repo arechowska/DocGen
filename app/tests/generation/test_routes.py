@@ -897,9 +897,8 @@ def test_report_renders_evidence_and_suggestion_as_separate_blocks(
 def test_report_card_reinjects_the_actionable_chat_card(
     client: TestClient, project_with_source: Project
 ) -> None:
-    """Chat history is not persisted, so re-visiting the workspace after a
-    check must still be able to bring the report -- with its working
-    "К узлу документа"/"Внести правку" actions -- back into the chat."""
+    """The narrow chat only restores a compact link; details and fix
+    controls live on the wide report page."""
     _save_document(client, project_with_source.id, _document())
     report = CheckReport(
         template_id="use-case",
@@ -921,10 +920,13 @@ def test_report_card_reinjects_the_actionable_chat_card(
 
     assert response.status_code == 200
     assert 'hx-swap-oob="beforeend:#chat-messages"' in response.text
-    assert "Шаг не пронумерован" in response.text
+    assert "Шаг не пронумерован" not in response.text
+    assert "Открыть отчёт" in response.text
+    report_response = client.get(f"/projects/{project_with_source.id}/report")
+    assert "Шаг не пронумерован" in report_response.text
     assert (
         f'hx-post="/projects/{project_with_source.id}/report/findings/structure-1/propose-fix"'
-        in response.text
+        in report_response.text
     )
 
 
@@ -952,14 +954,16 @@ def test_whole_form_mismatch_offers_scoped_fix_instead_of_rebuild(
     )
 
     response = client.get(f"/projects/{project_with_source.id}/report/card")
+    report_response = client.get(f"/projects/{project_with_source.id}/report")
 
     assert response.status_code == 200
-    assert "Не хватает полной формы" in response.text
-    assert "Предложить правку" in response.text
-    assert "Пересобрать по шаблону" not in response.text
+    assert "Открыть отчёт" in response.text
+    assert "Не хватает полной формы" in report_response.text
+    assert "Предложить правку" in report_response.text
+    assert "Пересобрать по шаблону" not in report_response.text
     assert (
         f'hx-post="/projects/{project_with_source.id}/report/findings/use-case-template-form/propose-fix"'
-        in response.text
+        in report_response.text
     )
 
 
@@ -1156,7 +1160,8 @@ def test_earlier_check_job_does_not_render_later_report_for_same_document(
 
     assert "Результат задания заменён более новым" in first_response.text
     assert "report-B" not in first_response.text
-    assert "report-B" in second_response.text
+    assert "Открыть отчёт" in second_response.text
+    assert "report-B" in client.get(f"/projects/{project_with_source.id}/report").text
 
 
 def test_running_and_succeeded_job_pages_render_persisted_warnings(
@@ -1303,7 +1308,7 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     assert response.status_code == 200
     assert 'id="generation-status"' in response.text
     assert "Проверка по шаблону" in response.text
-    assert "Структура документа не совпадает с полной формой" in response.text
+    assert "Структура документа не совпадает с полной формой" not in response.text
     assert f'href="/projects/{project_with_source.id}/report"' in response.text
     assert 'id="docgen2Editor"' in response.text
     assert 'hx-swap-oob="outerHTML"' in response.text
@@ -1312,6 +1317,7 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
 
     full_report_response = client.get(f"/projects/{project_with_source.id}/report")
     assert "Результат проверки" in full_report_response.text
+    assert "Структура документа не совпадает с полной формой" in full_report_response.text
     assert (
         f'href="/projects/{project_with_source.id}#docgen2Editor"'
         in full_report_response.text

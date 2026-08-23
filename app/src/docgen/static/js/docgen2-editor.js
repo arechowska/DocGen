@@ -39,7 +39,14 @@
   const scrollToHashNode = () => {
     const hash = typeof window === "undefined" ? null : window.location?.hash;
     const nodeId = nodeIdFromHash(hash);
-    if (nodeId) scrollToNode(nodeId);
+    if (nodeId) {
+      scrollToNode(nodeId);
+      return;
+    }
+    const panelId = /^#(sourcesPanel|docgen2Editor|chatPanel)$/.exec(hash || "")?.[1];
+    if (!panelId) return;
+    document.querySelector(`.mobile-tab[data-panel="${panelId}"]`)?.click();
+    document.querySelector(`#${CSS.escape(panelId)}`)?.scrollIntoView?.({block: "start"});
   };
 
   document.addEventListener("click", (event) => {
@@ -53,6 +60,7 @@
     if (scrollToNode(link.dataset.nodeTarget)) event.preventDefault();
   });
   document.addEventListener("htmx:afterSwap", scrollToHashNode);
+  if (typeof window !== "undefined") window.addEventListener?.("hashchange", scrollToHashNode);
   scrollToHashNode();
 
   const templateSource = document.querySelector("[data-template-source]");

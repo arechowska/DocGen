@@ -19,8 +19,8 @@
       type="button"
       class="check-result-apply"
       hx-post="/projects/{{ project_id }}/report/fix-proposals/{{ proposal.id }}/apply"
-      hx-target="#chat-messages"
-      hx-swap="beforeend"
+      hx-target="{{ apply_target | default('#chat-messages') }}"
+      hx-swap="{{ apply_swap | default('beforeend') }}"
     >Применить</button>
     <button type="button" class="check-result-apply" data-dismiss-fix-preview>Отменить</button>
   </div>

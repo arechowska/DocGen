@@ -232,7 +232,7 @@ def test_propose_finding_fix_rejects_change_to_another_node(
         chat_service.propose_finding_fix("p1", finding, expected_revision=2)
 
 
-def test_propose_structure_fix_only_appends_missing_fields_to_existing_table(
+def test_propose_structure_fix_fills_table_and_adds_empty_template_sections(
     chat_service: ChatService,
     fake_model: FakeModel,
     session: Session,
@@ -278,7 +278,17 @@ def test_propose_structure_fix_only_appends_missing_fields_to_existing_table(
         metadata.required_labels[1:]
     )
     assert find_node(proposal.document, "body").text == "Старый текст"
-    assert all(isinstance(operation, UpdateData) for operation in proposal.operations)
+    updates = [
+        operation for operation in proposal.operations if isinstance(operation, UpdateData)
+    ]
+    inserted_headings = [
+        operation.node.text
+        for operation in proposal.operations
+        if isinstance(operation, InsertNode)
+    ]
+    assert [operation.node_id for operation in updates] == ["metadata-table"]
+    assert "Диаграмма деятельности" in inserted_headings
+    assert "Диаграмма последовательности" in inserted_headings
     assert fake_model.calls == 0
     persisted = DocumentRepository(session).get_document_with_revision("p1")
     assert persisted is not None

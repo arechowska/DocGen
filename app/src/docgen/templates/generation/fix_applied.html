@@ -1,0 +1,16 @@
+<section class="check-result-card" aria-label="Результат применения правки">
+  <div class="check-result-heading">
+    <strong>Выполнено</strong>
+    <span class="check-result-badge ok">Добавлено в редактор</span>
+  </div>
+  <p class="check-result-message">
+    Изменения сохранены в текущем документе. Отчёт относится к предыдущей версии.
+  </p>
+  <div class="check-result-actions">
+    <a class="check-result-apply" href="/projects/{{ project_id }}#chatPanel">Вернуться в чат</a>
+    <form method="post" action="/projects/{{ project_id }}/jobs/check">
+      <input type="hidden" name="template_id" value="{{ template_id }}">
+      <button class="check-result-apply" type="submit">Проверить обновлённый документ</button>
+    </form>
+  </div>
+</section>

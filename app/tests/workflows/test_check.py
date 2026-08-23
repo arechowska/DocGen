@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from docgen.ai.grounding import GroundingValidator
-from docgen.documents.operations import InsertNode, UpdateData
+from docgen.documents.operations import InsertNode, UpdateData, apply_operations
 from docgen.documents.schemas import (
     CheckFinding,
     CheckReport,
@@ -884,6 +884,79 @@ def test_structure_gap_operations_append_only_missing_key_value_rows() -> None:
     assert all(row[1] == "" for row in update.data["rows"][1:])
 
 
+def test_structure_gap_operations_restore_key_value_template_order() -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    table_contract = next(
+        table for table in contract.required_tables if table.id == "metadata"
+    )
+    first, second = table_contract.required_labels[:2]
+    document = WorkingDocument(
+        title="Документ",
+        template_id=NO_TEMPLATE_ID,
+        nodes=[
+            DocumentNode(
+                id="metadata-table",
+                kind=NodeKind.TABLE,
+                data={
+                    "rows": [
+                        [second, "Второе значение"],
+                        ["Пользовательское поле", "Сохранить"],
+                        [first, "Первое значение"],
+                    ]
+                },
+            )
+        ],
+    )
+
+    update = next(
+        operation
+        for operation in structure_gap_operations(document, template)
+        if isinstance(operation, UpdateData)
+    )
+
+    assert [row[0] for row in update.data["rows"][:2]] == [first, second]
+    assert update.data["rows"][0][1] == "Первое значение"
+    assert update.data["rows"][1][1] == "Второе значение"
+    assert update.data["rows"][-1] == ["Пользовательское поле", "Сохранить"]
+
+
+def test_structure_check_reports_fields_out_of_template_order() -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    metadata = next(table for table in contract.required_tables if table.id == "metadata")
+    nodes = [
+        DocumentNode(kind=NodeKind.HEADING, text=heading)
+        for heading in contract.required_headings
+    ]
+    for table in contract.required_tables:
+        if table.id == "metadata":
+            rows = [[label, ""] for label in reversed(table.required_labels)]
+            nodes.append(DocumentNode(kind=NodeKind.TABLE, data={"rows": rows}))
+        else:
+            nodes.append(
+                DocumentNode(
+                    kind=NodeKind.TABLE,
+                    data={
+                        "headers": list(table.required_labels),
+                        "rows": [[""] * len(table.required_labels)],
+                    },
+                )
+            )
+    document = WorkingDocument(
+        title="Документ",
+        template_id=NO_TEMPLATE_ID,
+        nodes=nodes,
+    )
+
+    message = _structure_mismatch_message(template, document)
+
+    assert message is not None
+    assert f"в таблице «{metadata.title}» поля расположены не в порядке шаблона" in message
+
+
 def test_structure_gap_operations_append_columns_without_changing_existing_cells() -> None:
     template = TemplateCatalog().get("use-case")
     contract = template.structure_check
@@ -891,8 +964,9 @@ def test_structure_gap_operations_append_columns_without_changing_existing_cells
     table_contract = next(
         table for table in contract.required_tables if table.id == "technical-specifications"
     )
-    original_headers = list(table_contract.required_labels[:2])
-    original_row = ["Название API", "REST"]
+    first, second = table_contract.required_labels[:2]
+    original_headers = [second, "Пользовательская колонка", first]
+    original_row = ["REST", "Сохранить", "Название API"]
     document = WorkingDocument(
         title="Документ",
         template_id=NO_TEMPLATE_ID,
@@ -912,10 +986,10 @@ def test_structure_gap_operations_append_columns_without_changing_existing_cells
         for operation in operations
         if isinstance(operation, UpdateData) and operation.node_id == "spec-table"
     )
-    assert update.data["headers"][:2] == original_headers
-    assert update.data["headers"][2:] == list(table_contract.required_labels[2:])
-    assert update.data["rows"][0][:2] == original_row
-    assert update.data["rows"][0][2:] == [""] * len(table_contract.required_labels[2:])
+    assert update.data["headers"][:2] == [first, second]
+    assert update.data["rows"][0][:2] == ["Название API", "REST"]
+    assert update.data["headers"][-1] == "Пользовательская колонка"
+    assert update.data["rows"][0][-1] == "Сохранить"
 
 
 def test_structure_gap_operations_skip_ambiguous_generic_table() -> None:
@@ -933,6 +1007,63 @@ def test_structure_gap_operations_skip_ambiguous_generic_table() -> None:
     )
 
     assert structure_gap_operations(document, template) == []
+
+
+def test_structure_gap_operations_keep_separate_form_tables_separate() -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    metadata = next(table for table in contract.required_tables if table.id == "metadata")
+    specifications = next(
+        table for table in contract.required_tables if table.id == "technical-specifications"
+    )
+    document = WorkingDocument(
+        title="Документ",
+        template_id=NO_TEMPLATE_ID,
+        nodes=[
+            DocumentNode(
+                id="metadata-table",
+                kind=NodeKind.TABLE,
+                data={"rows": [[metadata.required_labels[0], "UC-1"]]},
+            ),
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Текст между таблицами"),
+            DocumentNode(
+                id="specification-table",
+                kind=NodeKind.TABLE,
+                data={
+                    "headers": list(specifications.required_labels[:2]),
+                    "rows": [["API", "REST"]],
+                },
+            ),
+        ],
+    )
+
+    operations = structure_gap_operations(document, template)
+
+    updates = [operation for operation in operations if isinstance(operation, UpdateData)]
+    assert [operation.node_id for operation in updates] == [
+        "metadata-table",
+        "specification-table",
+    ]
+    metadata_update, specification_update = updates
+    assert "rows" in metadata_update.data
+    assert "headers" not in metadata_update.data
+    assert specification_update.data["headers"][:2] == list(
+        specifications.required_labels[:2]
+    )
+    candidate = apply_operations(document, operations)
+    node_ids = [node.id for node in candidate.nodes]
+    metadata_index = node_ids.index("metadata-table")
+    specifications_index = node_ids.index("specification-table")
+    headings_between = [
+        node.text
+        for node in candidate.nodes[metadata_index + 1 : specifications_index]
+        if node.kind is NodeKind.HEADING
+    ]
+    assert "Диаграмма деятельности" in headings_between
+    assert "Диаграмма последовательности" in headings_between
+    assert candidate.nodes[metadata_index].kind is NodeKind.TABLE
+    assert candidate.nodes[specifications_index].kind is NodeKind.TABLE
 
 
 def test_structure_check_recognizes_a_header_row_table_by_its_headers() -> None:

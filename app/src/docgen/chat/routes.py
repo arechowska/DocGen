@@ -175,6 +175,31 @@ def post_propose_finding_fix(
             _node_preview(find_node(proposal.document, node_id))
             for node_id in target_ids
         )
+        inserted_headings = [
+            operation.node.text
+            for operation in proposal.operations
+            if getattr(operation, "kind", None) == "insert_node"
+            and operation.node.kind.value == "heading"
+        ]
+        if inserted_headings:
+            before_preview = "\n\n".join(
+                part
+                for part in (
+                    before_preview,
+                    "Отсутствуют разделы:\n"
+                    + "\n".join(f"— {heading}" for heading in inserted_headings),
+                )
+                if part
+            )
+            after_preview = "\n\n".join(
+                part
+                for part in (
+                    after_preview,
+                    "Добавлены пустые разделы:\n"
+                    + "\n".join(f"— {heading}" for heading in inserted_headings),
+                )
+                if part
+            )
     else:
         before = find_node(before_document, finding.node_id) if before_document else None
         after = find_node(proposal.document, finding.node_id)
@@ -190,6 +215,20 @@ def post_propose_finding_fix(
             "finding": finding,
             "before": before_preview,
             "after": after_preview,
+            "apply_target": (
+                f"#{request.headers['HX-Target']}"
+                if request.headers.get("HX-Target", "").startswith(
+                    "report-fix-preview-"
+                )
+                else "#chat-messages"
+            ),
+            "apply_swap": (
+                "innerHTML"
+                if request.headers.get("HX-Target", "").startswith(
+                    "report-fix-preview-"
+                )
+                else "beforeend"
+            ),
         },
     )
 
@@ -289,6 +328,21 @@ def post_apply_finding_fix_proposal(
         )
     proposal.applied = True
     session.commit()
+    if request.headers.get("HX-Target", "").startswith("report-fix-preview-"):
+        response = templates.TemplateResponse(
+            request=request,
+            name="generation/fix_applied.html",
+            context={
+                "project_id": project_id,
+                "template_id": report_record.report.template_id,
+                "revision": result.revision,
+            },
+        )
+        response.headers["HX-Trigger"] = json.dumps(
+            {"docgen:document-updated": {"revision": result.revision}},
+            ensure_ascii=False,
+        )
+        return response
     stale_report = report_record.report
     confirmed = [item for item in stale_report.findings if item.confidence >= 0.7]
     low_confidence = [item for item in stale_report.findings if item.confidence < 0.7]
@@ -296,7 +350,7 @@ def post_apply_finding_fix_proposal(
         request=request,
         name="chat/message.html",
         context={
-            "summary": "Правка применена. Запускаю повторную проверку по шаблону.",
+            "summary": "Выполнено: изменения добавлены в редактор.",
             "revision": result.revision,
             "project": ProjectRepository(session).get(project_id),
             "project_id": project_id,
