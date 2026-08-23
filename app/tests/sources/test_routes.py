@@ -56,7 +56,7 @@ def test_upload_file_returns_updated_source_list(
     assert 'id="buildButton"' in response.text
     assert 'hx-swap-oob="outerHTML"' in response.text
     assert 'id="buildButton" class="button primary" type="submit" form="assembleForm" disabled' not in response.text
-    assert "DOCX" in response.text
+    assert "MD" in response.text
 
 
 def test_chunked_upload_is_rejected_before_spool_exceeds_file_limit(

@@ -24,7 +24,7 @@
   >
     <label id="dropZone" class="drop-zone" for="fileInput">
       <span class="file-glyph" aria-hidden="true"></span>
-      <strong>Перетащите DOCX сюда</strong>
+      <strong>Перетащите файл сюда</strong>
       <span>или нажмите для выбора</span>
       <small>До 12 МБ на файл</small>
     </label>
@@ -65,11 +65,12 @@
   </div>
   <ul id="sourceList" class="source-list" aria-live="polite">
     {% for source in sources %}
+      {% set extension = (source.display_name.rsplit('.', 1)[-1] if '.' in source.display_name else '') | upper %}
       <li class="source-item">
-        <span class="source-type {% if source.kind.value != 'file' %}url{% endif %}">{% if source.kind.value == "file" %}W{% else %}URL{% endif %}</span>
+        <span class="source-type {% if source.kind.value != 'file' %}url{% endif %}">{% if source.kind.value == "file" %}{{ extension }}{% else %}URL{% endif %}</span>
         <div class="source-data">
           <strong title="{{ source.display_name }}">{{ source.display_name }}</strong>
-          <span>{% if source.kind.value == "file" %}DOCX{% else %}Confluence{% endif %}</span>
+          <span>{% if source.kind.value == "file" %}{{ extension }}{% else %}Confluence{% endif %}</span>
         </div>
         <form
           action="/projects/{{ project_id }}/sources/{{ source.id }}/delete"
