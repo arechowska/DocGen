@@ -63,6 +63,7 @@ def begin_sqlite_writer_transaction(session: Session) -> None:
 
 
 def _register_models() -> None:
+    from docgen.chat.models import FindingFixProposalRecord  # noqa: F401
     from docgen.documents.models import ProjectArtifact  # noqa: F401
     from docgen.jobs.models import Job  # noqa: F401
     from docgen.projects.models import Project  # noqa: F401

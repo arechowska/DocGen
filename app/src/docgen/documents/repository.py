@@ -277,6 +277,31 @@ class DocumentRepository:
             for record in records
         ]
 
+    def get_latest_report_record(self, project_id: str) -> StoredCheckReport | None:
+        record = self._session.scalar(
+            select(CheckReportRecord)
+            .where(CheckReportRecord.project_id == project_id)
+            .order_by(CheckReportRecord.id.desc())
+            .limit(1)
+        )
+        return self._stored_report(record)
+
+    def get_report_record(self, report_id: int) -> StoredCheckReport | None:
+        return self._stored_report(self._session.get(CheckReportRecord, report_id))
+
+    @staticmethod
+    def _stored_report(record: CheckReportRecord | None) -> StoredCheckReport | None:
+        if record is None:
+            return None
+        return StoredCheckReport(
+            id=record.id,
+            project_id=record.project_id,
+            document_revision=record.document_revision,
+            check_profile_id=record.check_profile_id,
+            target_source_id=record.target_source_id,
+            report=CheckReport.model_validate_json(record.report_json),
+        )
+
     def _append_check_report(
         self,
         project_id: str,

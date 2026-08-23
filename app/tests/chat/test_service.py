@@ -167,6 +167,71 @@ def test_apply_finding_fix_runs_through_grounded_edit_pipeline(
     assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
 
 
+def test_propose_finding_fix_does_not_save_and_is_limited_to_finding_node(
+    chat_service: ChatService, fake_model: FakeModel, session: Session
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Уточнён актор",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateText(
+                    node_id="actor",
+                    text="Оператор подтверждает заявку",
+                ),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+    finding = CheckFinding(
+        code="c1",
+        severity=Severity.WARNING,
+        confidence=0.9,
+        message="Не указано действие актора",
+        evidence="Заявка подтверждается оператором",
+        suggestion="Уточни действие оператора",
+        node_id="actor",
+        rule_id="use-case-structure",
+    )
+
+    proposal = chat_service.propose_finding_fix("p1", finding, expected_revision=2)
+
+    assert find_node(proposal.document, "actor").text == "Оператор подтверждает заявку"
+    stored = DocumentRepository(session).get_document_with_revision("p1")
+    assert stored is not None
+    assert stored[1] == 2
+    assert find_node(stored[0], "actor").text == "Оператор"
+
+
+def test_propose_finding_fix_rejects_change_to_another_node(
+    chat_service: ChatService, fake_model: FakeModel
+) -> None:
+    fake_model.result = ChatEditPlan(
+        summary="Изменён другой блок",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateText(
+                    node_id="limit",
+                    text="Оператор подтверждает заявку",
+                ),
+                evidence_block_ids=["s1:b2"],
+            )
+        ],
+    )
+    finding = CheckFinding(
+        code="c1",
+        severity=Severity.WARNING,
+        confidence=0.9,
+        message="Не указано действие актора",
+        evidence="Заявка подтверждается оператором",
+        suggestion="Уточни действие оператора",
+        node_id="actor",
+        rule_id="use-case-structure",
+    )
+
+    with pytest.raises(ChatValidationError, match="не относится к узлу"):
+        chat_service.propose_finding_fix("p1", finding, expected_revision=2)
+
+
 def test_apply_finding_fix_rejects_finding_without_suggestion(
     chat_service: ChatService, fake_model: FakeModel
 ) -> None:
@@ -205,7 +270,7 @@ def test_apply_finding_fix_rejects_stale_revision(
     assert fake_model.calls == 0
 
 
-def test_apply_finding_fix_resolves_structural_gaps_without_calling_the_model(
+def test_apply_finding_fix_rejects_whole_form_autofix_without_calling_model(
     chat_service: ChatService, fake_model: FakeModel
 ) -> None:
     """A structure-check finding names a missing corporate-form heading or
@@ -223,13 +288,11 @@ def test_apply_finding_fix_resolves_structural_gaps_without_calling_the_model(
         rule_id=contract.rule_id,
     )
 
-    result = chat_service.apply_finding_fix(
-        "p1", finding, expected_revision=2, template=template
-    )
-
-    assert result.revision == 3
+    with pytest.raises(ChatValidationError, match="нельзя безопасно"):
+        chat_service.apply_finding_fix(
+            "p1", finding, expected_revision=2, template=template
+        )
     assert fake_model.calls == 0
-    assert any(node.flags == ["structural-edit"] for node in result.document.nodes)
 
 
 def test_chat_noop_plan_is_not_reported_as_a_successful_edit(

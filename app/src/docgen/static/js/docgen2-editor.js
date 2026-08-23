@@ -43,6 +43,11 @@
   };
 
   document.addEventListener("click", (event) => {
+    const dismiss = event.target.closest("[data-dismiss-fix-preview]");
+    if (dismiss) {
+      dismiss.closest("section")?.remove();
+      return;
+    }
     const link = event.target.closest("[data-node-target]");
     if (!link) return;
     if (scrollToNode(link.dataset.nodeTarget)) event.preventDefault();

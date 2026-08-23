@@ -1,4 +1,8 @@
-<div class="check-result-card" hx-swap-oob="beforeend:#chat-messages">
+<div
+  id="latest-check-report"
+  class="check-result-card"
+  {% if replace_report | default(false) %}hx-swap-oob="outerHTML"{% else %}hx-swap-oob="beforeend:#chat-messages"{% endif %}
+>
   <div class="check-result-heading">
     <strong>Проверка по шаблону</strong>
     {% if confirmed %}
@@ -7,6 +11,12 @@
       <span class="check-result-badge ok">Проблем не найдено</span>
     {% endif %}
   </div>
+
+  {% if stale | default(false) %}
+    <p class="check-result-note">
+      Документ изменён после этой проверки. Отчёт сохранён для сравнения, но его выводы требуют перепроверки.
+    </p>
+  {% endif %}
 
   {% if confirmed %}
     <ul class="check-result-findings">
@@ -26,15 +36,15 @@
               {% if finding.node_id %}data-node-target="{{ finding.node_id }}"{% endif %}
               href="/projects/{{ project_id }}#{% if finding.node_id %}doc-node-{{ finding.node_id }}{% else %}docgen2Editor{% endif %}"
             >К узлу документа</a>
-            {% if finding.suggestion and finding.rule_id %}
+            {% if not (stale | default(false)) and finding.suggestion and finding.rule_id and finding.node_id and finding.code != "template-structure-mismatch" %}
               <button
                 type="button"
                 class="check-result-apply"
-                hx-post="/projects/{{ project_id }}/report/findings/{{ finding.rule_id }}/apply-fix"
+                hx-post="/projects/{{ project_id }}/report/findings/{{ finding.rule_id }}/propose-fix"
                 hx-include="#chatForm input[name='revision']"
                 hx-target="#chat-messages"
                 hx-swap="beforeend"
-              >Внести правку</button>
+              >Предложить правку</button>
             {% endif %}
           </div>
         </li>
@@ -50,4 +60,18 @@
   {% endif %}
 
   <a class="check-result-link check-result-full" href="/projects/{{ project_id }}/report">Полный отчёт →</a>
+  {% if stale | default(false) %}
+    <form
+      class="check-result-actions"
+      method="post"
+      action="/projects/{{ project_id }}/jobs/check"
+      hx-post="/projects/{{ project_id }}/jobs/check"
+      hx-target="#generation-status"
+      hx-swap="outerHTML"
+    >
+      <input type="hidden" name="template_id" value="{{ report.template_id }}">
+      {% if report_target_source_id %}<input type="hidden" name="target_source_id" value="{{ report_target_source_id }}">{% endif %}
+      <button type="submit" class="check-result-apply">Проверить снова</button>
+    </form>
+  {% endif %}
 </div>

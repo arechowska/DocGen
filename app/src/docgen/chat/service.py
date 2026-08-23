@@ -27,6 +27,7 @@ from docgen.chat.schemas import (
     ChatEditRequest,
     ChatEditResult,
     FaqEntryDraft,
+    FindingFixProposal,
 )
 from docgen.documents.edit_service import DocumentEditService, EditConflict
 from docgen.documents.operations import (
@@ -38,13 +39,13 @@ from docgen.documents.operations import (
     UpdateData,
     UpdateProvenance,
     UpdateText,
+    apply_operations,
     find_node,
 )
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import CheckFinding, DocumentNode, NodeKind, WorkingDocument
 from docgen.extraction.schemas import NormalizedBlock, Provenance
 from docgen.templates_catalog.schemas import SemanticTemplate
-from docgen.workflows.check import structure_gap_operations
 
 CHAT_SYSTEM_PROMPT = """
 Вы редактируете DocGen-документ на русском языке.
@@ -199,17 +200,8 @@ class ChatService:
             and template.structure_check is not None
             and finding.rule_id == template.structure_check.rule_id
         ):
-            operations = structure_gap_operations(document, template)
-            if not operations:
-                raise ChatGroundingError(
-                    "В документе уже нет структурных расхождений с формой",
-                    code=ChatErrorCode.EVIDENCE_MISSING,
-                )
-            return self._apply_operations(
-                project_id,
-                expected_revision,
-                operations,
-                summary="Добавлены недостающие элементы формы",
+            raise ChatValidationError(
+                "Полную форму нельзя безопасно добавить как точечную правку"
             )
 
         message = " ".join(
@@ -229,6 +221,57 @@ class ChatService:
             IntentKind.GROUNDED_EDIT,
         )
 
+    def propose_finding_fix(
+        self,
+        project_id: str,
+        finding: CheckFinding,
+        expected_revision: int,
+    ) -> FindingFixProposal:
+        """Build a source-grounded, target-scoped proposal without saving it."""
+        if not finding.suggestion or not finding.rule_id or not finding.node_id:
+            raise ChatValidationError(
+                "Для этого расхождения нельзя подготовить безопасную точечную правку"
+            )
+        if finding.code == "template-structure-mismatch":
+            raise ChatValidationError(
+                "Полную форму нельзя безопасно добавить как точечную правку"
+            )
+        stored = self._documents.get_document_with_revision(project_id)
+        if stored is None:
+            raise ChatValidationError("Документ не найден")
+        document, current_revision = stored
+        if current_revision != expected_revision:
+            raise ChatError(ChatErrorCode.REVISION_CONFLICT)
+        if find_node(document, finding.node_id) is None:
+            raise ChatValidationError("Узел расхождения не найден в документе")
+
+        message = " ".join(
+            part for part in (finding.message, finding.suggestion) if part
+        )
+        retrieval_text = " ".join(
+            part
+            for part in (finding.message, finding.evidence, finding.suggestion)
+            if part
+        )
+        plan, source_blocks = self._grounded_plan(
+            project_id,
+            document,
+            message,
+            _retrieval_query(retrieval_text),
+            IntentKind.GROUNDED_EDIT,
+        )
+        operations = _operations_for_application(document, plan, source_blocks)
+        _validate_finding_fix_scope(finding, operations)
+        try:
+            candidate = apply_operations(document, operations)
+        except EditValidationError as error:
+            raise ChatValidationError(str(error)) from error
+        return FindingFixProposal(
+            summary=plan.summary,
+            operations=operations,
+            document=candidate,
+        )
+
     def _model_grounded_edit(
         self,
         project_id: str,
@@ -238,6 +281,25 @@ class ChatService:
         retrieval_query: str,
         intent_kind: IntentKind,
     ) -> ChatEditResult:
+        plan, source_blocks = self._grounded_plan(
+            project_id, document, message, retrieval_query, intent_kind
+        )
+        operations = _operations_for_application(document, plan, source_blocks)
+        return self._apply_operations(
+            project_id,
+            expected_revision,
+            operations,
+            summary=plan.summary,
+        )
+
+    def _grounded_plan(
+        self,
+        project_id: str,
+        document: WorkingDocument,
+        message: str,
+        retrieval_query: str,
+        intent_kind: IntentKind,
+    ) -> tuple[ChatEditPlan, list[NormalizedBlock]]:
         snapshot = _as_source_snapshot(self._source_blocks(project_id))
         retrieved = retrieve_relevant_blocks(snapshot, retrieval_query)
         source_blocks = retrieved.blocks
@@ -282,14 +344,7 @@ class ChatService:
                 raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
             _validate_plan_for_intent(intent_kind, document, plan)
             _validate_plan(document, source_blocks, plan)
-
-        operations = _operations_for_application(document, plan, source_blocks)
-        return self._apply_operations(
-            project_id,
-            expected_revision,
-            operations,
-            summary=plan.summary,
-        )
+        return plan, source_blocks
 
     def _faq_plan(
         self,
@@ -430,6 +485,37 @@ def _validate_plan_for_intent(
             raise ChatValidationError(
                 "Модель вернула операцию, не соответствующую фактологическому запросу"
             )
+
+
+def validate_finding_fix_scope(
+    finding: CheckFinding,
+    operations: list[DocumentOperation],
+) -> None:
+    _validate_finding_fix_scope(finding, operations)
+
+
+def _validate_finding_fix_scope(
+    finding: CheckFinding,
+    operations: list[DocumentOperation],
+) -> None:
+    if not finding.node_id:
+        raise ChatValidationError("У расхождения нет точного целевого блока")
+    content_changes = 0
+    for operation in operations:
+        if not isinstance(operation, (UpdateText, UpdateData, UpdateProvenance)):
+            raise ChatValidationError(
+                "Предложение пытается изменить структуру документа"
+            )
+        if operation.node_id != finding.node_id:
+            raise ChatValidationError(
+                "Предложение не относится к узлу выбранного расхождения"
+            )
+        if isinstance(operation, (UpdateText, UpdateData)):
+            content_changes += 1
+    if content_changes != 1:
+        raise ChatValidationError(
+            "Предложение должно содержать одну точечную правку выбранного узла"
+        )
 
 
 def _operations_for_application(

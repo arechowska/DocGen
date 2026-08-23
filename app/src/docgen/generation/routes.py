@@ -214,15 +214,24 @@ def document_view(request: Request, project_id: str, session: SessionDependency)
 @router.get("/{project_id}/report")
 def report_view(request: Request, project_id: str, session: SessionDependency) -> Response:
     _project_or_404(session, project_id)
-    report = DocumentRepository(session).get_report(project_id)
-    if report is None:
+    documents = DocumentRepository(session)
+    current = documents.get_document_with_revision(project_id)
+    record = documents.get_latest_report_record(project_id)
+    if record is None:
         return templates.TemplateResponse(
             request=request,
             name="generation/report_missing.html",
             context={"project_id": project_id},
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    return _report_response(request, project_id, report, standalone=True)
+    return _report_response(
+        request,
+        project_id,
+        record.report,
+        standalone=True,
+        stale=current is None or current[1] != record.document_revision,
+        report_target_source_id=record.target_source_id,
+    )
 
 
 @router.get("/{project_id}/report/card")
@@ -232,8 +241,10 @@ def report_card(request: Request, project_id: str, session: SessionDependency) -
     persisted, so this is how the report is reached again after navigating
     away and back."""
     _project_or_404(session, project_id)
-    report = DocumentRepository(session).get_report(project_id)
-    if report is None:
+    documents = DocumentRepository(session)
+    current = documents.get_document_with_revision(project_id)
+    record = documents.get_latest_report_record(project_id)
+    if record is None:
         return templates.TemplateResponse(
             request=request,
             name="chat/error.html",
@@ -245,6 +256,7 @@ def report_card(request: Request, project_id: str, session: SessionDependency) -
             },
             status_code=status.HTTP_404_NOT_FOUND,
         )
+    report = record.report
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
     return templates.TemplateResponse(
@@ -255,6 +267,9 @@ def report_card(request: Request, project_id: str, session: SessionDependency) -
             "confirmed": confirmed,
             "low_confidence": low_confidence,
             "rule_instructions": _rule_instructions(request, report.template_id),
+            "report": report,
+            "stale": current is None or current[1] != record.document_revision,
+            "report_target_source_id": record.target_source_id,
         },
     )
 
@@ -462,7 +477,7 @@ def _setup_error(
                 "revision": revision,
                 "workspace_html": documents.get_workspace_html(project.id),
                 "has_document": document is not None,
-                "has_report": documents.get_report(project.id) is not None,
+                "has_report": documents.get_latest_report_record(project.id) is not None,
                 "source_error": None,
             },
             status_code=status_code,
@@ -476,7 +491,7 @@ def _setup_error(
             "generation_error": message,
             "setup_fragment": True,
             "has_document": documents.get_document(project.id) is not None,
-            "has_report": documents.get_report(project.id) is not None,
+            "has_report": documents.get_latest_report_record(project.id) is not None,
             "check_targets": [
                 source
                 for source in SourceRepository(session).list_for_project(project.id)
@@ -582,6 +597,7 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                     job.result_report_revision,
                     report,
                     warnings=job.warning_messages,
+                    report_target_source_id=job.target_source_id,
                 )
         return _status_response(
             request,
@@ -673,6 +689,8 @@ def _report_response(
     *,
     standalone: bool,
     warnings: tuple[str, ...] = (),
+    stale: bool = False,
+    report_target_source_id: str | None = None,
 ) -> Response:
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
@@ -687,6 +705,8 @@ def _report_response(
             "rule_instructions": _rule_instructions(request, report.template_id),
             "standalone": standalone,
             "warnings": warnings,
+            "stale": stale,
+            "report_target_source_id": report_target_source_id,
         },
     )
 
@@ -700,6 +720,7 @@ def _check_complete_response(
     report: CheckReport,
     *,
     warnings: tuple[str, ...] = (),
+    report_target_source_id: str | None = None,
 ) -> Response:
     confirmed = [finding for finding in report.findings if finding.confidence >= 0.7]
     low_confidence = [finding for finding in report.findings if finding.confidence < 0.7]
@@ -717,6 +738,8 @@ def _check_complete_response(
             "low_confidence": low_confidence,
             "rule_instructions": _rule_instructions(request, report.template_id),
             "warnings": warnings,
+            "stale": False,
+            "report_target_source_id": report_target_source_id,
         }
     )
     return templates.TemplateResponse(
@@ -751,7 +774,7 @@ def _workspace_completion_context(
         "revision": revision,
         "workspace_html": documents.get_workspace_html(project_id),
         "has_document": True,
-        "has_report": documents.get_report(project_id) is not None,
+        "has_report": documents.get_latest_report_record(project_id) is not None,
         "source_error": None,
         "generation_error": None,
     }

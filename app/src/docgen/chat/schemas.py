@@ -101,3 +101,9 @@ class ChatEditResult(BaseModel):
     summary: str
     document: WorkingDocument
     revision: int
+
+
+class FindingFixProposal(BaseModel):
+    summary: str
+    operations: list[DocumentOperation]
+    document: WorkingDocument

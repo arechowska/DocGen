@@ -9,11 +9,14 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from docgen.ai.client import ModelConfigurationError, ModelError, build_text_model
-from docgen.chat.errors import ChatError
+from docgen.chat.errors import ChatError, ChatErrorCode
+from docgen.chat.proposals import FindingFixProposalRepository
 from docgen.chat.retrieval import SourceSnapshot, SourceSnapshotCache
 from docgen.chat.schemas import ChatEditRequest, ChatEditResult
-from docgen.chat.service import ChatService
+from docgen.chat.service import ChatService, validate_finding_fix_scope
 from docgen.config import Settings
+from docgen.documents.edit_service import DocumentEditService, EditConflict
+from docgen.documents.operations import EditValidationError, find_node
 from docgen.documents.repository import DocumentRepository
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractionError, ExtractorRegistry
@@ -59,8 +62,8 @@ def post_chat(
     )
 
 
-@router.post("/{project_id}/report/findings/{rule_id}/apply-fix")
-def post_apply_finding_fix(
+@router.post("/{project_id}/report/findings/{rule_id}/propose-fix")
+def post_propose_finding_fix(
     request: Request,
     project_id: str,
     rule_id: str,
@@ -88,19 +91,172 @@ def post_apply_finding_fix(
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    template = TemplateCatalog(
-        external_directory=request.app.state.settings.template_dir
-    ).get(report.template_id)
+    if finding.code == "template-structure-mismatch" or not finding.node_id:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={
+                "message": "Это расхождение нельзя исправить одной безопасной правкой",
+                "action": "Перейди к документу и исправь структуру вручную.",
+            },
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
 
-    return _run_chat_edit(
-        request,
-        session,
-        project_id,
-        revision,
-        lambda chat: chat.apply_finding_fix(
-            project_id, finding, revision, template=template
-        ),
+    chat = _chat_service(request, session)
+    try:
+        proposal = chat.propose_finding_fix(project_id, finding, revision)
+    except ChatError as error:
+        session.rollback()
+        return _chat_error_response(request, error)
+    except ModelConfigurationError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Локальная модель недоступна"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except ModelError as error:
+        session.rollback()
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": str(error)},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    report_record = DocumentRepository(session).get_latest_report_record(project_id)
+    if report_record is None or report_record.document_revision != revision:
+        session.rollback()
+        return _chat_error_response(
+            request, ChatError(ChatErrorCode.REVISION_CONFLICT)
+        )
+    stored = FindingFixProposalRepository(session).create(
+        project_id=project_id,
+        report_id=report_record.id,
+        document_revision=revision,
+        finding_rule_id=rule_id,
+        finding_code=finding.code,
+        summary=proposal.summary,
+        operations=proposal.operations,
     )
+    before_document = DocumentRepository(session).get_document(project_id)
+    before = find_node(before_document, finding.node_id) if before_document else None
+    after = find_node(proposal.document, finding.node_id)
+    session.commit()
+    return templates.TemplateResponse(
+        request=request,
+        name="chat/fix_preview.html",
+        context={
+            "project_id": project_id,
+            "proposal": stored,
+            "finding": finding,
+            "before": _node_preview(before),
+            "after": _node_preview(after),
+        },
+    )
+
+
+@router.post("/{project_id}/report/fix-proposals/{proposal_id}/apply")
+def post_apply_finding_fix_proposal(
+    request: Request,
+    project_id: str,
+    proposal_id: str,
+    session: SessionDependency,
+) -> Response:
+    proposals = FindingFixProposalRepository(session)
+    proposal = proposals.get(proposal_id)
+    if proposal is None or proposal.project_id != project_id:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Предложение правки не найдено"},
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    if proposal.applied:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Эта правка уже применена"},
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    documents = DocumentRepository(session)
+    report_record = documents.get_report_record(proposal.report_id)
+    if report_record is None or report_record.project_id != project_id:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Исходный отчёт не найден"},
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    finding = next(
+        (
+            item
+            for item in report_record.report.findings
+            if item.rule_id == proposal.finding_rule_id
+            and item.code == proposal.finding_code
+        ),
+        None,
+    )
+    if finding is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="chat/error.html",
+            context={"message": "Расхождение из предложения не найдено"},
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    operations = proposals.operations(proposal)
+    try:
+        validate_finding_fix_scope(finding, operations)
+        result = DocumentEditService(documents).apply(
+            project_id, proposal.document_revision, operations
+        )
+    except ChatError as error:
+        session.rollback()
+        return _chat_error_response(request, error)
+    except EditConflict:
+        session.rollback()
+        return _chat_error_response(
+            request, ChatError(ChatErrorCode.REVISION_CONFLICT)
+        )
+    except EditValidationError as error:
+        session.rollback()
+        return _chat_error_response(
+            request,
+            ChatError(ChatErrorCode.INVALID_OPERATION, message=str(error)),
+        )
+    proposal.applied = True
+    session.commit()
+    stale_report = report_record.report
+    confirmed = [item for item in stale_report.findings if item.confidence >= 0.7]
+    low_confidence = [item for item in stale_report.findings if item.confidence < 0.7]
+    response = templates.TemplateResponse(
+        request=request,
+        name="chat/message.html",
+        context={
+            "summary": "Правка применена. Перепроверь документ по шаблону.",
+            "revision": result.revision,
+            "project": ProjectRepository(session).get(project_id),
+            "project_id": project_id,
+            "document": result.document,
+            "workspace_html": documents.get_workspace_html(project_id),
+            "editor_oob": True,
+            "has_report": True,
+            "stale_report": report_record,
+            "report": stale_report,
+            "confirmed": confirmed,
+            "low_confidence": low_confidence,
+            "rule_instructions": _rule_instructions(request, stale_report.template_id),
+            "stale": True,
+            "replace_report": True,
+            "report_target_source_id": report_record.target_source_id,
+        },
+    )
+    response.headers["HX-Trigger"] = json.dumps(
+        {"docgen:document-updated": {"revision": result.revision}},
+        ensure_ascii=False,
+    )
+    return response
 
 
 def _run_chat_edit(
@@ -115,16 +271,7 @@ def _run_chat_edit(
         result = run(chat)
     except ChatError as error:
         session.rollback()
-        return templates.TemplateResponse(
-            request=request,
-            name="chat/error.html",
-            context={
-                "message": error.message,
-                "action": error.action,
-                "error_code": error.code.value,
-            },
-            status_code=error.status_code,
-        )
+        return _chat_error_response(request, error)
     except ModelConfigurationError:
         session.rollback()
         return templates.TemplateResponse(
@@ -159,7 +306,7 @@ def _run_chat_edit(
                 else None
             ),
             "editor_oob": True,
-            "has_report": documents.get_report(project_id) is not None,
+            "has_report": documents.get_latest_report_record(project_id) is not None,
         },
     )
     response.headers["HX-Trigger"] = json.dumps(
@@ -167,6 +314,41 @@ def _run_chat_edit(
         ensure_ascii=False,
     )
     return response
+
+
+def _chat_error_response(request: Request, error: ChatError) -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="chat/error.html",
+        context={
+            "message": error.message,
+            "action": error.action,
+            "error_code": error.code.value,
+        },
+        status_code=error.status_code,
+    )
+
+
+def _node_preview(node: object) -> str:
+    if node is None:
+        return ""
+    text = getattr(node, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    data = getattr(node, "data", None)
+    if isinstance(data, dict) and data:
+        return json.dumps(data, ensure_ascii=False, indent=2)
+    return "Пустой блок"
+
+
+def _rule_instructions(request: Request, template_id: str) -> dict[str, str]:
+    try:
+        semantic_template = TemplateCatalog(
+            external_directory=request.app.state.settings.template_dir
+        ).get(template_id)
+    except ValueError:
+        return {}
+    return {rule.id: rule.instruction for rule in semantic_template.rules}
 
 
 def _chat_service(request: Request, session: Session):

@@ -1,0 +1,27 @@
+<section class="check-result-card" aria-label="Предложение правки">
+  <div class="check-result-heading">
+    <strong>Предлагаемая правка</strong>
+    <span class="check-result-badge problem">Требует подтверждения</span>
+  </div>
+  <p class="check-result-message">{{ finding.message }}</p>
+  <ul class="check-result-findings">
+    <li>
+      <p class="check-result-rule">Сейчас</p>
+      <p class="check-result-evidence whitespace-pre-line">{{ before }}</p>
+    </li>
+    <li>
+      <p class="check-result-rule">После правки</p>
+      <p class="check-result-evidence whitespace-pre-line">{{ after }}</p>
+    </li>
+  </ul>
+  <div class="check-result-actions">
+    <button
+      type="button"
+      class="check-result-apply"
+      hx-post="/projects/{{ project_id }}/report/fix-proposals/{{ proposal.id }}/apply"
+      hx-target="#chat-messages"
+      hx-swap="beforeend"
+    >Применить</button>
+    <button type="button" class="check-result-apply" data-dismiss-fix-preview>Отменить</button>
+  </div>
+</section>

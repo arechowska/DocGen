@@ -119,7 +119,9 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
         document_response = first_client.get(f"{project_url}/document")
         assert document_response.status_code == 200
         assert "Перевод между своими счетами" in document_response.text
-        assert first_client.get(f"{project_url}/report").status_code == 404
+        stale_report = first_client.get(f"{project_url}/report")
+        assert stale_report.status_code == 200
+        assert "относятся к предыдущей версии" in stale_report.text
 
         check_start = first_client.post(
             f"{project_url}/jobs/check", data={"template_id": "use-case"}
@@ -149,7 +151,9 @@ def test_stage2_journey_survives_restart_and_supports_cancelled_retry(
         retry_job_id = _job_id(retry_start.text)
         _run_one_worker_iteration(first_client, model)
         assert _job_status(first_client, retry_job_id) is JobStatus.SUCCEEDED
-        assert first_client.get(f"{project_url}/report").status_code == 404
+        stale_report = first_client.get(f"{project_url}/report")
+        assert stale_report.status_code == 200
+        assert "относятся к предыдущей версии" in stale_report.text
 
         final_check = first_client.post(
             f"{project_url}/jobs/check", data={"template_id": "use-case"}

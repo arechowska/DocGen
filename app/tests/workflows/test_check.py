@@ -781,11 +781,11 @@ def test_use_case_form_check_reports_missing_structure_even_when_model_passes() 
     # are several gaps.
     assert finding.message.count("\n") >= 2
     assert "; " not in finding.message
-    # The suggestion must never promise more than the fixer actually does --
-    # for an imported document it only ever fills tables, never headings.
+    # A whole-form mismatch is not offered as an automatic fix: an empty
+    # skeleton would not resolve the finding or place existing content.
     assert finding.suggestion is not None
-    assert "таблиц" in finding.suggestion
-    assert "раздел" not in finding.suggestion.split("(")[0]
+    assert "вручную" in finding.suggestion
+    assert "автоматически не добавляются" in finding.suggestion
 
 
 def test_structure_gap_operations_fill_missing_tables_without_a_model() -> None:

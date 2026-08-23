@@ -445,16 +445,17 @@ def _autofix_suggestion(
     document: WorkingDocument,
     template: SemanticTemplate,
 ) -> str | None:
-    """Describe exactly what the "Внести правку" button will do -- it must
-    never promise more than structure_gap_operations actually performs."""
-    if not structure_gap_operations(document, template):
-        return None
+    """Explain the safe manual action for a whole-form mismatch.
+
+    A form mismatch can aggregate many missing headings and tables. Adding
+    an empty skeleton does not resolve it and can obscure the source text,
+    so this finding is intentionally never exposed as an automatic fix.
+    """
     if document.origin is DocumentOrigin.ASSEMBLED and document.build_template_id == template.id:
-        return "Добавить недостающие разделы формы"
+        return "Заполните недостающие разделы по источникам и повторите проверку"
     return (
-        "Добавить недостающие таблицы формы (пустые заголовки разделов "
-        "нужно расставить вручную — правильное место для существующего "
-        "текста определить автоматически нельзя)"
+        "Сопоставьте существующее содержание с полной формой вручную; "
+        "пустые таблицы автоматически не добавляются"
     )
 
 

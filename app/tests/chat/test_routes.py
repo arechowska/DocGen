@@ -7,9 +7,10 @@ from fastapi.testclient import TestClient
 
 from docgen.chat.errors import ChatError, ChatErrorCode
 from docgen.chat.routes import _source_blocks_from_project
-from docgen.chat.schemas import ChatEditRequest, ChatEditResult
+from docgen.chat.schemas import ChatEditRequest, ChatEditResult, FindingFixProposal
 from docgen.chat.service import ChatGroundingError
 from docgen.config import Settings
+from docgen.documents.operations import UpdateText
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import (
     CheckFinding,
@@ -41,24 +42,22 @@ class FakeChat:
             revision=request.expected_revision + 1,
         )
 
-    def apply_finding_fix(
+    def propose_finding_fix(
         self,
         project_id: str,
         finding: CheckFinding,
         expected_revision: int,
-        *,
-        template=None,
-    ) -> ChatEditResult:
+    ) -> FindingFixProposal:
         assert project_id
         assert finding.suggestion
-        return ChatEditResult(
-            summary="Правка внесена по отчёту",
+        return FindingFixProposal(
+            summary="Предложено сокращение заголовка",
+            operations=[UpdateText(node_id="n1", text="Исправлено")],
             document=WorkingDocument(
                 title="Документ",
                 template_id="use-case",
                 nodes=[DocumentNode(id="n1", kind=NodeKind.HEADING, text="Исправлено")],
             ),
-            revision=expected_revision + 1,
         )
 
 
@@ -130,24 +129,55 @@ def project_with_report(client: TestClient, project_with_document: Project) -> P
         session.close()
 
 
-def test_apply_finding_fix_returns_message_and_refreshes_document(
+def test_finding_fix_is_previewed_then_applied_and_keeps_stale_report(
     client: TestClient, project_with_report: Project
 ) -> None:
-    response = client.post(
-        f"/projects/{project_with_report.id}/report/findings/structure-1/apply-fix",
+    preview = client.post(
+        f"/projects/{project_with_report.id}/report/findings/structure-1/propose-fix",
         data={"revision": "1"},
     )
 
-    assert response.status_code == 200
-    assert "Правка внесена по отчёту" in response.text
-    assert "HX-Trigger" in response.headers
+    assert preview.status_code == 200
+    assert "Предлагаемая правка" in preview.text
+    assert "Длинный заголовок" in preview.text
+    assert "Исправлено" in preview.text
+    marker = "/report/fix-proposals/"
+    proposal_id = preview.text.split(marker, 1)[1].split("/apply", 1)[0]
+
+    applied = client.post(
+        f"/projects/{project_with_report.id}/report/fix-proposals/{proposal_id}/apply"
+    )
+
+    assert applied.status_code == 200
+    assert "Правка применена" in applied.text
+    assert "Документ изменён после этой проверки" in applied.text
+    assert "Проверить снова" in applied.text
+    assert "HX-Trigger" in applied.headers
+
+    session = client.app.state.session_factory()
+    try:
+        stored = DocumentRepository(session).get_document_with_revision(
+            project_with_report.id
+        )
+        assert stored is not None
+        assert stored[1] == 2
+        assert stored[0].nodes[0].text == "Исправлено"
+        assert DocumentRepository(session).get_report(project_with_report.id) is None
+        assert (
+            DocumentRepository(session).get_latest_report_record(
+                project_with_report.id
+            )
+            is not None
+        )
+    finally:
+        session.close()
 
 
 def test_apply_finding_fix_without_suggestion_is_rejected(
     client: TestClient, project_with_report: Project
 ) -> None:
     response = client.post(
-        f"/projects/{project_with_report.id}/report/findings/terminology-1/apply-fix",
+        f"/projects/{project_with_report.id}/report/findings/terminology-1/propose-fix",
         data={"revision": "1"},
     )
 
@@ -159,7 +189,7 @@ def test_apply_finding_fix_for_unknown_rule_is_rejected(
     client: TestClient, project_with_report: Project
 ) -> None:
     response = client.post(
-        f"/projects/{project_with_report.id}/report/findings/unknown-rule/apply-fix",
+        f"/projects/{project_with_report.id}/report/findings/unknown-rule/propose-fix",
         data={"revision": "1"},
     )
 
@@ -170,7 +200,7 @@ def test_apply_finding_fix_without_revision_returns_readable_error(
     client: TestClient, project_with_report: Project
 ) -> None:
     response = client.post(
-        f"/projects/{project_with_report.id}/report/findings/structure-1/apply-fix",
+        f"/projects/{project_with_report.id}/report/findings/structure-1/propose-fix",
     )
 
     assert response.status_code == 422

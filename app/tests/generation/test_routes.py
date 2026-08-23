@@ -923,9 +923,39 @@ def test_report_card_reinjects_the_actionable_chat_card(
     assert 'hx-swap-oob="beforeend:#chat-messages"' in response.text
     assert "Шаг не пронумерован" in response.text
     assert (
-        f'hx-post="/projects/{project_with_source.id}/report/findings/structure-1/apply-fix"'
+        f'hx-post="/projects/{project_with_source.id}/report/findings/structure-1/propose-fix"'
         in response.text
     )
+
+
+def test_whole_form_mismatch_is_never_offered_as_an_automatic_fix(
+    client: TestClient, project_with_source: Project
+) -> None:
+    _save_document(client, project_with_source.id, _document())
+    _save_report(
+        client,
+        project_with_source.id,
+        CheckReport(
+            template_id="use-case",
+            findings=[
+                CheckFinding(
+                    code="template-structure-mismatch",
+                    severity=Severity.ERROR,
+                    confidence=1,
+                    message="Не хватает полной формы",
+                    suggestion="Добавить пустые таблицы",
+                    node_id="node-1",
+                    rule_id="use-case-template-form",
+                )
+            ],
+        ),
+    )
+
+    response = client.get(f"/projects/{project_with_source.id}/report/card")
+
+    assert response.status_code == 200
+    assert "Не хватает полной формы" in response.text
+    assert "Предложить правку" not in response.text
 
 
 def test_report_card_missing_returns_friendly_banner_not_raw_json(
@@ -952,6 +982,51 @@ def test_report_view_missing_returns_friendly_page_not_raw_json(
     assert '"detail"' not in response.text
     assert "Отчёт недоступен" in response.text
     assert f'href="/projects/{project_with_source.id}#docgen2Editor"' in response.text
+
+
+def test_stale_report_remains_visible_and_can_start_a_real_recheck(
+    client: TestClient, project_with_source: Project
+) -> None:
+    document = _document()
+    _save_document(client, project_with_source.id, document)
+    _save_report(
+        client,
+        project_with_source.id,
+        CheckReport(
+            template_id="use-case",
+            findings=[
+                CheckFinding(
+                    code="confirmed",
+                    severity=Severity.ERROR,
+                    confidence=0.9,
+                    message="Шаг не пронумерован",
+                    suggestion="Добавьте номер шага",
+                    node_id="node-1",
+                    rule_id="use-case-structure",
+                )
+            ],
+        ),
+    )
+    _save_document(client, project_with_source.id, document)
+
+    with _session(client) as session:
+        documents = DocumentRepository(session)
+        current = documents.get_document_with_revision(project_with_source.id)
+        latest = documents.get_latest_report_record(project_with_source.id)
+        assert current is not None and latest is not None
+        assert current[1] != latest.document_revision
+
+    page = client.get(f"/projects/{project_with_source.id}/report")
+    card = client.get(f"/projects/{project_with_source.id}/report/card")
+
+    assert page.status_code == 200
+    assert "относятся к предыдущей версии" in page.text
+    assert 'action="/projects/' in page.text
+    assert "Проверить текущую версию снова" in page.text
+    assert card.status_code == 200
+    assert "Отчёт сохранён для сравнения" in card.text
+    assert "Проверить снова" in card.text
+    assert "Предложить правку" not in card.text
 
 
 def test_project_page_shows_persistent_report_link_only_when_report_exists(
