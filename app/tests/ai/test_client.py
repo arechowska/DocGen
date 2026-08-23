@@ -272,6 +272,58 @@ def test_text_model_maps_http_failures_to_safe_error() -> None:
     assert "private" not in str(error.value)
 
 
+def test_text_model_retries_once_after_transient_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("connection reset", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": '{"title":"T","template_id":"use-case","nodes":[]}'}}
+                ]
+            },
+        )
+
+    monkeypatch.setattr("docgen.ai.client.time.sleep", lambda _seconds: None)
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL, model="local-text", transport=httpx.MockTransport(handler)
+    )
+
+    result = model.generate_json("system", "user", WorkingDocument)
+
+    assert result.title == "T"
+    assert attempts == 2
+
+
+def test_text_model_raises_safe_error_after_two_transient_network_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("private connection detail", request=request)
+
+    monkeypatch.setattr("docgen.ai.client.time.sleep", lambda _seconds: None)
+    model = OpenAICompatibleTextModel(
+        base_url=LOCAL_URL, model="local-text", transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(ModelError, match="Не удалось подключиться") as error:
+        model.generate_json("system", "user", WorkingDocument)
+
+    assert attempts == 2
+    assert "private" not in str(error.value)
+
+
 def test_text_model_uses_120_second_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.extensions["timeout"]["connect"] == 120.0

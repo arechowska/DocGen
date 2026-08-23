@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
@@ -17,6 +18,7 @@ T = TypeVar("T", bound=BaseModel)
 _TIMEOUT_SECONDS = 120.0
 _DEFAULT_MAX_RESPONSE_BYTES = 10_000_000
 _DEFAULT_MAX_REQUEST_BYTES = 20_971_520
+_TRANSIENT_RETRY_DELAY_SECONDS = 1.5
 
 
 class ModelError(RuntimeError):
@@ -128,6 +130,16 @@ class _OpenAICompatibleModel:
         if len(payload_bytes) > self._max_request_bytes:
             raise ModelError("Запрос к модели слишком большой")
         try:
+            return self._send(payload_bytes)
+        except httpx.RequestError:
+            time.sleep(_TRANSIENT_RETRY_DELAY_SECONDS)
+            try:
+                return self._send(payload_bytes)
+            except httpx.RequestError as exc:
+                raise ModelError("Не удалось подключиться к локальной модели") from exc
+
+    def _send(self, payload_bytes: bytes) -> bytes:
+        try:
             with (
                 httpx.Client(transport=self._transport, timeout=_TIMEOUT_SECONDS) as client,
                 client.stream(
@@ -143,8 +155,6 @@ class _OpenAICompatibleModel:
             raise
         except httpx.HTTPStatusError as exc:
             raise ModelError("Локальная модель недоступна") from exc
-        except httpx.RequestError as exc:
-            raise ModelError("Не удалось подключиться к локальной модели") from exc
 
     def _read_limited(self, response: httpx.Response) -> bytes:
         response_body = bytearray()
