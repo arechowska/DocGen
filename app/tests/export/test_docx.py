@@ -291,11 +291,12 @@ def test_docx_contents_is_a_real_updatable_toc_field(
     assert "separate" in field_chars
     assert "end" in field_chars
 
-    # Word must recompute the field (real page numbers/links) on open.
+    # No forced auto-update on open: an earlier version set this, but
+    # letting Word silently recompute the field on its own turned out to
+    # be unreliable in practice, so the reliable cached content (asserted
+    # elsewhere) is what a reader sees unless they ask for an update.
     settings = package.settings.element
-    update_fields = settings.find(qn("w:updateFields"))
-    assert update_fields is not None
-    assert update_fields.get(qn("w:val")) == "true"
+    assert settings.find(qn("w:updateFields")) is None
 
 
 def test_docx_contents_with_no_headings_shows_placeholder(

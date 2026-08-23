@@ -150,7 +150,6 @@ class DocxExporter:
 
         docx_document = docx.Document(BytesIO(base_bytes))
         self._strip_contextual_spacing(docx_document)
-        self._enable_field_auto_update(docx_document)
         self._prepare_template_body(docx_document, _cover_title(document.title))
         self._prepare_headers(docx_document, _cover_title(document.title))
         category_label = document_category_label(document)
@@ -234,20 +233,6 @@ class DocxExporter:
             if contextual_spacing is not None:
                 p_pr.remove(contextual_spacing)
 
-    def _enable_field_auto_update(self, docx_document: docx.document.Document) -> None:
-        """Make Word recompute fields (the TOC) on open, without a manual F9.
-
-        Otherwise Word keeps showing the TOC field's cached content -- the
-        same fallback text built for the LibreOffice PDF path in
-        `_render_toc_field` -- until the user updates it by hand.
-        """
-        settings = docx_document.settings.element
-        if settings.find(qn("w:updateFields")) is not None:
-            return
-        update_fields = OxmlElement("w:updateFields")
-        update_fields.set(qn("w:val"), "true")
-        settings.insert(0, update_fields)
-
     def _prepare_template_body(
         self, docx_document: docx.document.Document, title: str
     ) -> None:
@@ -327,16 +312,19 @@ class DocxExporter:
     ) -> None:
         """Fill the template's dedicated post-cover page with a real TOC field.
 
-        This is a genuine, updatable Word ``{ TOC }`` field -- opening the
-        file and updating it (or just letting Word auto-update on open, see
-        `_enable_field_auto_update`) recomputes real page numbers and
-        hyperlinks from the actual layout. Its cached content (between the
-        field's ``separate`` and ``end``) is pre-populated from the same
-        document nodes as the rest of the export and hyperlinked to
+        This is a genuine Word ``{ TOC }`` field: right-click -> "Update
+        Field" (or Ctrl+A, F9) recomputes real page numbers and hyperlinks
+        from the actual layout. It does *not* auto-update on open -- an
+        earlier version set `w:updateFields` for that, but letting Word
+        silently recompute the field on its own turned out to be the
+        opposite of reliable, so this only ever shows the cached content
+        below unless the reader asks for an update. That cached content
+        (between the field's ``separate`` and ``end``) is pre-populated from
+        the same document nodes as the rest of the export and hyperlinked to
         bookmarks placed around each rendered heading (`_wrap_bookmark`), so
-        it still reads correctly wherever nothing evaluates the field --
-        chiefly the PDF pipeline, which converts through headless
-        LibreOffice and does not reliably recompute TOC fields on its own.
+        it reads correctly by default everywhere, including the PDF
+        pipeline, which converts through headless LibreOffice and would
+        otherwise show an empty/stale TOC.
         """
         title = docx_document.add_paragraph("Оглавление", style=_SECTION_STYLE)
         title.paragraph_format.page_break_before = False
