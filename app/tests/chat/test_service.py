@@ -164,7 +164,8 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
                     id="body",
                     kind=NodeKind.PARAGRAPH,
                     text=(
-                        "Оператор использует ЦС. ЦС — цифровой счёт клиента."
+                        "Оператор использует ЦС. ЦС — цифровой счёт клиента. "
+                        "АБС — автоматизированная банковская система."
                     ),
                 ),
                 DocumentNode(
@@ -182,7 +183,13 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
             GlossaryEntryDraft(
                 term="ЦС",
                 definition="цифровой счёт клиента",
-            )
+                evidence_node_ids=["terms-heading"],
+            ),
+            GlossaryEntryDraft(
+                term="АБС",
+                definition="автоматизированная банковская система",
+                evidence_node_ids=["missing-node"],
+            ),
         ]
     )
     service = ChatService(
@@ -208,7 +215,10 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
     )
     glossary = result.document.nodes[heading_index + 1]
     assert glossary.kind is NodeKind.LIST
-    assert glossary.data["items"] == ["ЦС — цифровой счёт клиента"]
+    assert glossary.data["items"] == [
+        "ЦС — цифровой счёт клиента",
+        "АБС — автоматизированная банковская система",
+    ]
     assert fake_model.schemas == [SemanticIntentDraft, GlossaryDraft]
 
 

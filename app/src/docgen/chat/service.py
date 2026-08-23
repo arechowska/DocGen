@@ -751,7 +751,6 @@ def _validated_glossary_entries(
     evidence_nodes: list[DocumentNode],
     existing_items: list[str],
 ) -> list[GlossaryEntryDraft]:
-    evidence_by_id = {node.id: node for node in evidence_nodes}
     existing_terms = {
         _normalized_glossary_term(item.split("—", 1)[0])
         for item in existing_items
@@ -762,41 +761,29 @@ def _validated_glossary_entries(
         normalized_term = _normalized_glossary_term(entry.term)
         if not normalized_term or normalized_term in seen:
             continue
-        if entry.evidence_node_ids:
-            try:
-                cited = [evidence_by_id[node_id] for node_id in entry.evidence_node_ids]
-            except KeyError as error:
-                raise ChatGroundingError(
-                    "Модель сослалась на неизвестный узел документа",
-                    code=ChatErrorCode.EVIDENCE_MISSING,
-                ) from error
-        else:
-            cited = [
-                node
-                for node in evidence_nodes
-                if _tokens_supported(
-                    _tokens(entry.term),
-                    _tokens(_node_factual_text(node)),
-                )
-            ]
-            entry = entry.model_copy(
-                update={"evidence_node_ids": [node.id for node in cited]}
+        # Never trust model-selected node IDs for document-derived content.
+        # Resolve evidence deterministically across the current document so
+        # one bad citation cannot reject other valid glossary entries.
+        cited = [
+            node
+            for node in evidence_nodes
+            if _tokens_supported(
+                _tokens(entry.term),
+                _tokens(_node_factual_text(node)),
             )
+        ]
         evidence_text = " ".join(_node_factual_text(node) for node in cited)
         if not _tokens_supported(_tokens(entry.term), _tokens(evidence_text)):
-            raise ChatGroundingError(
-                "Термин не найден в указанном фрагменте документа",
-                code=ChatErrorCode.GROUNDING_FAILED,
-            )
+            continue
         if not _tokens_supported(
             _tokens(entry.definition),
             _tokens(evidence_text),
             allow_grounded_synthesis=True,
         ):
-            raise ChatGroundingError(
-                "Определение не подтверждается документом",
-                code=ChatErrorCode.GROUNDING_FAILED,
-            )
+            continue
+        entry = entry.model_copy(
+            update={"evidence_node_ids": [node.id for node in cited]}
+        )
         seen.add(normalized_term)
         result.append(entry)
     if not result:
