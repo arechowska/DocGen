@@ -236,11 +236,78 @@ def test_docx_contents_uses_document_headings(docx_template: FormattingTemplate)
     rendered = DocxExporter().render(document, docx_template)
     package = _open(rendered.content)
 
-    contents = [p for p in package.paragraphs if p.text == "Общие вопросы"]
-    assert len(contents) == 2
-    assert contents[0].style.name == "Colvir_Абзац"
-    assert contents[0].paragraph_format.left_indent.twips == Cm(0.6).twips
-    assert len([p for p in package.paragraphs if p.text == "Настройки"]) == 2
+    body_headings = {
+        p.text: p for p in package.paragraphs if p.text in ("Общие вопросы", "Настройки")
+    }
+    assert body_headings["Общие вопросы"].style.name == "Colvir_Подзаголовок"
+    assert body_headings["Настройки"].style.name == "Heading 3"
+
+    toc_entries = {
+        p.text.split("\t", 1)[0]: p
+        for p in package.paragraphs
+        if p.text.startswith("Общие вопросы\t") or p.text.startswith("Настройки\t")
+    }
+    assert toc_entries["Общие вопросы"].style.name == "toc 2"
+    assert toc_entries["Настройки"].style.name == "toc 3"
+
+    def bookmark_name(paragraph) -> str:
+        return paragraph._p.find(qn("w:bookmarkStart")).get(qn("w:name"))
+
+    def anchor_name(paragraph) -> str:
+        return paragraph._p.find(qn("w:hyperlink")).get(qn("w:anchor"))
+
+    # The contents entry is a real hyperlink/PAGEREF wired to the same
+    # bookmark that wraps the actual rendered heading -- not a lookalike.
+    assert bookmark_name(body_headings["Общие вопросы"]) == anchor_name(
+        toc_entries["Общие вопросы"]
+    )
+    assert bookmark_name(body_headings["Настройки"]) == anchor_name(
+        toc_entries["Настройки"]
+    )
+
+
+def test_docx_contents_is_a_real_updatable_toc_field(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="colvir-docx",
+        nodes=[DocumentNode(kind=NodeKind.HEADING, text="Раздел", data={"level": 1})],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    instr_texts = [
+        element.text
+        for element in package.element.body.iter(qn("w:instrText"))
+    ]
+    assert any(text and "TOC" in text for text in instr_texts)
+    field_chars = [
+        element.get(qn("w:fldCharType"))
+        for element in package.element.body.iter(qn("w:fldChar"))
+    ]
+    assert "begin" in field_chars
+    assert "separate" in field_chars
+    assert "end" in field_chars
+
+    # Word must recompute the field (real page numbers/links) on open.
+    settings = package.settings.element
+    update_fields = settings.find(qn("w:updateFields"))
+    assert update_fields is not None
+    assert update_fields.get(qn("w:val")) == "true"
+
+
+def test_docx_contents_with_no_headings_shows_placeholder(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(title="Документ", template_id="colvir-docx", nodes=[])
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    full_text = "\n".join(p.text for p in package.paragraphs)
+    assert "Список разделов пуст" in full_text
 
 
 def test_docx_sets_title_paragraph_and_metadata(docx_template: FormattingTemplate) -> None:
@@ -326,9 +393,10 @@ def test_docx_heading_level_maps_to_style(
     rendered = DocxExporter().render(document, docx_template)
     package = _open(rendered.content)
 
-    matching = [p for p in package.paragraphs if p.text == "Раздел"]
-    assert len(matching) == 2
-    assert matching[-1].style.name == expected_style
+    body_heading = next(p for p in package.paragraphs if p.text == "Раздел")
+    assert body_heading.style.name == expected_style
+    toc_entry = next(p for p in package.paragraphs if p.text.startswith("Раздел\t"))
+    assert toc_entry.style.name in ("toc 1", "toc 2", "toc 3")
 
 
 def test_docx_heading_level_is_clamped(docx_template: FormattingTemplate) -> None:
@@ -600,8 +668,9 @@ def test_docx_empty_list_renders_nothing(docx_template: FormattingTemplate) -> N
     rendered = DocxExporter().render(document, docx_template)
     package = _open(rendered.content)
 
-    # The cover title and the generated contents title are the only text.
-    assert len([p for p in package.paragraphs if p.text.strip()]) == 2
+    # The cover title, the "Оглавление" title, and the empty-contents
+    # placeholder (there are no headings to list) are the only text.
+    assert len([p for p in package.paragraphs if p.text.strip()]) == 3
 
 
 # --- nested children on every node kind -------------------------------------

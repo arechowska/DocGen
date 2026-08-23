@@ -14,9 +14,10 @@ from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
 import docx
-from docx.enum.text import WD_TAB_ALIGNMENT
+from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.shared import Cm, Pt
@@ -67,6 +68,13 @@ _CAPTION_STYLE = "Colvir_Рисунок_Подпись"
 _TABLE_STYLE = "Colvir_сетка_таблицы"
 _TABLE_HEADER_CELL_STYLE = "Colvir_Таблица_заголовок"
 _TABLE_BODY_CELL_STYLE = "Colvir_Таблица_текст"
+
+# The template only ships corporate-styled entries for the first three
+# outline levels (see task-4-report.md); deeper headings fall back to the
+# level-3 look rather than an unstyled default.
+_TOC_ENTRY_STYLE_NAMES = {1: "toc 1", 2: "toc 2", 3: "toc 3"}
+_TOC_FIELD_SWITCH = ' TOC \\o "1-6" \\h \\z \\u '
+_TOC_EMPTY_MESSAGE = "Список разделов пуст"
 
 _LIST_INDENT_LEFT_TWIPS = 720
 _LIST_INDENT_HANGING_TWIPS = 360
@@ -120,10 +128,25 @@ class DocxExporter:
         base_bytes = self._read_asset_bytes(asset_name)
 
         docx_document = docx.Document(BytesIO(base_bytes))
+        self._strip_contextual_spacing(docx_document)
+        self._enable_field_auto_update(docx_document)
         self._prepare_template_body(docx_document, _cover_title(document.title))
         self._prepare_headers(docx_document, _cover_title(document.title))
         docx_document.core_properties.title = document.title
-        self._render_contents(docx_document, document)
+
+        # Use Case documents render their section headers as fixed form
+        # labels (see `_render_use_case_form`), not from these heading
+        # nodes, so there is no single rendered paragraph to bookmark --
+        # those keep the old flat, non-navigable contents listing.
+        heading_nodes = (
+            []
+            if document.build_template_id == "use-case"
+            else list(self._iter_heading_nodes(document.nodes))
+        )
+        toc_bookmarks = {
+            id(node): f"_Toc_docgen_{index}" for index, node in enumerate(heading_nodes)
+        }
+        self._render_contents(docx_document, document, heading_nodes, toc_bookmarks)
         docx_document.add_page_break()
 
         list_num_ids: dict[bool, int] = {}
@@ -131,7 +154,7 @@ class DocxExporter:
             self._render_use_case_form(docx_document, document, list_num_ids)
         else:
             for node in document.nodes:
-                self._render_node(docx_document, node, list_num_ids)
+                self._render_node(docx_document, node, list_num_ids, toc_bookmarks)
 
         buffer = BytesIO()
         docx_document.save(buffer)
@@ -168,6 +191,38 @@ class DocxExporter:
         return path.read_bytes()
 
     # --- body setup ----------------------------------------------------
+
+    def _strip_contextual_spacing(self, docx_document: docx.document.Document) -> None:
+        """Remove `w:contextualSpacing` from every paragraph style.
+
+        The corporate template sets this on its body-text style (and a few
+        others) -- Word's "no extra space between paragraphs of this style"
+        option. Since almost all exported paragraphs share that one style
+        (`Colvir_Абзац`), it silently zeroed the visible gap between them
+        throughout the whole document even though the style's own
+        before/after spacing is non-zero.
+        """
+        for style in docx_document.styles:
+            p_pr = style.element.find(qn("w:pPr"))
+            if p_pr is None:
+                continue
+            contextual_spacing = p_pr.find(qn("w:contextualSpacing"))
+            if contextual_spacing is not None:
+                p_pr.remove(contextual_spacing)
+
+    def _enable_field_auto_update(self, docx_document: docx.document.Document) -> None:
+        """Make Word recompute fields (the TOC) on open, without a manual F9.
+
+        Otherwise Word keeps showing the TOC field's cached content -- the
+        same fallback text built for the LibreOffice PDF path in
+        `_render_toc_field` -- until the user updates it by hand.
+        """
+        settings = docx_document.settings.element
+        if settings.find(qn("w:updateFields")) is not None:
+            return
+        update_fields = OxmlElement("w:updateFields")
+        update_fields.set(qn("w:val"), "true")
+        settings.insert(0, update_fields)
 
     def _prepare_template_body(
         self, docx_document: docx.document.Document, title: str
@@ -222,29 +277,134 @@ class DocxExporter:
                 paragraph.text = f"Colvir Banking System\t{title}"
 
     def _render_contents(
-        self, docx_document: docx.document.Document, document: WorkingDocument
+        self,
+        docx_document: docx.document.Document,
+        document: WorkingDocument,
+        heading_nodes: list[DocumentNode],
+        toc_bookmarks: dict[int, str],
     ) -> None:
-        """Fill the template's dedicated post-cover page with a contents list.
+        """Fill the template's dedicated post-cover page with a real TOC field.
 
-        A Word TOC field relies on a client-side field update and therefore
-        becomes empty in automated LibreOffice conversion. Building the entries
-        from the same document nodes makes Word and PDF deterministic.
+        This is a genuine, updatable Word ``{ TOC }`` field -- opening the
+        file and updating it (or just letting Word auto-update on open, see
+        `_enable_field_auto_update`) recomputes real page numbers and
+        hyperlinks from the actual layout. Its cached content (between the
+        field's ``separate`` and ``end``) is pre-populated from the same
+        document nodes as the rest of the export and hyperlinked to
+        bookmarks placed around each rendered heading (`_wrap_bookmark`), so
+        it still reads correctly wherever nothing evaluates the field --
+        chiefly the PDF pipeline, which converts through headless
+        LibreOffice and does not reliably recompute TOC fields on its own.
         """
         title = docx_document.add_paragraph("Оглавление", style=_SECTION_STYLE)
         title.paragraph_format.page_break_before = False
 
-        for heading, level in self._iter_headings(document.nodes):
-            entry = docx_document.add_paragraph(heading, style=_PARAGRAPH_STYLE)
-            entry.paragraph_format.left_indent = Cm(0.6 * max(0, level - 1))
+        if document.build_template_id == "use-case":
+            for heading, level in self._iter_headings(document.nodes):
+                entry = docx_document.add_paragraph(heading, style=_PARAGRAPH_STYLE)
+                entry.paragraph_format.left_indent = Cm(0.6 * max(0, level - 1))
+            return
+
+        entries = [
+            (node.text or "", self._heading_level(node), toc_bookmarks[id(node)])
+            for node in heading_nodes
+        ]
+        self._render_toc_field(docx_document, entries)
+
+    def _render_toc_field(
+        self,
+        docx_document: docx.document.Document,
+        entries: list[tuple[str, int, str]],
+    ) -> None:
+        if not entries:
+            paragraph = docx_document.add_paragraph(
+                _TOC_EMPTY_MESSAGE, style=_TOC_ENTRY_STYLE_NAMES[1]
+            )
+            self._prepend_field_begin(paragraph, _TOC_FIELD_SWITCH)
+            self._append_field_end(paragraph)
+            return
+
+        section = docx_document.sections[0]
+        usable_width = section.page_width - section.left_margin - section.right_margin
+        hyperlink_style_id = docx_document.styles["Hyperlink"].style_id
+
+        paragraphs = []
+        for text, level, bookmark_name in entries:
+            style_name = _TOC_ENTRY_STYLE_NAMES[min(max(level, 1), 3)]
+            paragraph = docx_document.add_paragraph(style=style_name)
+            paragraph.paragraph_format.tab_stops.add_tab_stop(
+                usable_width, WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS
+            )
+            entry_xml = (
+                f'<w:hyperlink {nsdecls("w")} w:anchor="{bookmark_name}">'
+                f'<w:r><w:rPr><w:rStyle w:val="{hyperlink_style_id}"/></w:rPr>'
+                f'<w:t xml:space="preserve">{xml_escape(text)}</w:t></w:r>'
+                "<w:r><w:tab/></w:r>"
+                '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                "<w:r><w:instrText xml:space=\"preserve\"> PAGEREF "
+                f'{bookmark_name} \\h </w:instrText></w:r>'
+                '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+                "<w:r><w:t>1</w:t></w:r>"
+                '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+                "</w:hyperlink>"
+            )
+            paragraph._p.append(parse_xml(entry_xml))
+            paragraphs.append(paragraph)
+
+        self._prepend_field_begin(paragraphs[0], _TOC_FIELD_SWITCH)
+        self._append_field_end(paragraphs[-1])
+
+    def _prepend_field_begin(self, paragraph: Any, instruction: str) -> None:
+        """Insert `begin`/`instrText`/`separate` right after the paragraph's pPr."""
+        p_pr = paragraph._p.get_or_add_pPr()
+        begin = parse_xml(f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="begin"/></w:r>')
+        instr = parse_xml(
+            f'<w:r {nsdecls("w")}><w:instrText xml:space="preserve">'
+            f"{xml_escape(instruction)}</w:instrText></w:r>"
+        )
+        separate = parse_xml(
+            f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="separate"/></w:r>'
+        )
+        p_pr.addnext(separate)
+        p_pr.addnext(instr)
+        p_pr.addnext(begin)
+
+    def _append_field_end(self, paragraph: Any) -> None:
+        paragraph._p.append(parse_xml(f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="end"/></w:r>'))
+
+    def _wrap_bookmark(self, paragraph: Any, name: str) -> None:
+        """Surround a rendered heading paragraph with a named bookmark.
+
+        `_render_toc_field` hyperlinks/PAGEREFs the contents entry to this
+        same name, so Word's "Update Field" can resolve real page numbers
+        and navigate here.
+        """
+        bookmark_id = name.rsplit("_", 1)[-1]
+        start = parse_xml(
+            f'<w:bookmarkStart {nsdecls("w")} w:id="{bookmark_id}" w:name="{name}"/>'
+        )
+        end = parse_xml(f'<w:bookmarkEnd {nsdecls("w")} w:id="{bookmark_id}"/>')
+        paragraph._p.get_or_add_pPr().addnext(start)
+        paragraph._p.append(end)
 
     def _iter_headings(
         self, nodes: list[DocumentNode]
     ) -> Iterator[tuple[str, int]]:
+        for node in self._iter_heading_nodes(nodes):
+            yield node.text, self._heading_level(node)
+
+    def _iter_heading_nodes(
+        self, nodes: list[DocumentNode]
+    ) -> Iterator[DocumentNode]:
         for node in nodes:
             if node.kind is NodeKind.HEADING and node.text:
-                level = node.data.get("level", 1)
-                yield node.text, level if isinstance(level, int) else 1
-            yield from self._iter_headings(node.children)
+                yield node
+            yield from self._iter_heading_nodes(node.children)
+
+    @staticmethod
+    def _heading_level(node: DocumentNode) -> int:
+        level = node.data.get("level", 1)
+        return level if isinstance(level, int) else 1
 
     # --- node dispatch ---------------------------------------------------
 
@@ -479,6 +639,7 @@ class DocxExporter:
         docx_document: docx.document.Document,
         node: DocumentNode,
         list_num_ids: dict[bool, int],
+        toc_bookmarks: dict[int, str],
     ) -> None:
         """Render a single node and then all of its children.
 
@@ -488,7 +649,7 @@ class DocxExporter:
         every node kind may carry children, and all must render.
         """
         if node.kind == NodeKind.HEADING:
-            self._render_heading(docx_document, node)
+            self._render_heading(docx_document, node, toc_bookmarks)
         elif node.kind == NodeKind.PARAGRAPH:
             self._render_paragraph(docx_document, node)
         elif node.kind == NodeKind.LIST:
@@ -501,10 +662,13 @@ class DocxExporter:
             self._render_gap(docx_document, node)
 
         for child in node.children:
-            self._render_node(docx_document, child, list_num_ids)
+            self._render_node(docx_document, child, list_num_ids, toc_bookmarks)
 
     def _render_heading(
-        self, docx_document: docx.document.Document, node: DocumentNode
+        self,
+        docx_document: docx.document.Document,
+        node: DocumentNode,
+        toc_bookmarks: dict[int, str],
     ) -> None:
         level = node.data.get("level", 1)
         if not isinstance(level, int):
@@ -519,6 +683,9 @@ class DocxExporter:
             # The cover uses this style as a page-level block. FAQ sections
             # need the same typography without starting a blank page first.
             paragraph.paragraph_format.page_break_before = False
+        bookmark_name = toc_bookmarks.get(id(node))
+        if bookmark_name is not None:
+            self._wrap_bookmark(paragraph, bookmark_name)
 
     def _render_paragraph(
         self, docx_document: docx.document.Document, node: DocumentNode
