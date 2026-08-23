@@ -67,9 +67,10 @@ CHAT_SYSTEM_PROMPT = """
 """.strip()
 
 CHAT_RETRY_PROMPT = """
-Предыдущий ответ не принят: верни только один валидный JSON-объект по схеме ChatEditPlan.
+Предыдущий ответ не принят: верни только один валидный JSON-объект точно по
+переданной JSON-схеме {schema_name}.
 Не пиши пояснений, Markdown, префиксов и текста вне JSON. Используй пустой operations,
-если не можешь обосновать правку источниками.
+только если это поле есть в переданной схеме.
 """.strip()
 
 CHAT_GROUNDING_RETRY_PROMPT = """
@@ -98,7 +99,8 @@ GLOSSARY_SYSTEM_PROMPT = """
 Выделите термины и краткие определения только из переданного текущего документа.
 Верните GlossaryDraft с непустым entries. Каждый entry содержит term, definition и
 evidence_node_ids — идентификаторы узлов документа, где термин действительно
-использован. Не включайте общеупотребительные слова, заголовки формы, служебные поля,
+использован. Если не уверены в идентификаторах, верните пустой evidence_node_ids: сервис найдёт и
+проверит узлы сам. Не включайте общеупотребительные слова, заголовки формы, служебные поля,
 идентификаторы узлов и термины, уже присутствующие в разделе «Термины и определения».
 Не придумывайте значения, числовые факты и расшифровки сокращений, которых нет в
 указанных узлах. Никакого Markdown и текста вне JSON.
@@ -518,7 +520,10 @@ class ChatService:
         except ModelResponseFormatError:
             try:
                 return self._model.generate_json(
-                    system=f"{system}\n\n{CHAT_RETRY_PROMPT}",
+                    system=(
+                        f"{system}\n\n"
+                        f"{CHAT_RETRY_PROMPT.format(schema_name=schema.__name__)}"
+                    ),
                     user=user,
                     schema=schema,
                 )
@@ -646,13 +651,26 @@ def _validated_glossary_entries(
         normalized_term = _normalized_glossary_term(entry.term)
         if not normalized_term or normalized_term in seen:
             continue
-        try:
-            cited = [evidence_by_id[node_id] for node_id in entry.evidence_node_ids]
-        except KeyError as error:
-            raise ChatGroundingError(
-                "Модель сослалась на неизвестный узел документа",
-                code=ChatErrorCode.EVIDENCE_MISSING,
-            ) from error
+        if entry.evidence_node_ids:
+            try:
+                cited = [evidence_by_id[node_id] for node_id in entry.evidence_node_ids]
+            except KeyError as error:
+                raise ChatGroundingError(
+                    "Модель сослалась на неизвестный узел документа",
+                    code=ChatErrorCode.EVIDENCE_MISSING,
+                ) from error
+        else:
+            cited = [
+                node
+                for node in evidence_nodes
+                if _tokens_supported(
+                    _tokens(entry.term),
+                    _tokens(_node_factual_text(node)),
+                )
+            ]
+            entry = entry.model_copy(
+                update={"evidence_node_ids": [node.id for node in cited]}
+            )
         evidence_text = " ".join(_node_factual_text(node) for node in cited)
         if not _tokens_supported(_tokens(entry.term), _tokens(evidence_text)):
             raise ChatGroundingError(

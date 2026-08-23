@@ -43,6 +43,7 @@ class FakeModel:
     def __init__(self) -> None:
         self.calls = 0
         self.error: ModelError | None = None
+        self.format_failures = 0
         self.result: Any = None
         self.results: list[Any] = []
         self.systems: list[str] = []
@@ -55,6 +56,9 @@ class FakeModel:
         self.users.append(user)
         self.schemas.append(schema)
         assert "Оператор" in user
+        if self.format_failures:
+            self.format_failures -= 1
+            raise ModelResponseFormatError("invalid first response")
         if self.error is not None:
             raise self.error
         if self.results:
@@ -168,7 +172,6 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
             GlossaryEntryDraft(
                 term="ЦС",
                 definition="цифровой счёт клиента",
-                evidence_node_ids=["body"],
             )
         ]
     )
@@ -197,6 +200,31 @@ def test_chat_builds_glossary_from_current_document_without_external_sources(
     assert glossary.kind is NodeKind.LIST
     assert glossary.data["items"] == ["ЦС — цифровой счёт клиента"]
     assert fake_model.schemas == [GlossaryDraft]
+
+
+def test_glossary_retry_uses_the_requested_schema_name(
+    chat_service: ChatService,
+    fake_model: FakeModel,
+) -> None:
+    fake_model.format_failures = 1
+    fake_model.result = GlossaryDraft(
+        entries=[
+            GlossaryEntryDraft(
+                term="ЦС",
+                definition="цифровой счёт клиента",
+            )
+        ]
+    )
+
+    result = chat_service._generate_with_schema_retry(
+        system="Верни JSON",
+        user="Оператор использует ЦС",
+        schema=GlossaryDraft,
+    )
+
+    assert result.entries[0].term == "ЦС"
+    assert "GlossaryDraft" in fake_model.systems[-1]
+    assert "ChatEditPlan" not in fake_model.systems[-1]
 
 
 def test_chat_fills_only_empty_cells_from_explicitly_named_source(

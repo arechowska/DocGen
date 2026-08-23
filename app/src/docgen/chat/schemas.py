@@ -56,11 +56,18 @@ class GlossaryEntryDraft(BaseModel):
 
     term: str = Field(min_length=1)
     definition: str = Field(min_length=1)
-    evidence_node_ids: list[str] = Field(min_length=1)
+    # Node references are optional in the model response. The service derives
+    # and validates them against the document when a smaller model omits them.
+    evidence_node_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
     def accept_russian_keys(cls, value: object) -> object:
+        if isinstance(value, str):
+            for separator in ("—", "–", ":"):
+                term, found, definition = value.partition(separator)
+                if found:
+                    return {"term": term, "definition": definition}
         if not isinstance(value, dict):
             return value
         normalized = dict(value)
@@ -96,6 +103,16 @@ class GlossaryDraft(BaseModel):
             for key in ("terms", "термины", "items"):
                 if key in normalized and "entries" not in normalized:
                     normalized["entries"] = normalized.pop(key)
+            if "entries" not in normalized and all(
+                isinstance(key, str) and isinstance(item, str)
+                for key, item in normalized.items()
+            ):
+                return {
+                    "entries": [
+                        {"term": key, "definition": item}
+                        for key, item in normalized.items()
+                    ]
+                }
             return normalized
         return value
 
