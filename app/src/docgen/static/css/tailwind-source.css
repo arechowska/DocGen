@@ -1629,19 +1629,20 @@
   text-decoration: underline;
 }
 
-.document-canvas ul {
+.document-canvas ul:not(.faq-question-list) {
   margin: 1em 0;
   padding-left: 1.6em;
   list-style: disc;
 }
 
-.document-canvas ol {
+.document-canvas ol:not(.faq-question-list) {
   margin: 1em 0;
   padding-left: 1.8em;
   list-style: decimal;
 }
 
-.document-canvas li {
+.document-canvas ul:not(.faq-question-list) > li,
+.document-canvas ol:not(.faq-question-list) > li {
   display: list-item;
 }
 

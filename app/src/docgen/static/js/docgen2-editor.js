@@ -306,11 +306,11 @@
     });
   };
 
-  const selectBlockContents = (first, last = first) => {
-    if (!first || !last) return;
+  const placeCaretAtEnd = (element) => {
+    if (!element) return;
     const range = document.createRange();
-    range.setStart(first, 0);
-    range.setEnd(last, last.childNodes.length);
+    range.selectNodeContents(element);
+    range.collapse(false);
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
@@ -337,7 +337,7 @@
       .filter((block) => supportedBlock.test(block.tagName))
       .map((block) => replaceBlockTag(block, tagName));
     normalizeSemanticNodeAttributes();
-    if (replacements.length) selectBlockContents(replacements[0], replacements.at(-1));
+    if (replacements.length) placeCaretAtEnd(replacements.at(-1));
     headingSelect.value = "";
   };
 
@@ -348,22 +348,26 @@
     });
   };
 
+  const unwrapList = (list) => {
+    const paragraphs = Array.from(list.children).map((item, index) => {
+      const paragraph = document.createElement("p");
+      paragraph.innerHTML = item.innerHTML || "<br>";
+      if (index === 0) copySemanticAttributes(list, paragraph);
+      paragraph.dataset.kind = "paragraph";
+      return paragraph;
+    });
+    if (!paragraphs.length) paragraphs.push(document.createElement("p"));
+    list.replaceWith(...paragraphs);
+    return paragraphs;
+  };
+
   const toggleList = (tagName) => {
     const blocks = selectedCanvasBlocks();
     if (!blocks.length) return;
     if (blocks.length === 1 && blocks[0].tagName.toLowerCase() === tagName) {
-      const list = blocks[0];
-      const paragraphs = Array.from(list.children).map((item, index) => {
-        const paragraph = document.createElement("p");
-        paragraph.innerHTML = item.innerHTML;
-        if (item.getAttribute("style")) paragraph.setAttribute("style", item.getAttribute("style"));
-        if (index === 0) copySemanticAttributes(list, paragraph);
-        paragraph.dataset.kind = "paragraph";
-        return paragraph;
-      });
-      list.replaceWith(...paragraphs);
+      const paragraphs = unwrapList(blocks[0]);
       normalizeSemanticNodeAttributes();
-      if (paragraphs.length) selectBlockContents(paragraphs[0], paragraphs.at(-1));
+      if (paragraphs.length) placeCaretAtEnd(paragraphs.at(-1));
       return;
     }
 
@@ -383,7 +387,7 @@
       block.remove();
     });
     normalizeSemanticNodeAttributes();
-    selectBlockContents(list);
+    placeCaretAtEnd(list);
   };
 
   const applyAlignment = (alignment) => {
@@ -395,14 +399,27 @@
   };
 
   const clearFormatting = () => {
-    restoreSelection();
-    document.execCommand("removeFormat", false, null);
-    document.execCommand("unlink", false, null);
-    document.execCommand("formatBlock", false, "p");
-    document.execCommand("justifyLeft", false, null);
+    const clearedBlocks = [];
+    selectedCanvasBlocks().forEach((block) => {
+      if (/^(UL|OL)$/.test(block.tagName)) {
+        clearedBlocks.push(...unwrapList(block));
+        return;
+      }
+      const cleared = /^(H[1-6]|DIV)$/.test(block.tagName)
+        ? replaceBlockTag(block, "p")
+        : block;
+      clearedBlocks.push(cleared);
+    });
+    clearedBlocks.forEach((block) => {
+      block.removeAttribute("style");
+      block.querySelectorAll("[style]").forEach((element) => element.removeAttribute("style"));
+      block.querySelectorAll("b, strong, i, em, u, s, font, a").forEach((element) => {
+        element.replaceWith(...element.childNodes);
+      });
+    });
     normalizeSemanticNodeAttributes();
     if (headingSelect) headingSelect.value = "";
-    rememberSelection();
+    if (clearedBlocks.length) placeCaretAtEnd(clearedBlocks.at(-1));
   };
 
   let saveStatusTimer = null;

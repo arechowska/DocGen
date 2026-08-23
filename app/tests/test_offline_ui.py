@@ -447,8 +447,9 @@ def test_docgen2_editor_toolbar_reapplies_headings_and_clears_formatting(client:
     assert "data-editor-clear-formatting" in template
     assert 'headingSelect.value = ""' in script.text
     assert "replaceBlockTag(block, tagName)" in script.text
-    assert 'document.execCommand("removeFormat", false, null)' in script.text
-    assert 'document.execCommand("formatBlock", false, "p")' in script.text
+    assert "unwrapList(block)" in script.text
+    assert 'replaceBlockTag(block, "p")' in script.text
+    assert 'block.removeAttribute("style")' in script.text
     assert "normalizeSemanticNodeAttributes();" in script.text
     assert "seenNodeIds.has(nodeId)" in script.text
     assert "element.removeAttribute(attribute)" in script.text
@@ -463,9 +464,9 @@ def test_docgen2_editor_uses_visible_lists_and_direct_block_alignment(client: Te
     assert "toggleList" in script.text
     assert "applyAlignment" in script.text
     assert "block.style.textAlign = alignment" in script.text
-    assert ".document-canvas ul{" in stylesheet.text
+    assert ".document-canvas ul:not(.faq-question-list){" in stylesheet.text
     assert "list-style:disc" in stylesheet.text
-    assert ".document-canvas ol{" in stylesheet.text
+    assert ".document-canvas ol:not(.faq-question-list){" in stylesheet.text
     assert "list-style:decimal" in stylesheet.text
 
 
