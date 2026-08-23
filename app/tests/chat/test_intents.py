@@ -77,6 +77,20 @@ def test_router_uses_shared_structural_vocabulary(
     assert decision.structure_action is action
 
 
+def test_router_does_not_treat_negated_action_word_as_a_command(
+    document: WorkingDocument,
+) -> None:
+    """"нельзя удалить" (can't be deleted) is explaining a constraint, not
+    asking to delete -- the message should reach grounded editing instead of
+    silently deleting the first document block."""
+    decision = route_intent(
+        "Дополни ответ почему нельзя удалить первое условие фильтрации",
+        document,
+    )
+
+    assert decision.kind is IntentKind.GROUNDED_EDIT
+
+
 def test_router_recognizes_formatting_without_sources(document: WorkingDocument) -> None:
     decision = route_intent("Сделай второй абзац жирным и синим", document)
 

@@ -108,6 +108,7 @@ _QUERY_NOISE = {
     "уточнить",
 }
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
+_NEGATION_BEFORE_ACTION = re.compile(r"\b(?:не|нельзя)\s+\S*$")
 
 
 def route_intent(message: str, document: WorkingDocument) -> IntentDecision:
@@ -215,7 +216,7 @@ def _authored_replacement(message: str) -> AuthoredReplacement | None:
 
 def _structure_action(message: str) -> StructureAction | None:
     for action, stems in _STRUCTURE_RULES:
-        if not any(stem in message for stem in stems):
+        if not _has_unnegated_stem(message, stems):
             continue
         if action is StructureAction.SECTIONIZE and not any(
             term in message for term in ("раздел", "секци")
@@ -225,6 +226,24 @@ def _structure_action(message: str) -> StructureAction | None:
             continue
         return action
     return None
+
+
+def _has_unnegated_stem(message: str, stems: tuple[str, ...]) -> bool:
+    """True if some occurrence of a stem is not directly preceded by a
+    negation ("не"/"нельзя ...удалить") -- a stem appearing only inside a
+    negated clause (e.g. "нельзя удалить") must not trigger the action it
+    names, since the message is explaining why NOT to do it, not asking
+    for it."""
+    for stem in stems:
+        start = 0
+        while True:
+            index = message.find(stem, start)
+            if index == -1:
+                break
+            if not _NEGATION_BEFORE_ACTION.search(message[:index]):
+                return True
+            start = index + len(stem)
+    return False
 
 
 def _retrieval_query(message: str) -> str:
