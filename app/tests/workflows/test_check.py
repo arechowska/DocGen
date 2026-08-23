@@ -851,6 +851,56 @@ def test_structure_gap_operations_do_not_insert_an_absent_wide_table() -> None:
     assert operations == []
 
 
+def test_structure_gap_operations_insert_missing_tables_under_form_headings() -> None:
+    template = TemplateCatalog().get("use-case")
+    contract = template.structure_check
+    assert contract is not None
+    document = WorkingDocument(
+        title="Форма без таблиц",
+        template_id=NO_TEMPLATE_ID,
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text=heading)
+            for heading in contract.required_headings
+        ],
+    )
+
+    operations = structure_gap_operations(document, template)
+    candidate = apply_operations(document, operations)
+    inserted_tables = [
+        operation.node
+        for operation in operations
+        if isinstance(operation, InsertNode)
+        and operation.node.kind is NodeKind.TABLE
+    ]
+
+    assert len(inserted_tables) == len(contract.required_tables)
+    for table_contract in contract.required_tables:
+        table = next(
+            node
+            for node in inserted_tables
+            if f"template-table:{table_contract.id}" in node.flags
+        )
+        if table_contract.layout == "key_value":
+            assert table.data["rows"] == [
+                [label, ""] for label in table_contract.required_labels
+            ]
+        else:
+            assert table.data["headers"] == list(table_contract.required_labels)
+            assert table.data["rows"] == [[""] * len(table_contract.required_labels)]
+        table_index = candidate.nodes.index(table)
+        heading = candidate.nodes[table_index - 1]
+        assert heading.kind is NodeKind.HEADING
+        assert heading.text is not None
+        assert (
+            table_contract.title.casefold() in heading.text.casefold()
+            or heading.text.casefold() in table_contract.title.casefold()
+        )
+
+    assert structure_gap_operations(candidate, template) == []
+
+
 def test_structure_gap_operations_append_only_missing_key_value_rows() -> None:
     template = TemplateCatalog().get("use-case")
     contract = template.structure_check

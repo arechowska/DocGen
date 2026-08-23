@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from docgen.ai.client import ModelError, ModelResponseFormatError
 from docgen.chat.errors import ChatError, ChatErrorCode
-from docgen.chat.retrieval import SourceSnapshot
+from docgen.chat.retrieval import SourceReference, SourceSnapshot
 from docgen.chat.schemas import (
     ChatEditOperation,
     ChatEditPlan,
@@ -131,6 +131,162 @@ def test_chat_applies_grounded_plan(chat_service: ChatService, fake_model: FakeM
 
     assert result.revision == 3
     assert find_node(result.document, "actor").text == "Оператор подтверждает заявку"
+
+
+def test_chat_fills_only_empty_cells_from_explicitly_named_source(
+    session: Session,
+    fake_model: FakeModel,
+) -> None:
+    repository = DocumentRepository(session)
+    revision = repository.save_document(
+        "p1",
+        WorkingDocument(
+            title="Документ",
+            template_id="use-case",
+            nodes=[
+                DocumentNode(id="actor", kind=NodeKind.PARAGRAPH, text="Оператор"),
+                DocumentNode(
+                    id="metadata",
+                    kind=NodeKind.TABLE,
+                    data={
+                        "rows": [
+                            ["Код документа", "UC-42"],
+                            ["Статус документа", ""],
+                        ]
+                    },
+                ),
+            ],
+        ),
+    )
+    session.commit()
+    fake_model.result = ChatEditPlan(
+        summary="Заполнен статус",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateData(
+                    node_id="metadata",
+                    data={
+                        "rows": [
+                            ["Код документа", "UC-42"],
+                            ["Статус документа", "Согласован"],
+                        ]
+                    },
+                ),
+                evidence_block_ids=["new:status"],
+            )
+        ],
+    )
+    snapshot = SourceSnapshot(
+        configured_source_count=2,
+        sources=(
+            SourceReference(id="old", display_name="old.docx"),
+            SourceReference(id="new", display_name="requirements.docx"),
+        ),
+        blocks=[
+            NormalizedBlock(
+                id="old:status",
+                kind=BlockKind.TEXT,
+                text="Статус документа Черновик",
+                confidence=1,
+                provenance=[Provenance(source_id="old", locator="p:1")],
+            ),
+            NormalizedBlock(
+                id="new:status",
+                kind=BlockKind.TEXT,
+                text="Статус документа Согласован",
+                confidence=1,
+                provenance=[Provenance(source_id="new", locator="p:1")],
+            ),
+        ],
+    )
+    service = ChatService(
+        documents=repository,
+        model=fake_model,
+        source_blocks=lambda _project_id: snapshot,
+    )
+
+    result = service.edit(
+        "p1",
+        ChatEditRequest(
+            message=(
+                "Заполни пустующие поля в документе из источника requirements.docx"
+            ),
+            expected_revision=revision,
+        ),
+    )
+
+    table = find_node(result.document, "metadata")
+    assert table is not None
+    assert table.data["rows"] == [
+        ["Код документа", "UC-42"],
+        ["Статус документа", "Согласован"],
+    ]
+    assert "old:status" not in fake_model.users[-1]
+    assert "new:status" in fake_model.users[-1]
+
+
+def test_fill_empty_fields_rejects_changes_to_populated_cells(
+    session: Session,
+    fake_model: FakeModel,
+) -> None:
+    repository = DocumentRepository(session)
+    revision = repository.save_document(
+        "p1",
+        WorkingDocument(
+            title="Документ",
+            template_id="use-case",
+            nodes=[
+                DocumentNode(id="actor", kind=NodeKind.PARAGRAPH, text="Оператор"),
+                DocumentNode(
+                    id="metadata",
+                    kind=NodeKind.TABLE,
+                    data={"rows": [["Код документа", "UC-42"]]},
+                ),
+            ],
+        ),
+    )
+    session.commit()
+    fake_model.result = ChatEditPlan(
+        summary="Изменён код",
+        operations=[
+            ChatEditOperation(
+                operation=UpdateData(
+                    node_id="metadata",
+                    data={"rows": [["Код документа", "UC-99"]]},
+                ),
+                evidence_block_ids=["new:code"],
+            )
+        ],
+    )
+    snapshot = SourceSnapshot(
+        configured_source_count=1,
+        sources=(SourceReference(id="new", display_name="requirements.docx"),),
+        blocks=[
+            NormalizedBlock(
+                id="new:code",
+                kind=BlockKind.TEXT,
+                text="Код документа UC-99",
+                confidence=1,
+                provenance=[Provenance(source_id="new", locator="p:1")],
+            )
+        ],
+    )
+    service = ChatService(
+        documents=repository,
+        model=fake_model,
+        source_blocks=lambda _project_id: snapshot,
+    )
+
+    with pytest.raises(ChatValidationError, match="заполненную ячейку"):
+        service.edit(
+            "p1",
+            ChatEditRequest(
+                message=(
+                    "Заполни пустующие поля в документе из источника requirements.docx"
+                ),
+                expected_revision=revision,
+            ),
+        )
 
 
 def test_apply_finding_fix_runs_through_grounded_edit_pipeline(

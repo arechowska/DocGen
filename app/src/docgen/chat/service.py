@@ -20,7 +20,7 @@ from docgen.chat.intents import IntentKind, _retrieval_query, route_intent
 from docgen.chat.manual_insert import (
     ManualInsertError,
 )
-from docgen.chat.retrieval import SourceSnapshot, retrieve_relevant_blocks
+from docgen.chat.retrieval import RetrievalResult, SourceSnapshot, retrieve_relevant_blocks
 from docgen.chat.schemas import (
     ChatEditOperation,
     ChatEditPlan,
@@ -71,6 +71,13 @@ CHAT_RETRY_PROMPT = """
 
 CHAT_GROUNDING_RETRY_PROMPT = """
 Предыдущий план не прошёл проверку источников. Исправь план: каждая фактическая операция должна ссылаться в evidence_block_ids на существующие source_blocks, подтверждающие добавляемый или изменяемый текст. Не используй идентификаторы наугад. Если подтверждения нет, исключи такую операцию.
+""".strip()
+
+FILL_EMPTY_SYSTEM_PROMPT = """
+Заполняйте только пустые ячейки существующих таблиц. Не изменяйте заголовки,
+число строк и столбцов, непустые значения или другие блоки документа. Для каждой
+таблицы возвращайте полный массив rows с неизменёнными существующими значениями.
+Если источник не подтверждает значение поля, оставьте эту ячейку пустой.
 """.strip()
 
 FAQ_SYSTEM_PROMPT = """
@@ -320,7 +327,34 @@ class ChatService:
         intent_kind: IntentKind,
     ) -> tuple[ChatEditPlan, list[NormalizedBlock]]:
         snapshot = _as_source_snapshot(self._source_blocks(project_id))
-        retrieved = retrieve_relevant_blocks(snapshot, retrieval_query)
+        snapshot, explicitly_scoped = _scope_snapshot_to_named_source(
+            snapshot, message
+        )
+        fill_empty = _is_fill_empty_request(message)
+        if fill_empty:
+            empty_query = _empty_table_field_query(document)
+            if empty_query:
+                retrieval_query = empty_query
+        try:
+            retrieved = retrieve_relevant_blocks(
+                snapshot,
+                retrieval_query,
+                limit=24 if fill_empty else 12,
+            )
+        except ChatError as error:
+            if (
+                not fill_empty
+                or not explicitly_scoped
+                or error.code is not ChatErrorCode.RELEVANT_FRAGMENT_MISSING
+            ):
+                raise
+            # The source is explicit, but its prose may not repeat the form
+            # labels. Keep the fallback bounded; grounding still rejects any
+            # value that is absent from these source blocks.
+            retrieved = RetrievalResult(
+                blocks=list(snapshot.blocks)[:24],
+                total_blocks=len(snapshot.blocks),
+            )
         source_blocks = retrieved.blocks
 
         if intent_kind is IntentKind.TEMPLATE_ACTION:
@@ -335,7 +369,11 @@ class ChatService:
                 )
         else:
             plan = self._generate_with_schema_retry(
-                system=CHAT_SYSTEM_PROMPT,
+                system=(
+                    f"{CHAT_SYSTEM_PROMPT}\n\n{FILL_EMPTY_SYSTEM_PROMPT}"
+                    if fill_empty
+                    else CHAT_SYSTEM_PROMPT
+                ),
                 user=_serialized_context(document, source_blocks, message),
                 schema=ChatEditPlan,
             )
@@ -345,6 +383,8 @@ class ChatService:
         _validate_plan_for_intent(intent_kind, document, plan)
         try:
             _validate_plan(document, source_blocks, plan)
+            if fill_empty:
+                _validate_fill_empty_plan(document, plan)
         except ChatGroundingError:
             if intent_kind is IntentKind.TEMPLATE_ACTION:
                 plan = self._faq_plan(
@@ -355,7 +395,12 @@ class ChatService:
                 )
             else:
                 plan = self._generate_with_schema_retry(
-                    system=f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_GROUNDING_RETRY_PROMPT}",
+                    system=(
+                        f"{CHAT_SYSTEM_PROMPT}\n\n{FILL_EMPTY_SYSTEM_PROMPT}\n\n"
+                        f"{CHAT_GROUNDING_RETRY_PROMPT}"
+                        if fill_empty
+                        else f"{CHAT_SYSTEM_PROMPT}\n\n{CHAT_GROUNDING_RETRY_PROMPT}"
+                    ),
                     user=_serialized_context(document, source_blocks, message),
                     schema=ChatEditPlan,
                 )
@@ -363,6 +408,8 @@ class ChatService:
                 raise ChatGroundingError(code=ChatErrorCode.EVIDENCE_MISSING)
             _validate_plan_for_intent(intent_kind, document, plan)
             _validate_plan(document, source_blocks, plan)
+            if fill_empty:
+                _validate_fill_empty_plan(document, plan)
         return plan, source_blocks
 
     def _faq_plan(
@@ -438,6 +485,175 @@ def _as_source_snapshot(
         configured_source_count=1 if value else 0,
         blocks=value,
     )
+
+
+def _scope_snapshot_to_named_source(
+    snapshot: SourceSnapshot,
+    message: str,
+) -> tuple[SourceSnapshot, bool]:
+    normalized_message = unicodedata.normalize("NFKC", message).casefold()
+    matches = [
+        source
+        for source in snapshot.sources
+        if source.display_name.strip()
+        and unicodedata.normalize("NFKC", source.display_name).casefold()
+        in normalized_message
+    ]
+    if not matches:
+        requested = _explicit_source_label(message)
+        if requested is not None and snapshot.sources:
+            raise ChatError(
+                ChatErrorCode.CLARIFICATION,
+                message=f"Источник «{requested}» не найден в проекте",
+                action="Укажи точное название источника из левой панели.",
+            )
+        return snapshot, False
+    longest = max(len(source.display_name) for source in matches)
+    selected = [source for source in matches if len(source.display_name) == longest]
+    if len(selected) != 1:
+        raise ChatError(
+            ChatErrorCode.CLARIFICATION,
+            message="В проекте несколько источников с таким названием",
+            action="Укажи источник точнее.",
+        )
+    source = selected[0]
+    blocks = [
+        block
+        for block in snapshot.blocks
+        if any(item.source_id == source.id for item in block.provenance)
+    ]
+    return (
+        SourceSnapshot(
+            configured_source_count=1,
+            blocks=blocks,
+            warnings=snapshot.warnings,
+            identity=snapshot.identity,
+            sources=(source,),
+        ),
+        True,
+    )
+
+
+_QUOTED_SOURCE_RE = re.compile(
+    r"\bисточник\w*\s+[«\"](?P<label>[^»\"]+)[»\"]",
+    re.IGNORECASE,
+)
+_FILE_SOURCE_RE = re.compile(
+    r"\bисточник\w*\s+(?P<label>[^\s,;]+\.[a-z0-9]{1,10})\b",
+    re.IGNORECASE,
+)
+
+
+def _explicit_source_label(message: str) -> str | None:
+    match = _QUOTED_SOURCE_RE.search(message) or _FILE_SOURCE_RE.search(message)
+    return match.group("label").strip() if match is not None else None
+
+
+_FILL_EMPTY_RE = re.compile(
+    r"(?:\bзаполн\w*\b.*\bпуст\w*\b|\bпуст\w*\b.*\bзаполн\w*\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_fill_empty_request(message: str) -> bool:
+    return _FILL_EMPTY_RE.search(message) is not None
+
+
+def _empty_table_field_query(document: WorkingDocument) -> str:
+    labels: list[str] = []
+    for node in _document_nodes(document.nodes):
+        if node.kind is not NodeKind.TABLE:
+            continue
+        rows = node.data.get("rows", [])
+        headers = node.data.get("headers", [])
+        if isinstance(rows, list):
+            for row in rows:
+                if (
+                    isinstance(row, list)
+                    and len(row) >= 2
+                    and not _is_blank_cell(row[0])
+                    and all(_is_blank_cell(value) for value in row[1:])
+                ):
+                    labels.append(str(row[0]))
+        if isinstance(headers, list) and isinstance(rows, list):
+            for index, header in enumerate(headers):
+                values = [
+                    row[index]
+                    for row in rows
+                    if isinstance(row, list) and index < len(row)
+                ]
+                if not _is_blank_cell(header) and values and all(
+                    _is_blank_cell(value) for value in values
+                ):
+                    labels.append(str(header))
+    return " ".join(dict.fromkeys(labels))
+
+
+def _document_nodes(nodes: list[DocumentNode]) -> list[DocumentNode]:
+    result: list[DocumentNode] = []
+    for node in nodes:
+        result.append(node)
+        result.extend(_document_nodes(node.children))
+    return result
+
+
+def _validate_fill_empty_plan(
+    document: WorkingDocument,
+    plan: ChatEditPlan,
+) -> None:
+    for item in plan.operations:
+        operation = item.operation
+        if not isinstance(operation, UpdateData):
+            raise ChatValidationError(
+                "Заполнение пустых полей может изменять только существующие таблицы"
+            )
+        node = find_node(document, operation.node_id)
+        if node is None or node.kind is not NodeKind.TABLE:
+            raise ChatValidationError("Целевая таблица для заполнения не найдена")
+        after = _merged_data(node.data, operation.data)
+        _validate_only_blank_table_cells_changed(node.data, after)
+
+
+def _validate_only_blank_table_cells_changed(before: dict, after: dict) -> None:
+    if {key: value for key, value in before.items() if key != "rows"} != {
+        key: value for key, value in after.items() if key != "rows"
+    }:
+        raise ChatValidationError(
+            "Заполнение пустых полей не может менять структуру таблицы"
+        )
+    before_rows = before.get("rows", [])
+    after_rows = after.get("rows", [])
+    if (
+        not isinstance(before_rows, list)
+        or not isinstance(after_rows, list)
+        or len(before_rows) != len(after_rows)
+    ):
+        raise ChatValidationError(
+            "Заполнение пустых полей не может менять строки таблицы"
+        )
+    changed = False
+    for before_row, after_row in zip(before_rows, after_rows, strict=True):
+        if (
+            not isinstance(before_row, list)
+            or not isinstance(after_row, list)
+            or len(before_row) != len(after_row)
+        ):
+            raise ChatValidationError(
+                "Заполнение пустых полей не может менять столбцы таблицы"
+            )
+        for before_value, after_value in zip(before_row, after_row, strict=True):
+            if not _is_blank_cell(before_value) and before_value != after_value:
+                raise ChatValidationError(
+                    "Заполнение пустых полей пытается изменить заполненную ячейку"
+                )
+            if before_value != after_value:
+                changed = True
+    if not changed:
+        raise ChatValidationError("В предложении нет заполнения пустых полей")
+
+
+def _is_blank_cell(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _validated_message(message: str) -> str:
@@ -539,13 +755,23 @@ def _validate_structural_fix_scope(
         )
     for operation in operations:
         if isinstance(operation, InsertNode):
-            if (
-                operation.parent_id is not None
-                or operation.node.kind is not NodeKind.HEADING
-                or not operation.node.text.strip()
-                or set(operation.node.flags)
-                != {"structural-edit", "empty-template-section"}
-            ):
+            flags = set(operation.node.flags)
+            valid_heading = (
+                operation.node.kind is NodeKind.HEADING
+                and bool((operation.node.text or "").strip())
+                and flags == {"structural-edit", "empty-template-section"}
+            )
+            valid_table = (
+                operation.node.kind is NodeKind.TABLE
+                and not operation.node.text
+                and "structural-edit" in flags
+                and "empty-template-table" in flags
+                and len(
+                    [flag for flag in flags if flag.startswith("template-table:")]
+                )
+                == 1
+            )
+            if operation.parent_id is not None or not (valid_heading or valid_table):
                 raise ChatValidationError(
                     "Структурная правка пытается добавить неразрешённый блок"
                 )

@@ -9,7 +9,12 @@ from pydantic import ValidationError
 from docgen.ai.client import TextModel, VisionModel
 from docgen.ai.grounding import GroundingValidator
 from docgen.ai.prompts import CHECK_SYSTEM_PROMPT
-from docgen.documents.operations import DocumentOperation, InsertNode, UpdateData
+from docgen.documents.operations import (
+    DocumentOperation,
+    InsertNode,
+    UpdateData,
+    apply_operations,
+)
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import (
     CheckFinding,
@@ -510,13 +515,6 @@ def _form_gap_operations(
     document: WorkingDocument,
     contract: SemanticStructureCheck,
 ) -> list[DocumentOperation]:
-    # Missing headings are deliberately NOT auto-inserted here: unlike an
-    # assembled document (where a section_id ties every node to its slot),
-    # an imported/free-form document's existing text is often already the
-    # missing section's content, just not wrapped in a matching heading.
-    # Blindly adding an empty "Описание" heading next to unlabeled content
-    # that IS the description creates a duplicate, meaningless skeleton --
-    # deciding where existing prose belongs needs judgment, not a rule.
     operations: list[DocumentOperation] = []
     table_nodes = [
         node for node in _walk_nodes(document.nodes) if node.kind is NodeKind.TABLE
@@ -553,13 +551,23 @@ def _form_gap_operations(
                 (top_level_indexes[table.id], table, required_table)
             )
 
-    # A recognised form table is a safe layout anchor. Restore missing empty
-    # section headings around those anchors (including diagram sections), but
-    # never manufacture a full form in an unrelated free-form document.
+    # An exact form heading or a recognised form table is a safe layout
+    # anchor. Only then restore the absent empty skeleton; never manufacture
+    # a complete form in an unrelated free-form document.
     heading_operations = _missing_form_heading_operations(
         document, contract, matched_tables
     )
-    return [*heading_operations, *operations]
+    if not heading_operations and not _has_form_layout_anchor(
+        document, contract, matched_tables
+    ):
+        return operations
+    document_with_headings = apply_operations(document, heading_operations)
+    table_operations = _missing_form_table_operations(
+        document_with_headings,
+        contract,
+        {table.id for _index, _node, table in matched_tables},
+    )
+    return [*heading_operations, *table_operations, *operations]
 
 
 def _missing_form_heading_operations(
@@ -567,8 +575,6 @@ def _missing_form_heading_operations(
     contract: SemanticStructureCheck,
     matched_tables: list[tuple[int, DocumentNode, SemanticTableCheck]],
 ) -> list[InsertNode]:
-    if not matched_tables:
-        return []
     existing = {
         _normalized_heading(node.text)
         for node in _walk_nodes(document.nodes)
@@ -578,6 +584,16 @@ def _missing_form_heading_operations(
         heading: index for index, heading in enumerate(contract.required_headings)
     }
     anchors: list[tuple[int, int]] = []
+    required_by_normalized = {
+        _normalized_heading(heading): index
+        for index, heading in enumerate(contract.required_headings)
+    }
+    for node_index, node in enumerate(document.nodes):
+        if node.kind is not NodeKind.HEADING or not node.text:
+            continue
+        heading_index = required_by_normalized.get(_normalized_heading(node.text))
+        if heading_index is not None:
+            anchors.append((heading_index, node_index))
     for node_index, _node, table in matched_tables:
         heading_index = _table_heading_index(table, contract.required_headings)
         if heading_index is not None:
@@ -585,7 +601,7 @@ def _missing_form_heading_operations(
     if not anchors:
         return []
     anchors.sort()
-    last_table_index = max(node_index for node_index, _node, _table in matched_tables)
+    last_anchor_index = max(node_index for _heading_index, node_index in anchors)
     inserted_at_base: dict[int, int] = {}
     operations: list[InsertNode] = []
     for heading in contract.required_headings:
@@ -598,7 +614,7 @@ def _missing_form_heading_operations(
                 for anchor_heading_index, node_index in anchors
                 if anchor_heading_index >= heading_index
             ),
-            last_table_index + 1,
+            last_anchor_index + 1,
         )
         offset = sum(
             count for index, count in inserted_at_base.items() if index <= base_index
@@ -616,6 +632,80 @@ def _missing_form_heading_operations(
         )
         inserted_at_base[base_index] = inserted_at_base.get(base_index, 0) + 1
     return operations
+
+
+def _has_form_layout_anchor(
+    document: WorkingDocument,
+    contract: SemanticStructureCheck,
+    matched_tables: list[tuple[int, DocumentNode, SemanticTableCheck]],
+) -> bool:
+    if matched_tables:
+        return True
+    required = {
+        _normalized_heading(heading) for heading in contract.required_headings
+    }
+    return any(
+        node.kind is NodeKind.HEADING
+        and node.text
+        and _normalized_heading(node.text) in required
+        for node in document.nodes
+    )
+
+
+def _missing_form_table_operations(
+    document: WorkingDocument,
+    contract: SemanticStructureCheck,
+    matched_table_ids: set[str],
+) -> list[InsertNode]:
+    candidate = document
+    operations: list[InsertNode] = []
+    for table in contract.required_tables:
+        if table.id in matched_table_ids:
+            continue
+        heading_index = _table_heading_index(table, contract.required_headings)
+        if heading_index is None:
+            continue
+        heading = contract.required_headings[heading_index]
+        insertion_index = next(
+            (
+                index + 1
+                for index, node in enumerate(candidate.nodes)
+                if node.kind is NodeKind.HEADING
+                and node.text
+                and _normalized_heading(node.text) == _normalized_heading(heading)
+            ),
+            None,
+        )
+        if insertion_index is None:
+            continue
+        operation = InsertNode(
+            index=insertion_index,
+            node=DocumentNode(
+                id=(
+                    "structural-table:"
+                    f"{uuid5(NAMESPACE_URL, f'{contract.rule_id}:{table.id}')}"
+                ),
+                kind=NodeKind.TABLE,
+                data=_empty_contract_table_data(table),
+                flags=[
+                    "structural-edit",
+                    "empty-template-table",
+                    f"template-table:{table.id}",
+                ],
+            ),
+        )
+        operations.append(operation)
+        candidate = apply_operations(candidate, [operation])
+    return operations
+
+
+def _empty_contract_table_data(table: SemanticTableCheck) -> dict:
+    if table.layout == "key_value":
+        return {"rows": [[label, ""] for label in table.required_labels]}
+    return {
+        "headers": list(table.required_labels),
+        "rows": [[""] * len(table.required_labels)],
+    }
 
 
 def _table_heading_index(

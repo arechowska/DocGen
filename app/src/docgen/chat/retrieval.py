@@ -10,11 +10,18 @@ from docgen.extraction.schemas import BlockKind, NormalizedBlock
 
 
 @dataclass(frozen=True)
+class SourceReference:
+    id: str
+    display_name: str
+
+
+@dataclass(frozen=True)
 class SourceSnapshot:
     configured_source_count: int
     blocks: tuple[NormalizedBlock, ...] | list[NormalizedBlock] = ()
     warnings: tuple[str, ...] = ()
     identity: str | None = None
+    sources: tuple[SourceReference, ...] = ()
 
 
 @dataclass(frozen=True)

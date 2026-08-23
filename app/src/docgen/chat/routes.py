@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from docgen.ai.client import ModelConfigurationError, ModelError, build_text_model
 from docgen.chat.errors import ChatError, ChatErrorCode
 from docgen.chat.proposals import FindingFixProposalRepository
-from docgen.chat.retrieval import SourceSnapshot, SourceSnapshotCache
+from docgen.chat.retrieval import SourceReference, SourceSnapshot, SourceSnapshotCache
 from docgen.chat.schemas import ChatEditRequest, ChatEditResult
 from docgen.chat.service import ChatService, validate_finding_fix_scope
 from docgen.config import Settings
@@ -197,6 +197,29 @@ def post_propose_finding_fix(
                     after_preview,
                     "Добавлены пустые разделы:\n"
                     + "\n".join(f"— {heading}" for heading in inserted_headings),
+                )
+                if part
+            )
+        inserted_tables = [
+            _node_preview(operation.node)
+            for operation in proposal.operations
+            if getattr(operation, "kind", None) == "insert_node"
+            and operation.node.kind.value == "table"
+        ]
+        if inserted_tables:
+            before_preview = "\n\n".join(
+                part
+                for part in (
+                    before_preview,
+                    f"Отсутствуют таблицы: {len(inserted_tables)}",
+                )
+                if part
+            )
+            after_preview = "\n\n".join(
+                part
+                for part in (
+                    after_preview,
+                    "Добавлены пустые таблицы:\n\n" + "\n\n".join(inserted_tables),
                 )
                 if part
             )
@@ -538,12 +561,20 @@ def _source_snapshot_from_project(
             blocks=normalized.blocks,
             warnings=tuple(normalized.warnings),
             identity=identity,
+            sources=tuple(
+                SourceReference(id=source.id, display_name=source.display_name)
+                for source in configured
+            ),
         )
     except (ExtractionError, PageLimitExceeded, ValueError) as error:
         snapshot = SourceSnapshot(
             configured_source_count=len(configured),
             warnings=(str(error),),
             identity=identity,
+            sources=tuple(
+                SourceReference(id=source.id, display_name=source.display_name)
+                for source in configured
+            ),
         )
     if cache is not None:
         cache.put(project_id, snapshot)

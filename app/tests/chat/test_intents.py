@@ -35,6 +35,15 @@ def test_router_recognizes_grounded_fact_edit(document: WorkingDocument) -> None
     assert decision.retrieval_query == "лимит"
 
 
+def test_router_recognizes_fill_empty_fields_from_source(document: WorkingDocument) -> None:
+    decision = route_intent(
+        "Заполни пустующие поля в документе из источника requirements.docx",
+        document,
+    )
+
+    assert decision.kind is IntentKind.GROUNDED_EDIT
+
+
 def test_router_keeps_faq_action_template_specific(document: WorkingDocument) -> None:
     faq = document.model_copy(
         update={"template_id": "faq", "build_template_id": "faq"}
