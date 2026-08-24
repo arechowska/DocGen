@@ -243,7 +243,7 @@ def test_assemble_saves_grounded_document_after_gated_external_calls(
     assert "storage_path" not in model.user_prompt
 
 
-def test_assemble_without_template_saves_source_conversion_as_project_document(
+def test_assemble_without_template_cannot_save_a_conversion_as_editor_document(
     blocks: list[NormalizedBlock],
 ) -> None:
     events: list[str] = []
@@ -261,14 +261,12 @@ def test_assemble_without_template_saves_source_conversion_as_project_document(
     job = _job(JobKind.ASSEMBLE)
     job.template_id = "no-template"
 
-    document = workflow.run(job, progress)
+    with pytest.raises(WorkflowError, match="требует смысловой шаблон"):
+        workflow.run(job, progress)
 
     assert "text" not in events
     assert "vision" not in events
-    assert documents.get_document("p1") == document
-    assert document.template_id == "no-template"
-    assert document.nodes
-    assert "save" in events
+    assert documents.get_document("p1") is None
 
 
 def test_assemble_uses_job_template_when_model_returns_a_different_template_id(

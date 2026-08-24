@@ -500,19 +500,18 @@ const buildButton = {{
   setAttribute(name, value) {{ if (name === "form") this.formTarget = value; }},
   querySelector(selector) {{ return selector === "[data-build-label]" ? label : null; }},
 }};
-const formatListeners = new Map();
-const savedFormats = [];
-const format = {{
-  value: "docx",
-  dataset: {{ formatStorageKey: "docgen:format:p1" }},
-  options: [{{ value: "docx" }}, {{ value: "html" }}],
-  addEventListener(type, listener) {{ formatListeners.set(type, listener); }},
-}};
+const format = {{ value: "html" }};
+const formatting = {{ value: "docgen-light", disabled: false }};
+const conversionFormat = {{ value: "" }};
+const conversionTemplate = {{ value: "" }};
 globalThis.document = {{
   querySelector(selector) {{
     if (selector === "[data-template-source]") return source;
     if (selector === "#buildButton") return buildButton;
     if (selector === "#formatSelect") return format;
+    if (selector === "#export-template-select select[name='template_id']") return formatting;
+    if (selector === "[data-conversion-format]") return conversionFormat;
+    if (selector === "[data-conversion-template]") return conversionTemplate;
     return null;
   }},
   querySelectorAll(selector) {{
@@ -521,29 +520,19 @@ globalThis.document = {{
   }},
   addEventListener() {{}},
 }};
-globalThis.window = {{
-  location: {{}},
-  addEventListener() {{}},
-  localStorage: {{
-    getItem(key) {{ return key === "docgen:format:p1" ? "html" : null; }},
-    setItem(key, value) {{ savedFormats.push([key, value]); }},
-  }},
-}};
 {script.text}
 source.value = "faq";
 listeners.get("change")();
 if (targets.some((target) => target.value !== "faq")) {{
   throw new Error(`template targets were not synchronized: ${{targets.map((target) => target.value)}}`);
 }}
+if (buildButton.formTarget !== "assembleForm") throw new Error("semantic build form was changed");
 source.value = "no-template";
 listeners.get("change")();
-if (buildButton.formTarget !== "assembleForm") throw new Error("project build form was not selected");
+if (buildButton.formTarget !== "conversionForm") throw new Error("conversion form was not selected");
 if (label.textContent !== "Собрать") throw new Error("build button label was changed");
-if (buildButton.disabled) throw new Error("project build was disabled despite an available source");
-format.value = "docx";
-formatListeners.get("change")();
-if (savedFormats.at(-1)?.join(":") !== "docgen:format:p1:docx") {{
-  throw new Error("selected export format was not persisted");
+if (conversionFormat.value !== "html" || conversionTemplate.value !== "docgen-light") {{
+  throw new Error("conversion output was not synchronized");
 }}
 """
 
@@ -571,13 +560,6 @@ const canvas = element({{ innerHTML: '<p data-node-id="n1">Правка</p>', fo
 const title = element({{ value: "После сборки" }});
 const saveButton = element({{ disabled: false }});
 const saveStatus = element({{ textContent: "" }});
-const resultStatus = element({{
-  textContent: "Не собран",
-  classList: {{ add(name) {{ this.added = name; }} }},
-}});
-const resultReady = element({{ hidden: true }});
-const resultEmpty = element({{ hidden: false }});
-const resultFilename = element({{ textContent: "" }});
 let scheduledClear = null;
 const editor = element({{
   dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
@@ -597,10 +579,6 @@ globalThis.document = {{
   body: {{}},
   querySelector(selector) {{
     if (selector === "#docgen2Editor") return currentEditor;
-    if (selector === "#resultStatus") return resultStatus;
-    if (selector === "#resultReady") return resultReady;
-    if (selector === "#resultEmpty") return resultEmpty;
-    if (selector === "#resultFilename") return resultFilename;
     return null;
   }},
   querySelectorAll() {{ return []; }},
@@ -610,14 +588,7 @@ globalThis.document = {{
 globalThis.window = {{
   getSelection() {{ return null; }},
   htmx: {{
-    trigger(target, name, detail) {{
-      exportRefresh = {{
-        target,
-        name,
-        detail,
-        resultWasReady: !resultReady.hidden && resultEmpty.hidden,
-      }};
-    }},
+    trigger(target, name, detail) {{ exportRefresh = {{ target, name, detail }}; }},
   }},
 }};
 globalThis.setTimeout = (callback, delay) => {{
@@ -650,13 +621,6 @@ if (
   exportRefresh?.detail?.revision !== 2
 ) {{
   throw new Error("export refresh was not triggered after save");
-}}
-if (!exportRefresh.resultWasReady) throw new Error("result was not shown before export refresh");
-if (resultStatus.textContent !== "Готово" || resultStatus.classList.added !== "done") {{
-  throw new Error("result status was not updated after save");
-}}
-if (resultFilename.textContent !== "После сборки") {{
-  throw new Error(`unexpected result filename: ${{resultFilename.textContent}}`);
 }}
 if (!canvas.innerHTML.includes('data-node-id="manual-1"')) {{
   throw new Error("normalized html was not applied");

@@ -37,7 +37,6 @@
           <select
             id="formatSelect"
             name="format"
-            data-format-storage-key="docgen:format:{{ project_id }}"
             hx-get="/projects/{{ project_id }}/export/templates"
             hx-trigger="load, change"
             hx-target="#export-template-select"

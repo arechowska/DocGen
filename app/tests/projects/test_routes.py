@@ -255,11 +255,7 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     assert document_canvas is not None
     assert document_canvas.get("contenteditable") == "true"
     assert soup.find(id="chatPanel") is not None
-    result_panel = soup.find(id="resultPanel")
-    assert result_panel is not None
-    assert result_panel.find(id="resultReady").has_attr("hidden")
-    assert result_panel.find(id="resultEmpty").has_attr("hidden") is False
-    assert result_panel.find(id="export-result") is not None
+    assert soup.find(id="resultPanel") is not None
     assert soup.find(id="editor-shell") is None
     assert "Formatta" in soup.get_text(" ")
     assert "Рабочее пространство" not in soup.get_text(" ")
@@ -283,8 +279,9 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     assert template_select is not None
     assert not template_select.has_attr("disabled")
     assert soup.find(id="buildButton") is not None
-    assert soup.find(id="conversionForm") is None
-    assert soup.find(id="formatSelect").get("data-format-storage-key")
+    conversion_form = soup.find(id="conversionForm")
+    assert conversion_form is not None
+    assert conversion_form.get("hx-target") == "#resultPanel"
     assert soup.find(id="chat-panel") is None
 
 

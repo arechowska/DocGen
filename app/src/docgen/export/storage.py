@@ -21,6 +21,12 @@ from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import OutputFormat
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_FORMAT_SUFFIXES: dict[OutputFormat, str] = {
+    OutputFormat.DOCX: ".docx",
+    OutputFormat.PDF: ".pdf",
+    OutputFormat.HTML: ".html",
+    OutputFormat.MARKDOWN: ".md",
+}
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,41 @@ class ExportStorage:
         resolved_path = (self._data_dir / path).resolve()
         self._require_within(resolved_path, self._data_dir)
         return resolved_path
+
+    def latest(
+        self,
+        project_id: str,
+        format: OutputFormat,
+        template_id: str,
+    ) -> StoredExport | None:
+        """Return the newest completed export for one project/format/template."""
+        validated_template_id = self._validated_identifier(template_id)
+        project_dir = self._resolved_project_dir(project_id)
+        exports_dir = project_dir / "exports"
+        if not exports_dir.exists():
+            return None
+        if exports_dir.is_symlink() or not exports_dir.is_dir():
+            raise ValueError("Недопустимый путь")
+        exports_dir = exports_dir.resolve()
+        self._require_within(exports_dir, project_dir)
+
+        expected_suffix = f"-{validated_template_id}{_FORMAT_SUFFIXES[format]}"
+        candidates = [
+            path
+            for path in exports_dir.iterdir()
+            if not path.is_symlink()
+            and path.is_file()
+            and path.name.endswith(expected_suffix)
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+        self._require_within(latest.resolve(), exports_dir)
+        return StoredExport(
+            relative_path=latest.relative_to(self._data_dir).as_posix(),
+            filename=latest.name,
+            size_bytes=latest.stat().st_size,
+        )
 
     def _exports_dir(self, project_id: str) -> Path:
         project_dir = self._resolved_project_dir(project_id)

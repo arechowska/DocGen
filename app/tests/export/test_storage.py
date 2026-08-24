@@ -45,6 +45,33 @@ def test_save_replaces_previous_export_for_same_format_and_template(
     assert storage.resolve(stored_second.relative_path).read_bytes() == second.content
 
 
+def test_latest_returns_newest_matching_project_export(storage: ExportStorage) -> None:
+    older = storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(filename="older.html", media_type="text/html", content=b"older"),
+    )
+    newer = storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(filename="newer.html", media_type="text/html", content=b"newer"),
+    )
+
+    latest = storage.latest("proj-1", OutputFormat.HTML, "docgen-light")
+
+    assert latest is not None
+    assert latest.relative_path == newer.relative_path
+    assert latest.filename == newer.filename
+    assert latest.size_bytes == len(b"newer")
+    assert latest.relative_path != older.relative_path
+
+
+def test_latest_returns_none_without_matching_export(storage: ExportStorage) -> None:
+    assert storage.latest("proj-1", OutputFormat.HTML, "docgen-light") is None
+
+
 def test_save_deletes_part_file_and_preserves_previous_target_on_write_failure(
     storage: ExportStorage, monkeypatch: pytest.MonkeyPatch
 ) -> None:

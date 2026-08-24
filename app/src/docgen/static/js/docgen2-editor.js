@@ -76,32 +76,24 @@
       // Storage can be unavailable in privacy modes; server state remains usable.
     }
   }
-  const formatSource = document.querySelector("#formatSelect");
-  const formatStorageKey = formatSource?.dataset?.formatStorageKey;
-  if (formatSource && formatStorageKey) {
-    try {
-      const storedFormat = window.localStorage.getItem(formatStorageKey);
-      const storedFormatExists = Array.from(formatSource.options).some(
-        (option) => option.value === storedFormat,
-      );
-      if (storedFormat && storedFormatExists) formatSource.value = storedFormat;
-    } catch (_) {
-      // Keep the server-selected format when browser storage is unavailable.
-    }
-    formatSource.addEventListener("change", () => {
-      try {
-        window.localStorage.setItem(formatStorageKey, formatSource.value);
-      } catch (_) {
-        // The current selection still works for this page.
-      }
-    });
-  }
   const synchronizeConversion = () => {
     const buildButton = document.querySelector("#buildButton");
+    const formatSource = document.querySelector("#formatSelect");
+    const formattingSource = document.querySelector(
+      "#export-template-select select[name='template_id']",
+    );
+    const conversionFormat = document.querySelector("[data-conversion-format]");
+    const conversionTemplate = document.querySelector("[data-conversion-template]");
+    const withoutTemplate = templateSource?.value === "no-template";
+    if (conversionFormat) conversionFormat.value = formatSource?.value || "";
+    if (conversionTemplate) {
+      conversionTemplate.value = formattingSource?.disabled ? "" : formattingSource?.value || "";
+    }
     if (!buildButton) return;
-    buildButton.setAttribute("form", "assembleForm");
+    buildButton.setAttribute("form", withoutTemplate ? "conversionForm" : "assembleForm");
     const sourceAvailable = buildButton.dataset.sourceAvailable === "true";
-    buildButton.disabled = !sourceAvailable;
+    const conversionReady = Boolean(formatSource?.value && conversionTemplate?.value);
+    buildButton.disabled = !sourceAvailable || (withoutTemplate && !conversionReady);
   };
   const synchronizeTemplate = () => {
     document.querySelectorAll("[data-template-target]").forEach((target) => {
@@ -450,19 +442,10 @@
     const statusText = document.querySelector("#statusText");
     const chatInput = document.querySelector("#chatInput");
     const sendButton = document.querySelector("#sendButton");
-    const resultStatus = document.querySelector("#resultStatus");
-    const resultReady = document.querySelector("#resultReady");
-    const resultEmpty = document.querySelector("#resultEmpty");
-    const resultFilename = document.querySelector("#resultFilename");
     statusBadge?.setAttribute("data-state", "ready");
     if (statusText) statusText.textContent = "Готово";
     chatInput?.removeAttribute("disabled");
     sendButton?.removeAttribute("disabled");
-    resultStatus?.classList?.add("done");
-    if (resultStatus) resultStatus.textContent = "Готово";
-    if (resultReady) resultReady.hidden = false;
-    if (resultEmpty) resultEmpty.hidden = true;
-    if (resultFilename && titleInput?.value) resultFilename.textContent = titleInput.value;
   };
 
   const saveWorkspace = async () => {
@@ -498,12 +481,12 @@
       document.querySelectorAll('input[name="revision"]').forEach((input) => {
         input.value = String(result.revision);
       });
-      markDocumentReady();
       window.htmx?.trigger?.(
         document.body,
         "docgen:document-updated",
         {revision: result.revision},
       );
+      markDocumentReady();
       setSaveStatus("Сохранено в проекте", "saved");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Не удалось сохранить";

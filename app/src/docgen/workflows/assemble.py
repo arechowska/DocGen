@@ -28,7 +28,6 @@ from docgen.projects.repository import ProjectRepository
 from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
 from docgen.templates_catalog.schemas import SemanticTemplate
 
-from .conversion import conversion_document
 from .errors import WorkflowError
 from .normalize import NormalizationWorkflow, NormalizedProject
 from .structure import prepare_assembled_document
@@ -41,6 +40,7 @@ _DOCUMENT_LENGTH_ERROR = (
 )
 _GROUNDING_ERROR = "Результат не прошёл проверку по источникам"
 _ALL_SOURCES_UNAVAILABLE_ERROR = "Не удалось получить ни один источник для сборки"
+_TEMPLATE_REQUIRED_ERROR = "Сборка документа требует смысловой шаблон"
 _DEFAULT_ASSEMBLY_BATCH_CHARS = 40_000
 
 
@@ -74,19 +74,12 @@ class AssembleWorkflow:
         project = self._projects.get(job.project_id)
         if project is None:
             raise WorkflowError(_PROJECT_NOT_FOUND)
+        if job.template_id == NO_TEMPLATE_ID:
+            raise WorkflowError(_TEMPLATE_REQUIRED_ERROR)
 
         normalized = normalize_sources(self._normalization, job.project_id, progress)
         if not normalized.blocks and normalized.warnings:
             raise WorkflowError(_ALL_SOURCES_UNAVAILABLE_ERROR)
-        if job.template_id == NO_TEMPLATE_ID:
-            document = conversion_document(
-                normalized.blocks,
-                getattr(project, "name", "Документ"),
-            )
-            progress(100, "Сохранение документа")
-            self._documents.save_document(job.project_id, document)
-            return document
-
         template = self._templates.get(job.template_id)
         blocks = enrich_images(normalized.blocks, self._vision_model, progress)
 
