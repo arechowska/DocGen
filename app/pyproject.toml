@@ -41,6 +41,8 @@ build-backend = "setuptools.build_meta"
   "templates/*.css",
   "templates/*.html.j2",
   "templates/*.docx",
+  "templates/*.ttf",
+  "templates/*.otf",
 ]
 
 [tool.pytest.ini_options]

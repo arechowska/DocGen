@@ -56,6 +56,10 @@ def test_wheel_clean_install_renders_pages_outside_source_tree(tmp_path: Path) -
     # template.py) is a build-time-only input and must not bloat the
     # shipped wheel.
     assert "docgen/formatting/templates/colvir.docx" in members
+    assert "docgen/formatting/templates/Akrobat-Bold.otf" in members
+    assert "docgen/formatting/templates/Roboto-Regular.ttf" in members
+    assert "docgen/formatting/templates/Roboto-Light.ttf" in members
+    assert "docgen/formatting/templates/Roboto-Bold.ttf" in members
     assert not any(name.endswith(".dotx") for name in members)
 
     subprocess.run(
@@ -117,6 +121,11 @@ with TestClient(create_app(settings)) as client:
     assert "Formatta" in detail.text
     assert "К выбору проекта" in detail.text
     assert "Wheel smoke" in detail.text
+    templates = client.get(
+        created.headers["location"] + "/export/templates?format=html"
+    )
+    assert templates.status_code == 200
+    assert 'value="docgen-light"' in templates.text
     assert client.get("/static/vendor/htmx-2.0.8.min.js").status_code == 200
 '''
     environment = os.environ.copy()
