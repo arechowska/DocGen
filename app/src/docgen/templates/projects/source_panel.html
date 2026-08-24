@@ -113,7 +113,9 @@
     id="conversionForm"
     action="/projects/{{ project.id }}/convert"
     method="post"
-    target="_blank"
+    hx-post="/projects/{{ project.id }}/convert"
+    hx-target="#resultPanel"
+    hx-swap="outerHTML"
   >
     <input type="hidden" name="output_format" value="html" data-conversion-format>
     <input type="hidden" name="formatting_template_id" value="" data-conversion-template>

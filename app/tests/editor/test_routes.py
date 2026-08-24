@@ -6,14 +6,18 @@ from uuid import uuid4
 import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import DocumentNode, DocumentOrigin, NodeKind, WorkingDocument
+from docgen.editor import routes as editor_routes
 from docgen.extraction.schemas import Provenance
+from docgen.jobs.models import Job
 from docgen.main import create_app
 from docgen.models import Project
+from docgen.sources.repository import SourceRepository
 
 
 @pytest.fixture
@@ -191,6 +195,46 @@ def test_workspace_save_preserves_semantic_metadata(
     assert saved.nodes[0].flags == original.nodes[0].flags
 
 
+def test_workspace_save_allows_large_assembled_document_and_deleted_section(
+    client: TestClient, project_with_document: Project
+) -> None:
+    large_text = "Содержимое " * 50_000
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Документ без аннотации",
+            "html": f'<p data-node-id="p1">{large_text}</p>',
+            "revision": 1,
+        },
+    )
+
+    assert len(response.request.content) > 500_000
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id)
+    assert [node.id for node in saved.nodes] == ["p1"]
+    assert saved.nodes[0].text == large_text.strip()
+
+
+def test_workspace_save_rejects_oversized_document_with_friendly_detail(
+    client: TestClient,
+    project_with_document: Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(editor_routes, "MAX_WORKSPACE_HTML_CHARS", 100)
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Слишком большой документ",
+            "html": "<p>" + ("Текст " * 30) + "</p>",
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Документ слишком большой для сохранения"}
+
+
 def test_workspace_save_creates_first_document_for_empty_project(
     client: TestClient,
 ) -> None:
@@ -199,6 +243,11 @@ def test_workspace_save_creates_first_document_for_empty_project(
         session.add(project)
         session.commit()
         project_id = project.id
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    assert page.find("button", string="Создать документ") is None
+    assert page.find(id="docgen2DocumentCanvas").get("contenteditable") == "true"
+    assert page.find("button", attrs={"data-editor-save": True}) is not None
 
     response = client.post(
         f"/projects/{project_id}/editor/save",
@@ -218,7 +267,163 @@ def test_workspace_save_creates_first_document_for_empty_project(
         NodeKind.HEADING,
         NodeKind.PARAGRAPH,
     ]
+
+    refreshed = BeautifulSoup(
+        client.get(f"/projects/{project_id}").text,
+        "html.parser",
+    )
+    build_button = refreshed.find(id="buildButton")
+    assert build_button is not None
+    assert build_button.get("form") == "assembleForm"
+    assert build_button.has_attr("disabled")
     assert all(node.flags == ["manual-edit"] for node in saved.nodes)
+
+
+def test_single_source_can_be_imported_into_editor_without_job(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Проект для редактирования")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={
+            "file": (
+                "case.md",
+                "# Сценарий\n\nТекст для правки".encode(),
+                "text/markdown",
+            )
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    assert page.find("button", string="Создать документ") is None
+    assert page.find("button", string="Редактировать") is None
+
+    conversion = client.post(
+        f"/projects/{project_id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+    assert conversion.status_code == 200
+    conversion_result = BeautifulSoup(conversion.text, "html.parser")
+    actions = conversion_result.find(id="conversion-result-actions")
+    assert actions is not None
+    assert actions.find("a", string="Открыть") is not None
+    action = actions.find("form", attrs={"data-editor-start-action": True})
+    assert action is not None
+    assert action.get("action") == f"/projects/{project_id}/editor/import-source"
+    assert action.get_text(" ", strip=True) == "Редактировать"
+    stylesheet = client.get("/static/css/docgen.css")
+    assert stylesheet.status_code == 200
+    assert ".export-result.conversion-result-buttons{flex-flow:row wrap" in stylesheet.text
+
+    reloaded = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    assert reloaded.find(id="docgen2Editor").find("button", string="Редактировать") is None
+    assert reloaded.find(id="resultPanel").find("button", string="Редактировать") is not None
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project_id}#docgen2Editor"
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        sources = SourceRepository(session).list_for_project(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.origin is DocumentOrigin.IMPORTED
+        assert document.source_id == sources[0].id
+        assert document.template_id == "no-template"
+        assert document.build_template_id is None
+        assert [node.text for node in document.nodes] == [
+            "Сценарий",
+            "Текст для правки",
+        ]
+        assert list(session.scalars(select(Job).where(Job.project_id == project_id))) == []
+
+    refreshed = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    canvas = refreshed.find(id="docgen2DocumentCanvas")
+    assert canvas is not None
+    assert "Сценарий" in canvas.get_text(" ", strip=True)
+    assert "Текст для правки" in canvas.get_text(" ", strip=True)
+    assert refreshed.find("button", string="Редактировать") is None
+    result = refreshed.find(id="resultPanel")
+    selected_format = refreshed.find(id="formatSelect").find("option", selected=True)
+    assert result is not None
+    assert result.find(id="export-result") is not None
+    assert result.find(id="conversion-result-actions") is None
+    assert selected_format["value"] == "html"
+
+
+def test_import_source_does_not_replace_existing_editor_document(
+    client: TestClient,
+    project_with_document: Project,
+) -> None:
+    upload = client.post(
+        f"/projects/{project_with_document.id}/sources/files",
+        files={"file": ("case.md", b"# Replacement", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+    original = _stored_document(client, project_with_document.id)
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert "Импорт не заменяет существующие правки" in response.text
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(
+            project_with_document.id
+        )
+        assert stored == (original, 1)
+
+
+@pytest.mark.parametrize("source_count", [0, 2])
+def test_import_source_requires_exactly_one_source(
+    client: TestClient,
+    source_count: int,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Пустой проект")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    for index in range(source_count):
+        upload = client.post(
+            f"/projects/{project_id}/sources/files",
+            files={
+                "file": (
+                    f"source-{index}.md",
+                    f"# Source {index}".encode(),
+                    "text/markdown",
+                )
+            },
+            headers={"HX-Request": "true"},
+        )
+        assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert "Для переноса в редактор нужен ровно один источник" in response.text
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document(project_id) is None
+        assert list(session.scalars(select(Job).where(Job.project_id == project_id))) == []
 
 
 def test_workspace_save_updates_order_lists_tables_and_new_manual_nodes(

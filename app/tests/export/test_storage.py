@@ -45,6 +45,114 @@ def test_save_replaces_previous_export_for_same_format_and_template(
     assert storage.resolve(stored_second.relative_path).read_bytes() == second.content
 
 
+def test_save_conversion_uses_a_name_not_shared_with_editor_exports(
+    storage: ExportStorage,
+) -> None:
+    rendered = RenderedFile(
+        filename="document.html",
+        media_type="text/html",
+        content=b"direct conversion",
+    )
+
+    conversion = storage.save_conversion(
+        "proj-1", OutputFormat.HTML, "docgen-light", rendered
+    )
+    editor_export = storage.save(
+        "proj-1", OutputFormat.HTML, "docgen-light", rendered
+    )
+
+    assert conversion.filename == "document-conversion-docgen-light.html"
+    assert conversion.relative_path != editor_export.relative_path
+    assert storage.resolve(conversion.relative_path).read_bytes() == rendered.content
+
+
+def test_latest_returns_newest_matching_project_export(storage: ExportStorage) -> None:
+    older = storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(filename="older.html", media_type="text/html", content=b"older"),
+    )
+    newer = storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(filename="newer.html", media_type="text/html", content=b"newer"),
+    )
+
+    latest = storage.latest("proj-1", OutputFormat.HTML, "docgen-light")
+
+    assert latest is not None
+    assert latest.relative_path == newer.relative_path
+    assert latest.filename == newer.filename
+    assert latest.size_bytes == len(b"newer")
+    assert latest.relative_path != older.relative_path
+
+
+def test_latest_returns_none_without_matching_export(storage: ExportStorage) -> None:
+    assert storage.latest("proj-1", OutputFormat.HTML, "docgen-light") is None
+
+
+def test_latest_conversion_excludes_regular_export_from_legacy_files(
+    storage: ExportStorage,
+) -> None:
+    legacy_conversion = storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(
+            filename="source.html",
+            media_type="text/html",
+            content=b"saved source",
+        ),
+    )
+    editor_export = storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(
+            filename="editor.html",
+            media_type="text/html",
+            content=b"rebuilt editor",
+        ),
+    )
+
+    latest = storage.latest_conversion(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        legacy_export_paths={editor_export.relative_path},
+    )
+
+    assert latest == legacy_conversion
+
+
+def test_latest_conversion_prefers_new_conversion_namespace(
+    storage: ExportStorage,
+) -> None:
+    storage.save(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(
+            filename="legacy.html", media_type="text/html", content=b"legacy"
+        ),
+    )
+    current = storage.save_conversion(
+        "proj-1",
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(
+            filename="current.html", media_type="text/html", content=b"current"
+        ),
+    )
+
+    assert (
+        storage.latest_conversion("proj-1", OutputFormat.HTML, "docgen-light")
+        == current
+    )
+
+
 def test_save_deletes_part_file_and_preserves_previous_target_on_write_failure(
     storage: ExportStorage, monkeypatch: pytest.MonkeyPatch
 ) -> None:

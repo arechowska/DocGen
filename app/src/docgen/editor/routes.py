@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
@@ -21,27 +21,114 @@ from docgen.documents.operations import (
     find_node,
 )
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import DocumentNode, DocumentOrigin, NodeKind, WorkingDocument
 from docgen.documents.style import (
     ALLOWED_STYLE_PROPERTIES,
     normalized_style,
     normalized_style_attribute,
 )
 from docgen.editor.validation import ImagePayload, ListPayload, TablePayload
+from docgen.extraction.confluence import ConfluenceClient
+from docgen.extraction.registry import ExtractionError, ExtractorRegistry
 from docgen.projects.repository import ProjectRepository
-from docgen.projects.routes import get_session
+from docgen.projects.routes import get_session, project_detail_response
+from docgen.sources.repository import SourceRepository
+from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import NO_TEMPLATE_ID
 from docgen.web import templates
+from docgen.workflows.conversion import conversion_document
+from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 
 router = APIRouter(prefix="/projects")
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+MAX_WORKSPACE_HTML_CHARS = 20_000_000
 
 
 class Docgen2SavePayload(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    html: str = Field(max_length=500_000)
+    html: str
     revision: int | None = Field(default=None, ge=1)
+
+
+@router.post("/{project_id}/editor/import-source")
+def import_source_into_editor(
+    request: Request,
+    project_id: str,
+    session: SessionDependency,
+) -> Response:
+    project = _project_or_404(session, project_id)
+    documents = DocumentRepository(session)
+    if documents.get_document(project_id) is not None:
+        return _editor_start_error(
+            request,
+            session,
+            project_id,
+            "Документ уже создан. Импорт не заменяет существующие правки.",
+            status.HTTP_409_CONFLICT,
+        )
+
+    sources = SourceRepository(session)
+    project_sources = sources.list_for_project(project_id)
+    if len(project_sources) != 1:
+        return _editor_start_error(
+            request,
+            session,
+            project_id,
+            "Для переноса в редактор нужен ровно один источник.",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+
+    source = project_sources[0]
+    settings = request.app.state.settings
+    try:
+        normalized = NormalizationWorkflow(
+            sources,
+            LocalStorage(settings.data_dir),
+            ExtractorRegistry.default(settings),
+            ConfluenceClient.from_settings(settings),
+        ).run(project_id)
+        blocks = [
+            block
+            for block in normalized.blocks
+            if any(item.source_id == source.id for item in block.provenance)
+        ]
+        if not blocks:
+            raise ExtractionError("В источнике нет содержимого для редактирования")
+        document = conversion_document(
+            blocks,
+            source.display_name or project.name,
+        ).model_copy(
+            update={
+                "origin": DocumentOrigin.IMPORTED,
+                "source_id": source.id,
+            }
+        )
+        revision = documents.create_document(project_id, document)
+    except (ExtractionError, PageLimitExceeded, ValueError) as error:
+        session.rollback()
+        return _editor_start_error(
+            request,
+            session,
+            project_id,
+            str(error),
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+
+    if revision is None:
+        session.rollback()
+        return _editor_start_error(
+            request,
+            session,
+            project_id,
+            "Документ уже создан. Импорт не заменяет существующие правки.",
+            status.HTTP_409_CONFLICT,
+        )
+    session.commit()
+    return RedirectResponse(
+        url=f"/projects/{project_id}#docgen2Editor",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.post("/{project_id}/editor/save")
@@ -51,6 +138,11 @@ def save_docgen2_workspace(
     session: SessionDependency,
 ) -> Response:
     _project_or_404(session, project_id)
+    if len(payload.html) > MAX_WORKSPACE_HTML_CHARS:
+        return JSONResponse(
+            {"detail": "Документ слишком большой для сохранения"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
     title = payload.title.strip()
     if not title:
         raise HTTPException(
@@ -343,6 +435,22 @@ def _project_or_404(session: Session, project_id: str):
             detail="Проект не найден",
         )
     return project
+
+
+def _editor_start_error(
+    request: Request,
+    session: Session,
+    project_id: str,
+    message: str,
+    response_status: int,
+) -> Response:
+    return project_detail_response(
+        request,
+        project_id,
+        session,
+        source_error=message,
+        status_code=response_status,
+    )
 
 
 def _apply_and_render_node(
@@ -726,6 +834,7 @@ def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode
         _update_workspace_style_data(data, element)
     elif kind is NodeKind.LIST:
         items = element.find_all("li", recursive=False)
+        data["ordered"] = element.name == "ol"
         data["items"] = [item.get_text(" ", strip=True) for item in items]
         data["items_html"] = [_inner_html(item) for item in items]
         item_styles = [_workspace_item_style_attribute(item) for item in items]

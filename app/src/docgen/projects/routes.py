@@ -6,12 +6,14 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from docgen.documents.repository import DocumentRepository, StoredCheckReport
-from docgen.documents.schemas import WorkingDocument
+from docgen.documents.schemas import DocumentOrigin, WorkingDocument
+from docgen.export.storage import ExportStorage
+from docgen.formatting.schemas import OutputFormat
 from docgen.generation.targets import supported_check_targets
-from docgen.jobs.repository import ActiveProjectJobExists
+from docgen.jobs.repository import ActiveProjectJobExists, JobRepository
 from docgen.sources.service import SourceService
 from docgen.sources.storage import LocalStorage
-from docgen.templates_catalog.loader import TemplateCatalog
+from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
 from docgen.web import templates
 
 from .repository import UNTITLED_DOCUMENT_NAME, ProjectRepository
@@ -127,8 +129,34 @@ def project_detail_response(
     stored_document = documents.get_document_with_revision(project_id)
     document = stored_document[0] if stored_document is not None else None
     revision = stored_document[1] if stored_document is not None else None
+    workspace_html = documents.get_workspace_html(project_id)
     latest_report = documents.get_latest_report_record(project_id)
     sources = source_service.list(project_id)
+    current_template_id = selected_template_id(document, latest_report)
+    conversion_candidate = (
+        ExportStorage(request.app.state.settings.data_dir).latest_conversion(
+            project_id,
+            OutputFormat.HTML,
+            "docgen-light",
+            legacy_export_paths=JobRepository(session).export_paths_for_project(
+                project_id
+            ),
+        )
+        if current_template_id == NO_TEMPLATE_ID
+        else None
+    )
+    editor_owns_result = document is not None and (
+        document.origin is DocumentOrigin.IMPORTED
+        or workspace_html is not None
+        or conversion_candidate is None
+    )
+    saved_html_export = None if editor_owns_result else conversion_candidate
+    selected_output_format = (
+        OutputFormat.HTML
+        if current_template_id == NO_TEMPLATE_ID
+        and (editor_owns_result or saved_html_export is not None)
+        else None
+    )
     return templates.TemplateResponse(
         request=request,
         name="projects/detail.html",
@@ -143,11 +171,13 @@ def project_detail_response(
             "generation_error": None,
             "setup_fragment": False,
             "document": document,
-            "selected_template_id": selected_template_id(document, latest_report),
+            "selected_template_id": current_template_id,
             "revision": revision,
-            "workspace_html": documents.get_workspace_html(project_id),
+            "workspace_html": workspace_html,
             "has_document": document is not None,
             "has_report": latest_report is not None,
+            "saved_conversion_export": saved_html_export,
+            "conversion_format": selected_output_format,
             "source_error": source_error,
         },
         status_code=status_code,

@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.html import HtmlExporter, local_storage_image_loader
@@ -72,6 +73,58 @@ def test_html_is_standalone_and_escaped(
     assert "data:image/png;base64," in html
     assert "&lt;script&gt;" in html
     assert "<script>" not in html
+
+
+def test_html_preserves_safe_editor_formatting_with_lightweight_design(
+    html_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Отредактированный документ",
+        template_id="no-template",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                text="Обычный жирный цвет опасная ссылка",
+                data={
+                    "html": (
+                        "Обычный <strong>жирный</strong> "
+                        '<span style="color:#123456;position:absolute">цвет</span>'
+                        '<script>alert(1)</script>'
+                        '<a href="javascript:alert(2)" onclick="alert(3)">опасная ссылка</a>'
+                        '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="svg">'
+                    ),
+                    "style": {"text-align": "center", "position": "absolute"},
+                },
+            ),
+            DocumentNode(
+                kind=NodeKind.LIST,
+                data={
+                    "items": ["Первый пункт"],
+                    "items_html": ["Первый <em>пункт</em>"],
+                    "item_styles": ["font-weight:700;position:absolute"],
+                },
+            ),
+        ],
+    )
+
+    rendered = HtmlExporter().render(document, html_template)
+    html = rendered.content.decode("utf-8")
+    page = BeautifulSoup(html, "html.parser")
+    paragraph = page.select_one(".dg-node-paragraph > p")
+    list_item = page.select_one(".dg-node-list li")
+
+    assert paragraph is not None
+    assert paragraph.get("style") == "text-align:center"
+    assert paragraph.find("strong").get_text(strip=True) == "жирный"
+    assert paragraph.find("span").get("style") == "color:#123456"
+    assert paragraph.find("script") is None
+    assert paragraph.find("a").get("href") is None
+    assert paragraph.find("a").get("onclick") is None
+    assert paragraph.find("img").get("src") is None
+    assert list_item is not None
+    assert list_item.get("style") == "font-weight:700"
+    assert list_item.find("em").get_text(strip=True) == "пункт"
+    assert "font-family: Inter, system-ui, sans-serif" in html
 
 
 def test_html_image_without_src_renders_placeholder(

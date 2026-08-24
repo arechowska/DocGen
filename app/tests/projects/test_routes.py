@@ -279,6 +279,9 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     assert template_select is not None
     assert not template_select.has_attr("disabled")
     assert soup.find(id="buildButton") is not None
+    conversion_form = soup.find(id="conversionForm")
+    assert conversion_form is not None
+    assert conversion_form.get("hx-target") == "#resultPanel"
     assert soup.find(id="chat-panel") is None
 
 

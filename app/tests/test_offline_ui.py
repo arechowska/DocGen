@@ -526,6 +526,7 @@ listeners.get("change")();
 if (targets.some((target) => target.value !== "faq")) {{
   throw new Error(`template targets were not synchronized: ${{targets.map((target) => target.value)}}`);
 }}
+if (buildButton.formTarget !== "assembleForm") throw new Error("semantic build form was changed");
 source.value = "no-template";
 listeners.get("change")();
 if (buildButton.formTarget !== "conversionForm") throw new Error("conversion form was not selected");
@@ -778,6 +779,130 @@ if (!saveStatus.textContent.includes("Документ уже изменён")) 
 if (!saveStatus.textContent.includes("Обнови")) {{
   throw new Error(`missing refresh action: ${{saveStatus.textContent}}`);
 }}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@_requires_node
+def test_editor_save_shows_friendly_validation_error(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: "<p>Большой документ</p>", focus() {{}} }});
+const title = element({{ value: "Документ" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+globalThis.document = {{
+  querySelector(selector) {{ return selector === "#docgen2Editor" ? editor : null; }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.fetch = async () => ({{
+  ok: false,
+  status: 422,
+  async json() {{
+    return {{ detail: [{{ type: "string_too_long", loc: ["body", "html"] }}] }};
+  }},
+}});
+{script.text}
+await saveButton.listeners.get("click")();
+if (!saveStatus.textContent.includes("Документ слишком большой")) {{
+  throw new Error(`missing friendly detail: ${{saveStatus.textContent}}`);
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@_requires_node
+def test_first_editor_save_creates_document_and_reloads_workspace(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: "<h1>Новый документ</h1><p>Текст</p>", focus() {{}} }});
+const title = element({{ value: "Ручной документ" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+let posted = null;
+let reloaded = false;
+globalThis.document = {{
+  body: {{}},
+  querySelector(selector) {{ return selector === "#docgen2Editor" ? editor : null; }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{
+  getSelection() {{ return null; }},
+  location: {{ reload() {{ reloaded = true; }} }},
+}};
+globalThis.fetch = async (url, options) => {{
+  posted = {{ url, payload: JSON.parse(options.body) }};
+  return {{
+    ok: true,
+    async json() {{
+      return {{ revision: 1, html: '<h1 data-node-id="n1">Новый документ</h1><p data-node-id="p1">Текст</p>' }};
+    }},
+  }};
+}};
+{script.text}
+await saveButton.listeners.get("click")();
+if (posted?.url !== "/projects/p1/editor/save") throw new Error("first save was not posted");
+if (posted.payload.revision !== null) throw new Error(`expected null revision, got ${{posted.payload.revision}}`);
+if (!reloaded) throw new Error("workspace was not reloaded after document creation");
 """
 
     subprocess.run(

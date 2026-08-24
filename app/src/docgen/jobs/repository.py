@@ -205,6 +205,20 @@ class JobRepository:
             .limit(1)
         )
 
+    def export_paths_for_project(self, project_id: str) -> set[str]:
+        """Return files produced by regular editor export jobs."""
+        return {
+            relative_path
+            for relative_path in self._session.scalars(
+                select(Job.export_relative_path).where(
+                    Job.project_id == project_id,
+                    Job.kind == JobKind.EXPORT,
+                    Job.export_relative_path.is_not(None),
+                )
+            )
+            if relative_path is not None
+        }
+
     def claim_next(self) -> Job | None:
         # A RESERVED lock is taken before reading the head of the queue. This
         # serializes competing SQLite workers until the selected row is marked
