@@ -14,7 +14,8 @@ from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, DocumentOrigin, NodeKind, WorkingDocument
 from docgen.editor import routes as editor_routes
 from docgen.extraction.schemas import Provenance
-from docgen.jobs.models import Job
+from docgen.formatting.schemas import OutputFormat
+from docgen.jobs.models import Job, JobKind
 from docgen.main import create_app
 from docgen.models import Project
 from docgen.sources.repository import SourceRepository
@@ -361,6 +362,67 @@ def test_single_source_can_be_imported_into_editor_without_job(
     assert result.find(id="export-result") is not None
     assert result.find(id="conversion-result-actions") is None
     assert selected_format["value"] == "html"
+
+
+def test_no_template_html_rebuild_targets_edited_revision_without_reimport(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name='HTML from editor')
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    client.post(
+        f'/projects/{project_id}/sources/files',
+        files={'file': ('source.md', b'# Source\n\nOriginal', 'text/markdown')},
+        headers={'HX-Request': 'true'},
+    )
+    imported = client.post(
+        f'/projects/{project_id}/editor/import-source',
+        follow_redirects=False,
+    )
+    assert imported.status_code == 303
+    with _session(client) as session:
+        document, revision = DocumentRepository(session).get_document_with_revision(
+            project_id
+        )
+        assert revision == 1
+        heading_id, paragraph_id = [node.id for node in document.nodes]
+
+    saved = client.post(
+        f'/projects/{project_id}/editor/save',
+        json={
+            'title': 'Edited revision',
+            'html': f'''<h1 data-node-id='{heading_id}'>Source</h1><p data-node-id='{paragraph_id}'>Manual edit</p>''',
+            'revision': 1,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()['revision'] == 2
+
+    export = client.post(
+        f'/projects/{project_id}/export',
+        data={'format': 'html', 'template_id': 'docgen-light', 'revision': 2},
+    )
+    assert export.status_code == 202
+
+    with _session(client) as session:
+        document, revision = DocumentRepository(session).get_document_with_revision(
+            project_id
+        )
+        assert revision == 2
+        assert document.origin is DocumentOrigin.IMPORTED
+        assert document.source_id is not None
+        assert [node.text for node in document.nodes] == ['Source', 'Manual edit']
+        job = session.scalar(
+            select(Job)
+            .where(Job.project_id == project_id, Job.kind == JobKind.EXPORT)
+            .order_by(Job.created_at.desc())
+        )
+        assert job is not None
+        assert job.requested_document_revision == 2
+        assert job.export_format is OutputFormat.HTML
 
 
 def test_import_source_does_not_replace_existing_editor_document(
