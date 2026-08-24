@@ -1,0 +1,17 @@
+<aside
+  id="editorStartAction"
+  {% if editor_start_action_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
+>
+  {% if not document %}
+    {% set available_sources = sources | default([]) %}
+    {% if available_sources | length == 1 %}
+      <form action="/projects/{{ project_id }}/editor/import-source" method="post" data-editor-start-action>
+        <button class="editor-save-button" type="submit">Редактировать</button>
+      </form>
+    {% elif available_sources | length == 0 %}
+      <form action="/projects/{{ project_id }}/editor/create" method="post" data-editor-start-action>
+        <button class="editor-save-button" type="submit">Создать документ</button>
+      </form>
+    {% endif %}
+  {% endif %}
+</aside>

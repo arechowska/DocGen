@@ -6,14 +6,17 @@ from uuid import uuid4
 import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import DocumentNode, DocumentOrigin, NodeKind, WorkingDocument
 from docgen.extraction.schemas import Provenance
+from docgen.jobs.models import Job
 from docgen.main import create_app
 from docgen.models import Project
+from docgen.sources.repository import SourceRepository
 
 
 @pytest.fixture
@@ -219,6 +222,167 @@ def test_workspace_save_creates_first_document_for_empty_project(
         NodeKind.PARAGRAPH,
     ]
     assert all(node.flags == ["manual-edit"] for node in saved.nodes)
+
+
+def test_empty_project_can_create_blank_editor_document(client: TestClient) -> None:
+    with _session(client) as session:
+        project = Project(name="Документ с нуля")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    action = page.select_one("[data-editor-start-action]")
+    assert action is not None
+    assert action.get("action") == f"/projects/{project_id}/editor/create"
+    assert action.get_text(" ", strip=True) == "Создать документ"
+
+    response = client.post(
+        f"/projects/{project_id}/editor/create",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project_id}#docgen2Editor"
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.title == "Документ с нуля"
+        assert document.template_id == "no-template"
+        assert document.origin is DocumentOrigin.MANUAL
+        assert document.nodes == []
+        assert list(session.scalars(select(Job).where(Job.project_id == project_id))) == []
+
+    refreshed = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    assert refreshed.select_one("[data-editor-start-action]") is None
+
+
+def test_single_source_can_be_imported_into_editor_without_job(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Проект для редактирования")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={
+            "file": (
+                "case.md",
+                "# Сценарий\n\nТекст для правки".encode(),
+                "text/markdown",
+            )
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+    upload_fragment = BeautifulSoup(upload.text, "html.parser")
+    synced_action = upload_fragment.find(id="editorStartAction")
+    assert synced_action is not None
+    assert synced_action.get("hx-swap-oob") == "outerHTML"
+    assert synced_action.select_one("[data-editor-start-action]") is not None
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    action = page.select_one("[data-editor-start-action]")
+    assert action is not None
+    assert action.get("action") == f"/projects/{project_id}/editor/import-source"
+    assert action.get_text(" ", strip=True) == "Редактировать"
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project_id}#docgen2Editor"
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        sources = SourceRepository(session).list_for_project(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.origin is DocumentOrigin.IMPORTED
+        assert document.source_id == sources[0].id
+        assert document.template_id == "no-template"
+        assert document.build_template_id is None
+        assert [node.text for node in document.nodes] == [
+            "Сценарий",
+            "Текст для правки",
+        ]
+        assert list(session.scalars(select(Job).where(Job.project_id == project_id))) == []
+
+    refreshed = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    canvas = refreshed.find(id="docgen2DocumentCanvas")
+    assert canvas is not None
+    assert "Сценарий" in canvas.get_text(" ", strip=True)
+    assert "Текст для правки" in canvas.get_text(" ", strip=True)
+    assert refreshed.select_one("[data-editor-start-action]") is None
+
+
+def test_import_source_does_not_replace_existing_editor_document(
+    client: TestClient,
+    project_with_document: Project,
+) -> None:
+    upload = client.post(
+        f"/projects/{project_with_document.id}/sources/files",
+        files={"file": ("case.md", b"# Replacement", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+    original = _stored_document(client, project_with_document.id)
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 409
+    assert "Импорт не заменяет существующие правки" in response.text
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(
+            project_with_document.id
+        )
+        assert stored == (original, 1)
+
+
+@pytest.mark.parametrize("source_count", [0, 2])
+def test_import_source_requires_exactly_one_source(
+    client: TestClient,
+    source_count: int,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Пустой проект")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    for index in range(source_count):
+        upload = client.post(
+            f"/projects/{project_id}/sources/files",
+            files={
+                "file": (
+                    f"source-{index}.md",
+                    f"# Source {index}".encode(),
+                    "text/markdown",
+                )
+            },
+            headers={"HX-Request": "true"},
+        )
+        assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert "Для переноса в редактор нужен ровно один источник" in response.text
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document(project_id) is None
+        assert list(session.scalars(select(Job).where(Job.project_id == project_id))) == []
 
 
 def test_workspace_save_updates_order_lists_tables_and_new_manual_nodes(

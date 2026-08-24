@@ -61,6 +61,22 @@ def test_repository_replaces_current_document_for_project(artifact_session: Sess
     assert repository.get_document(project.id) == latest
 
 
+def test_create_document_only_writes_first_revision(artifact_session: Session) -> None:
+    project = ProjectRepository(artifact_session).create("Проект")
+    repository = DocumentRepository(artifact_session)
+    first = WorkingDocument(
+        title="Первый документ",
+        template_id="no-template",
+        nodes=[],
+    )
+    replacement = first.model_copy(update={"title": "Нельзя заменить"})
+
+    assert repository.create_document(project.id, first) == 1
+    assert repository.create_document(project.id, replacement) is None
+
+    assert repository.get_document_with_revision(project.id) == (first, 1)
+
+
 def test_replacing_document_increments_revision_and_invalidates_report(
     artifact_session: Session,
 ) -> None:
