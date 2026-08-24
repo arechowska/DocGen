@@ -1167,6 +1167,7 @@ def test_non_htmx_source_and_project_delete_fallbacks(client: TestClient) -> Non
 
     assert client.get(project_url).status_code == 404
 
+@_requires_node
 def test_first_no_template_html_editor_save_does_not_reload_workspace(
     client: TestClient,
 ) -> None:
