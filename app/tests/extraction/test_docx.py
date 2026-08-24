@@ -4,8 +4,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import RGBColor
 
 from docgen.extraction.docx import DocxExtractor
 from docgen.extraction.registry import ExtractionError
@@ -24,6 +26,63 @@ def make_source() -> Source:
         storage_path="projects/p1/sources/s1.docx",
         status="stored",
     )
+
+def _add_hyperlink(paragraph, text: str, url: str) -> None:
+    relationship_id = paragraph.part.relate_to(
+        url,
+        RELATIONSHIP_TYPE.HYPERLINK,
+        is_external=True,
+    )
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+    run = OxmlElement("w:r")
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run.append(text_element)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+
+
+def _set_numbering(paragraph, num_id: int, level: int) -> None:
+    numbering = OxmlElement("w:numPr")
+    level_element = OxmlElement("w:ilvl")
+    level_element.set(qn("w:val"), str(level))
+    number_id_element = OxmlElement("w:numId")
+    number_id_element.set(qn("w:val"), str(num_id))
+    numbering.extend((level_element, number_id_element))
+    paragraph._p.get_or_add_pPr().append(numbering)
+
+
+@pytest.fixture
+def workspace_fidelity_docx(tmp_path: Path) -> Path:
+    path = tmp_path / "workspace-fidelity.docx"
+    document = Document()
+    document.add_heading("Guide", level=2)
+
+    paragraph = document.add_paragraph()
+    bold = paragraph.add_run("Bold")
+    bold.bold = True
+    italic = paragraph.add_run("Italic")
+    italic.italic = True
+    underline = paragraph.add_run("Under")
+    underline.underline = True
+    strike = paragraph.add_run("Strike")
+    strike.font.strike = True
+    red = paragraph.add_run("Red")
+    red.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    _add_hyperlink(paragraph, "Link", "https://example.test")
+
+    number_id = document.styles["List Number"].element.pPr.numPr.numId.val
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    first = document.add_paragraph("First")
+    _set_numbering(first, number_id, 0)
+    second = document.add_paragraph("Second")
+    _set_numbering(second, number_id, 0)
+    nested = document.add_paragraph("Nested")
+    _set_numbering(nested, bullet_id, 1)
+    document.save(path)
+    return path
+
 
 
 @pytest.fixture
@@ -99,6 +158,32 @@ def test_docx_preserves_document_order_and_structure(tmp_path: Path) -> None:
     assert result.blocks[0].data == {"level": 1}
     assert result.blocks[2].data == {"style": "List Bullet"}
     assert result.blocks[3].data == {"rows": [["Ключ", "Значение"]]}
+
+
+def test_docx_workspace_extraction_preserves_editor_safe_rich_content_and_lists(
+    workspace_fidelity_docx: Path,
+) -> None:
+    extractor = DocxExtractor()
+
+    regular = extractor.extract(make_source(), workspace_fidelity_docx)
+    result = extractor.extract_workspace(make_source(), workspace_fidelity_docx)
+
+    assert [block.kind for block in regular.blocks] == [
+        BlockKind.HEADING,
+        BlockKind.TEXT,
+        BlockKind.LIST,
+        BlockKind.LIST,
+        BlockKind.LIST,
+    ]
+    assert result.blocks[1].data["html"] == (
+        '<strong>Bold</strong><em>Italic</em><u>Under</u><s>Strike</s>'
+        '<span style="color:#ff0000">Red</span><a href="https://example.test">Link</a>'
+    )
+    assert result.blocks[2].data == {
+        "ordered": True,
+        "items": ["First", "Second"],
+        "items_html": ["First", "Second<ul><li>Nested</li></ul>"],
+    }
 
 
 def test_docx_uses_builtin_style_ids_when_display_names_are_cyrillic(

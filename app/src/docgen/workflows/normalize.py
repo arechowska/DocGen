@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from docgen.extraction.docx import DocxExtractor
 from docgen.extraction.page_units import VirtualPageCalculator
 from docgen.extraction.registry import ExtractionError, ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import NormalizedBlock, Provenance
@@ -57,6 +58,8 @@ class NormalizationWorkflow:
         self,
         project_id: str,
         before_extract: Callable[[], None] | None = None,
+        *,
+        workspace_docx_fidelity: bool = False,
     ) -> NormalizedProject:
         blocks: list[NormalizedBlock] = []
         warnings: list[str] = []
@@ -66,7 +69,7 @@ class NormalizationWorkflow:
 
         for source in self._sources.list_for_project(project_id):
             try:
-                extraction = self._extract(source, before_extract)
+                extraction = self._extract(source, before_extract, workspace_docx_fidelity)
             except ExtractionError as error:
                 if source.kind is not SourceKind.CONFLUENCE:
                     raise
@@ -111,6 +114,7 @@ class NormalizationWorkflow:
         self,
         source: Source,
         before_extract: Callable[[], None] | None,
+        workspace_docx_fidelity: bool,
     ) -> ExtractionResult:
         if source.kind is SourceKind.CONFLUENCE:
             if source.url is None:
@@ -125,4 +129,7 @@ class NormalizationWorkflow:
         path: Path = self._storage.resolve(source.storage_path)
         if before_extract is not None:
             before_extract()
-        return self._extractors.for_source(source).extract(source, path)
+        extractor = self._extractors.for_source(source)
+        if workspace_docx_fidelity and isinstance(extractor, DocxExtractor):
+            return extractor.extract_workspace(source, path)
+        return extractor.extract(source, path)
