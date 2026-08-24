@@ -205,6 +205,7 @@ def convert_source(
                 "project_id": project_id,
                 "document": None,
                 "has_document": False,
+                "sources": sources,
                 "saved_conversion_export": stored,
                 "conversion_format": output_format,
             },

@@ -203,6 +203,11 @@ def test_workspace_save_creates_first_document_for_empty_project(
         session.commit()
         project_id = project.id
 
+    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    assert page.find("button", string="Создать документ") is None
+    assert page.find(id="docgen2DocumentCanvas").get("contenteditable") == "true"
+    assert page.find("button", attrs={"data-editor-save": True}) is not None
+
     response = client.post(
         f"/projects/{project_id}/editor/save",
         json={
@@ -222,41 +227,6 @@ def test_workspace_save_creates_first_document_for_empty_project(
         NodeKind.PARAGRAPH,
     ]
     assert all(node.flags == ["manual-edit"] for node in saved.nodes)
-
-
-def test_empty_project_can_create_blank_editor_document(client: TestClient) -> None:
-    with _session(client) as session:
-        project = Project(name="Документ с нуля")
-        session.add(project)
-        session.commit()
-        project_id = project.id
-
-    page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
-    action = page.select_one("[data-editor-start-action]")
-    assert action is not None
-    assert action.get("action") == f"/projects/{project_id}/editor/create"
-    assert action.get_text(" ", strip=True) == "Создать документ"
-
-    response = client.post(
-        f"/projects/{project_id}/editor/create",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == f"/projects/{project_id}#docgen2Editor"
-    with _session(client) as session:
-        stored = DocumentRepository(session).get_document_with_revision(project_id)
-        assert stored is not None
-        document, revision = stored
-        assert revision == 1
-        assert document.title == "Документ с нуля"
-        assert document.template_id == "no-template"
-        assert document.origin is DocumentOrigin.MANUAL
-        assert document.nodes == []
-        assert list(session.scalars(select(Job).where(Job.project_id == project_id))) == []
-
-    refreshed = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
-    assert refreshed.select_one("[data-editor-start-action]") is None
 
 
 def test_single_source_can_be_imported_into_editor_without_job(
@@ -280,16 +250,31 @@ def test_single_source_can_be_imported_into_editor_without_job(
         headers={"HX-Request": "true"},
     )
     assert upload.status_code == 200
-    upload_fragment = BeautifulSoup(upload.text, "html.parser")
-    synced_action = upload_fragment.find(id="editorStartAction")
-    assert synced_action is not None
-    assert synced_action.get("hx-swap-oob") == "outerHTML"
-    assert synced_action.select_one("[data-editor-start-action]") is not None
     page = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
-    action = page.select_one("[data-editor-start-action]")
+    assert page.find("button", string="Создать документ") is None
+    assert page.find("button", string="Редактировать") is None
+
+    conversion = client.post(
+        f"/projects/{project_id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+    assert conversion.status_code == 200
+    conversion_result = BeautifulSoup(conversion.text, "html.parser")
+    actions = conversion_result.find(id="conversion-result-actions")
+    assert actions is not None
+    assert actions.find("a", string="Открыть") is not None
+    action = actions.find("form", attrs={"data-editor-start-action": True})
     assert action is not None
     assert action.get("action") == f"/projects/{project_id}/editor/import-source"
     assert action.get_text(" ", strip=True) == "Редактировать"
+    stylesheet = client.get("/static/css/docgen.css")
+    assert stylesheet.status_code == 200
+    assert ".export-result.conversion-result-buttons{flex-flow:row wrap" in stylesheet.text
+
+    reloaded = BeautifulSoup(client.get(f"/projects/{project_id}").text, "html.parser")
+    assert reloaded.find(id="docgen2Editor").find("button", string="Редактировать") is None
+    assert reloaded.find(id="resultPanel").find("button", string="Редактировать") is not None
 
     response = client.post(
         f"/projects/{project_id}/editor/import-source",
@@ -319,7 +304,13 @@ def test_single_source_can_be_imported_into_editor_without_job(
     assert canvas is not None
     assert "Сценарий" in canvas.get_text(" ", strip=True)
     assert "Текст для правки" in canvas.get_text(" ", strip=True)
-    assert refreshed.select_one("[data-editor-start-action]") is None
+    assert refreshed.find("button", string="Редактировать") is None
+    result = refreshed.find(id="resultPanel")
+    selected_format = refreshed.find(id="formatSelect").find("option", selected=True)
+    assert result is not None
+    assert result.find(id="export-result") is not None
+    assert result.find(id="conversion-result-actions") is None
+    assert selected_format["value"] == "html"
 
 
 def test_import_source_does_not_replace_existing_editor_document(

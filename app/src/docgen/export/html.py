@@ -7,15 +7,41 @@ import mimetypes
 from collections.abc import Callable
 from pathlib import Path
 
+from bs4 import BeautifulSoup, Comment
 from jinja2 import Environment, FileSystemLoader
+from markupsafe import Markup
 
 from docgen.documents.schemas import WorkingDocument
+from docgen.documents.style import (
+    node_style_attribute,
+    normalized_style_attribute,
+    style_attribute,
+)
 from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
 from docgen.sources.storage import LocalStorage
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "formatting" / "templates"
+_RICH_TEXT_TAGS = {
+    "a",
+    "b",
+    "br",
+    "code",
+    "em",
+    "i",
+    "img",
+    "s",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "u",
+}
+_RICH_TEXT_ATTRIBUTES = {
+    "a": {"href", "title"},
+    "img": {"alt", "src", "title"},
+}
 
 ImageAsset = tuple[bytes, str]
 """Resolved image content and its MIME type, e.g. ``(b"...", "image/png")``."""
@@ -82,6 +108,9 @@ class HtmlExporter:
             document=document,
             css=css_text,
             image_data_url=self._image_data_url,
+            node_style_attribute=node_style_attribute,
+            safe_rich_html=_safe_rich_html,
+            style_attribute=style_attribute,
         )
 
         return RenderedFile(
@@ -131,6 +160,63 @@ class HtmlExporter:
             return None
         encoded = base64.b64encode(content).decode("ascii")
         return f"data:{media_type};base64,{encoded}"
+
+
+def _safe_rich_html(value: object) -> Markup:
+    """Keep editor formatting while removing executable markup and unsafe styles."""
+    if not isinstance(value, str) or not value:
+        return Markup("")
+    soup = BeautifulSoup(value, "html.parser")
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+    for tag in list(soup.find_all(True)):
+        if tag.name in {"script", "style", "template"}:
+            tag.decompose()
+            continue
+        if tag.name not in _RICH_TEXT_TAGS:
+            tag.unwrap()
+            continue
+        allowed_attributes = _RICH_TEXT_ATTRIBUTES.get(tag.name, set()) | {"style"}
+        for attribute in list(tag.attrs):
+            if attribute not in allowed_attributes:
+                del tag.attrs[attribute]
+                continue
+            value = tag.attrs.get(attribute)
+            if attribute == "style":
+                normalized = normalized_style_attribute(str(value))
+                if normalized:
+                    tag.attrs[attribute] = normalized
+                else:
+                    del tag.attrs[attribute]
+            elif (
+                attribute == "href"
+                and not _safe_rich_href(value)
+                or attribute == "src"
+                and not _safe_rich_image_source(value)
+            ):
+                del tag.attrs[attribute]
+    return Markup("".join(str(item) for item in soup.contents).strip())
+
+
+def _safe_rich_href(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(("#", "/", "http://", "https://", "mailto:"))
+
+
+def _safe_rich_image_source(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(
+        (
+            "data:image/gif;base64,",
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+        )
+    )
 
 
 def local_storage_image_loader(storage: LocalStorage) -> ImageLoader:

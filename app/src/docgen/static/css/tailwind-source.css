@@ -1904,6 +1904,21 @@
   gap: 6px;
 }
 
+.export-result.conversion-result-buttons {
+  flex-flow: row wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversion-result-buttons form {
+  margin: 0;
+}
+
+.result-actions .conversion-result-buttons .button {
+  width: auto;
+  min-width: 0;
+}
+
 .export-error-message {
   margin: 0;
   color: #b42318;

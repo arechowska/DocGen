@@ -290,6 +290,94 @@ def test_saved_legacy_conversion_is_not_replaced_by_editor_html_export_on_reload
     assert opened.content == b"<html><body>saved source version</body></html>"
 
 
+def test_imported_editor_document_replaces_source_conversion_and_exports_saved_revision(
+    client: TestClient,
+    project_with_source: Project,
+) -> None:
+    converted = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+    assert converted.status_code == 200
+    source_id = _source_id(client, project_with_source.id, "case.md")
+    with _session(client) as session:
+        DocumentRepository(session).save_document(
+            project_with_source.id,
+            WorkingDocument(
+                title="Редактируемый HTML",
+                template_id="no-template",
+                origin=DocumentOrigin.IMPORTED,
+                source_id=source_id,
+                nodes=[
+                    DocumentNode(
+                        id="editable-1",
+                        kind=NodeKind.PARAGRAPH,
+                        text="Исходный текст",
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    page = BeautifulSoup(
+        client.get(f"/projects/{project_with_source.id}").text,
+        "html.parser",
+    )
+    result = page.find(id="resultPanel")
+    selected_format = page.find(id="formatSelect").find("option", selected=True)
+    assert result.find(id="resultFilename").get_text(strip=True) == "Редактируемый HTML"
+    assert result.find(id="export-result") is not None
+    assert result.find(id="conversion-result-actions") is None
+    assert selected_format["value"] == "html"
+
+    saved = client.post(
+        f"/projects/{project_with_source.id}/editor/save",
+        json={
+            "title": "Редактируемый HTML",
+            "html": (
+                '<p data-node-id="editable-1" style="text-align:center">'
+                "Исправленный <strong>текст</strong></p>"
+                "<ol><li>Первый</li><li><em>Второй</em></li></ol>"
+            ),
+            "revision": 1,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == 2
+    with _session(client) as session:
+        document = DocumentRepository(session).get_document(project_with_source.id)
+        assert document is not None
+        assert document.nodes[0].data["style"] == {"text-align": "center"}
+        assert document.nodes[0].data["html"] == "Исправленный <strong>текст</strong>"
+        assert document.nodes[1].data["ordered"] is True
+        assert document.nodes[1].data["items_html"] == [
+            "Первый",
+            "<em>Второй</em>",
+        ]
+    reloaded_editor = BeautifulSoup(
+        client.get(f"/projects/{project_with_source.id}").text,
+        "html.parser",
+    ).find(id="docgen2DocumentCanvas")
+    assert reloaded_editor.find("ol") is not None
+    assert reloaded_editor.find("ol").find("em").get_text(strip=True) == "Второй"
+
+    export = client.post(
+        f"/projects/{project_with_source.id}/export",
+        data={
+            "format": "html",
+            "template_id": "docgen-light",
+            "revision": 2,
+        },
+    )
+    assert export.status_code == 202
+    jobs = _jobs_for_project(client, project_with_source.id)
+    assert len(jobs) == 1
+    assert jobs[0].kind is JobKind.EXPORT
+    assert jobs[0].export_format is OutputFormat.HTML
+    assert jobs[0].requested_document_revision == 2
+
+
 def test_saved_conversion_does_not_replace_semantic_document_result_on_reload(
     client: TestClient, project_with_source: Project
 ) -> None:
