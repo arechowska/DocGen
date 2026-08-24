@@ -469,13 +469,17 @@ def test_no_template_html_rebuild_targets_edited_revision_without_reimport(
             project_id
         )
         assert revision == 1
-        heading_id, paragraph_id = [node.id for node in document.nodes]
+        heading_id, _ = [node.id for node in document.nodes]
 
     saved = client.post(
         f'/projects/{project_id}/editor/save',
         json={
             'title': 'Edited revision',
-            'html': f'''<h1 data-node-id='{heading_id}'>Source</h1><p data-node-id='{paragraph_id}'>Manual edit</p>''',
+            'html': (
+                f"<h1 data-node-id='{heading_id}'>Source</h1>"
+                "<ol><li>Parent<ul><li><strong>Nested</strong></li></ul></li></ol>"
+                "<h1>Second section</h1>"
+            ),
             'revision': 1,
         },
     )
@@ -494,8 +498,22 @@ def test_no_template_html_rebuild_targets_edited_revision_without_reimport(
         )
         assert revision == 2
         assert document.origin is DocumentOrigin.IMPORTED
+        sources = SourceRepository(session).list_for_project(project_id)
         assert document.source_id is not None
-        assert [node.text for node in document.nodes] == ['Source', 'Manual edit']
+        assert len(sources) == 1
+        assert document.source_id == sources[0].id
+        assert [node.kind for node in document.nodes] == [
+            NodeKind.HEADING,
+            NodeKind.LIST,
+            NodeKind.HEADING,
+        ]
+        assert document.nodes[0].text == 'Source'
+        assert document.nodes[2].text == 'Second section'
+        list_node = document.nodes[1]
+        assert list_node.kind is NodeKind.LIST
+        assert list_node.data['items_html'] == [
+            'Parent<ul><li><strong>Nested</strong></li></ul>'
+        ]
         job = session.scalar(
             select(Job)
             .where(Job.project_id == project_id, Job.kind == JobKind.EXPORT)

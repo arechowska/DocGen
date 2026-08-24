@@ -39,6 +39,8 @@ _RICH_TAGS = frozenset(
         "u",
     }
 )
+_RICH_LIST_TAGS = frozenset({"ol", "ul", "li"})
+
 _BLOCKED_RICH_TAGS = frozenset({"script", "style", "template"})
 _FONT_MEDIA_TYPES = {".otf": "font/otf", ".ttf": "font/ttf"}
 
@@ -229,7 +231,9 @@ def local_storage_image_loader(storage: LocalStorage) -> ImageLoader:
     return _load
 
 
-def safe_rich_html(value: object, fallback: str = "") -> Markup:
+def safe_rich_html(
+    value: object, fallback: str = "", *, allow_lists: bool = False
+) -> Markup:
     """Return a small, sanitized editor rich-text fragment."""
     if not isinstance(value, str) or not value:
         return Markup(escape(fallback))
@@ -239,8 +243,9 @@ def safe_rich_html(value: object, fallback: str = "") -> Markup:
         comment.extract()
     for tag in list(soup.find_all(_BLOCKED_RICH_TAGS)):
         tag.decompose()
+    allowed_tags = _RICH_TAGS | _RICH_LIST_TAGS if allow_lists else _RICH_TAGS
     for tag in list(soup.find_all(True)):
-        if tag.name not in _RICH_TAGS:
+        if tag.name not in allowed_tags:
             tag.unwrap()
             continue
         for attribute in list(tag.attrs):

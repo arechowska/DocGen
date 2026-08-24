@@ -189,6 +189,49 @@ def test_html_preserves_rich_list_items_and_individual_styles(
     assert exported_items[1].get("style") == "text-align:right"
 
 
+def test_html_preserves_nested_rich_lists_in_sectioned_documents(
+    html_template: FormattingTemplate,
+) -> None:
+    """A nested list saved by the editor remains available in exported HTML."""
+    document = WorkingDocument(
+        title="Document",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="First section",
+                data={"level": 1},
+            ),
+            DocumentNode(
+                kind=NodeKind.LIST,
+                data={
+                    "ordered": True,
+                    "items": ["Parent Nested"],
+                    "items_html": [
+                        "Parent<ul><li><strong>Nested</strong></li></ul>"
+                    ],
+                },
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Second section",
+                data={"level": 1},
+            ),
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+
+    assert soup.find(id="contents") is not None
+    assert soup.find("a", href="#section-1") is not None
+    assert soup.find("a", href="#section-2") is not None
+    parent_list = soup.select_one(".dg-node-list > ol")
+    assert parent_list is not None
+    nested_list = parent_list.select_one("li > ul")
+    assert nested_list is not None
+    assert nested_list.find("strong", string="Nested") is not None
+
 def test_html_builds_contents_for_two_level_one_sections(
     html_template: FormattingTemplate,
 ) -> None:

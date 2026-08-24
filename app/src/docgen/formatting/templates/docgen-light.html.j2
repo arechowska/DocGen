@@ -21,11 +21,11 @@
     {% if items is sequence and items is not string %}
       {% if node.data.get('ordered', False) %}
       <ol{{ node_style_attribute(node) }}>
-        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item) }}</li>{% endfor %}
+        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item, allow_lists=True) }}</li>{% endfor %}
       </ol>
       {% else %}
       <ul{{ node_style_attribute(node) }}>
-        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item) }}</li>{% endfor %}
+        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item, allow_lists=True) }}</li>{% endfor %}
       </ul>
       {% endif %}
     {% endif %}
