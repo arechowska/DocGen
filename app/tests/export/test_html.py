@@ -141,6 +141,97 @@ def test_html_preserves_rich_list_items_and_individual_styles(
     assert "position:" not in html
 
 
+def test_html_builds_contents_for_two_level_one_sections(
+    html_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Введение"),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Первый раздел",
+                data={"level": 1},
+            ),
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Первое содержание"),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Второй раздел",
+                data={"level": 1},
+            ),
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Второе содержание"),
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert '<nav id="contents"' in html
+    assert 'href="#section-1"' in html
+    assert 'href="#section-2"' in html
+    assert html.index("Введение") < html.index("Первый раздел")
+    assert html.count('class="section card-shell') == 3
+
+
+@pytest.mark.parametrize(
+    "headings",
+    [[], ["Единственный раздел"]],
+    ids=["no-sections", "one-section"],
+)
+def test_html_omits_contents_for_zero_or_one_section(
+    headings: list[str], html_template: FormattingTemplate
+) -> None:
+    nodes = [
+        DocumentNode(kind=NodeKind.HEADING, text=text, data={"level": 1})
+        for text in headings
+    ]
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=nodes,
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert '<nav id="contents"' not in html
+
+
+def test_html_section_anchors_ignore_repeated_titles_and_keep_nested_content(
+    html_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Одинаковый раздел",
+                data={"level": 1},
+                children=[
+                    DocumentNode(kind=NodeKind.PARAGRAPH, text="Дочерний текст")
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Вложенный заголовок",
+                data={"level": 2},
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Одинаковый раздел",
+                data={"level": 1},
+            ),
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert html.count('id="section-1"') == 1
+    assert html.count('id="section-2"') == 1
+    assert html.count("Дочерний текст") == 1
+    assert html.count("Вложенный заголовок") == 1
+
+
 def test_html_image_without_src_renders_placeholder(
     html_template: FormattingTemplate,
 ) -> None:

@@ -87,7 +87,27 @@
   <body>
     <main class="dg-document">
       <h1 class="dg-title">{{ document.title }}</h1>
-      {% for node in document.nodes %}{{ render_node(node) }}{% endfor %}
+      {% if view.introduction or not view.sections %}
+      <section class="section card-shell dg-introduction">
+        {% for node in view.introduction %}{{ render_node(node) }}{% endfor %}
+      </section>
+      {% endif %}
+      {% if view.show_contents %}
+      <nav id="contents" class="contents card-shell" aria-label="Содержание">
+        <h2>Содержание</h2>
+        <ul>
+          {% for section in view.sections %}
+          <li><a href="#{{ section.anchor }}">{{ section.heading.text or "" }}</a></li>
+          {% endfor %}
+        </ul>
+      </nav>
+      {% endif %}
+      {% for section in view.sections %}
+      <section id="{{ section.anchor }}" class="section card-shell">
+        {{ render_node(section.heading) }}
+        {% for node in section.nodes %}{{ render_node(node) }}{% endfor %}
+      </section>
+      {% endfor %}
     </main>
   </body>
 </html>

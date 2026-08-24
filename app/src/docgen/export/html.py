@@ -5,13 +5,14 @@ from __future__ import annotations
 import base64
 import mimetypes
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Comment
 from jinja2 import Environment, FileSystemLoader
 from markupsafe import Markup, escape
 
-from docgen.documents.schemas import WorkingDocument
+from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.documents.style import normalized_style_attribute
 from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
@@ -35,6 +36,21 @@ Must return ``None`` when the reference cannot be safely resolved (missing,
 outside storage, wrong type, etc.). Callers fall back to a placeholder in
 that case -- they never fabricate content or fetch external resources.
 """
+
+
+@dataclass(frozen=True)
+class HtmlSection:
+    anchor: str
+    heading: DocumentNode
+    nodes: tuple[DocumentNode, ...]
+
+
+@dataclass(frozen=True)
+class HtmlDocumentView:
+    title: str
+    introduction: tuple[DocumentNode, ...]
+    sections: tuple[HtmlSection, ...]
+    show_contents: bool
 
 
 class HtmlExporter:
@@ -88,6 +104,7 @@ class HtmlExporter:
 
         html = jinja_template.render(
             document=document,
+            view=prepare_document_view(document),
             css=css_text,
             image_data_url=self._image_data_url,
             rich_html=safe_rich_html,
@@ -221,3 +238,52 @@ def _is_safe_rich_url(value: object) -> bool:
         return False
     normalized = value.strip().lower()
     return normalized.startswith(("#", "/", "http://", "https://", "mailto:"))
+
+
+def prepare_document_view(document: WorkingDocument) -> HtmlDocumentView:
+    """Group top-level editor nodes into deterministic level-one sections."""
+    introduction: list[DocumentNode] = []
+    sections: list[HtmlSection] = []
+    current_heading: DocumentNode | None = None
+    current_nodes: list[DocumentNode] = []
+
+    for node in document.nodes:
+        if node.kind is NodeKind.HEADING and _heading_level(node) == 1:
+            if current_heading is not None:
+                sections.append(
+                    HtmlSection(
+                        anchor=f"section-{len(sections) + 1}",
+                        heading=current_heading,
+                        nodes=tuple(current_nodes),
+                    )
+                )
+            current_heading = node
+            current_nodes = []
+        elif current_heading is None:
+            introduction.append(node)
+        else:
+            current_nodes.append(node)
+
+    if current_heading is not None:
+        sections.append(
+            HtmlSection(
+                anchor=f"section-{len(sections) + 1}",
+                heading=current_heading,
+                nodes=tuple(current_nodes),
+            )
+        )
+
+    return HtmlDocumentView(
+        title=document.title,
+        introduction=tuple(introduction),
+        sections=tuple(sections),
+        show_contents=len(sections) >= 2,
+    )
+
+
+def _heading_level(node: DocumentNode) -> int:
+    try:
+        level = int(node.data.get("level", 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(level, 6))
