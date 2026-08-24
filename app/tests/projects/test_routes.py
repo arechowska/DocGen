@@ -120,6 +120,9 @@ def test_workspace_forms_share_selected_template_contract(client: TestClient) ->
     template_select = page.find("select", id="templateSelect")
     assert template_select is not None
     assert template_select["data-template-source"] == ""
+    format_select = page.find("select", id="formatSelect")
+    assert format_select is not None
+    assert "change from:#templateSelect" in format_select["hx-trigger"]
     selected_template = template_select.find("option", selected=True)
     assert selected_template is not None
     for form_id in ("assembleForm", "checkForm"):

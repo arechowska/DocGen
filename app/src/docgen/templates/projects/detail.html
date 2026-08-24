@@ -45,7 +45,7 @@
             name="format"
             hx-get="/projects/{{ project_id }}/export/templates"
             hx-include="#templateSelect"
-            hx-trigger="load, change"
+            hx-trigger="load, change, change from:#templateSelect"
             hx-target="#export-template-select"
             hx-swap="innerHTML"
           >
