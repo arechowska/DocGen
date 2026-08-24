@@ -5,4 +5,8 @@ renderer: html
 assets:
   - docgen-light.html.j2
   - docgen-light.css
+  - Akrobat-Bold.otf
+  - Roboto-Regular.ttf
+  - Roboto-Light.ttf
+  - Roboto-Bold.ttf
 options: {}

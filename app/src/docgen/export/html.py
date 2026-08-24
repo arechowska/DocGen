@@ -25,6 +25,7 @@ _RICH_TAGS = frozenset(
     {"a", "b", "br", "code", "em", "i", "mark", "s", "span", "strong", "sub", "sup", "u"}
 )
 _BLOCKED_RICH_TAGS = frozenset({"script", "style", "template"})
+_FONT_MEDIA_TYPES = {".otf": "font/otf", ".ttf": "font/ttf"}
 
 ImageAsset = tuple[bytes, str]
 """Resolved image content and its MIME type, e.g. ``(b"...", "image/png")``."""
@@ -106,6 +107,11 @@ class HtmlExporter:
             document=document,
             view=prepare_document_view(document),
             css=css_text,
+            font_data_urls={
+                asset: self._asset_data_url(template, asset)
+                for asset in template.assets
+                if Path(asset).suffix.lower() in _FONT_MEDIA_TYPES
+            },
             image_data_url=self._image_data_url,
             rich_html=safe_rich_html,
             style_attribute=safe_style_attribute,
@@ -135,10 +141,28 @@ class HtmlExporter:
 
     def _read_asset_text(self, name: str) -> str:
         """Read a catalog-declared asset file, enforcing containment."""
+        return self._asset_path(name).read_text(encoding="utf-8")
+
+    def _read_asset_bytes(self, name: str) -> bytes:
+        """Read a catalog-declared binary asset, enforcing containment."""
+        return self._asset_path(name).read_bytes()
+
+    def _asset_path(self, name: str) -> Path:
+        """Resolve one template asset without allowing path traversal."""
         path = (self._templates_dir / name).resolve()
         if not path.is_relative_to(self._templates_dir):
             raise ValueError("Недопустимый путь ассета")
-        return path.read_text(encoding="utf-8")
+        return path
+
+    def _asset_data_url(self, template: FormattingTemplate, name: str) -> str:
+        """Embed one declared font asset as a self-contained data URL."""
+        if name not in template.assets:
+            raise ValueError("Ассет не объявлен в шаблоне")
+        media_type = _FONT_MEDIA_TYPES.get(Path(name).suffix.lower())
+        if media_type is None:
+            raise ValueError("Неподдерживаемый тип встраиваемого ассета")
+        encoded = base64.b64encode(self._read_asset_bytes(name)).decode("ascii")
+        return f"data:{media_type};base64,{encoded}"
 
     def _image_data_url(self, src: object) -> str | None:
         """Resolve a node's image src to an embeddable data: URL, or None.

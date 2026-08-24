@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.html import HtmlExporter, local_storage_image_loader
@@ -33,7 +34,14 @@ def html_template() -> FormattingTemplate:
         name="Облегченный HTML",
         format=OutputFormat.HTML,
         renderer=OutputFormat.HTML,
-        assets=["docgen-light.html.j2", "docgen-light.css"],
+        assets=[
+            "docgen-light.html.j2",
+            "docgen-light.css",
+            "Akrobat-Bold.otf",
+            "Roboto-Regular.ttf",
+            "Roboto-Light.ttf",
+            "Roboto-Bold.ttf",
+        ],
     )
 
 
@@ -98,14 +106,16 @@ def test_html_preserves_safe_editor_rich_text_and_removes_xss(
     )
 
     html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+    paragraph = soup.select_one(".dg-node-paragraph > p")
 
     assert "<strong>Важный</strong>" in html
     assert "<em>текст</em>" in html
-    assert "text-align:center" in html
+    assert paragraph is not None
+    assert paragraph.get("style") == "text-align:center"
     assert "<script" not in html
     assert "javascript:" not in html
     assert "onclick" not in html
-    assert "position:" not in html
 
 
 def test_html_preserves_rich_list_items_and_individual_styles(
@@ -133,12 +143,15 @@ def test_html_preserves_rich_list_items_and_individual_styles(
     )
 
     html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+    exported_list = soup.select_one(".dg-node-list > ol")
+    exported_items = soup.select(".dg-node-list > ol > li")
 
     assert "<strong>Первый</strong>" in html
     assert "<em>Второй</em>" in html
-    assert "text-align:right" in html
-    assert "margin-left:24px" in html
-    assert "position:" not in html
+    assert exported_list is not None
+    assert exported_list.get("style") == "margin-left:24px"
+    assert exported_items[1].get("style") == "text-align:right"
 
 
 def test_html_builds_contents_for_two_level_one_sections(
@@ -530,17 +543,44 @@ def test_html_css_is_embedded_unescaped(html_template: FormattingTemplate) -> No
     assert "&quot;" not in html
 
 
-def test_html_uses_design_constraint_colors(html_template: FormattingTemplate) -> None:
-    """CSS asset must use the exact DocGen Light colors from the plan."""
+def test_html_uses_v5_visual_tokens_and_embeds_fonts(
+    html_template: FormattingTemplate,
+) -> None:
+    """The exported page carries the approved v5 identity without local URLs."""
     document = WorkingDocument(title="Документ", template_id="docgen-light-html", nodes=[])
 
     rendered = HtmlExporter().render(document, html_template)
     html = rendered.content.decode("utf-8")
 
-    for color in ("#ffffff", "#f5f5f7", "#1d1d1f", "#707070", "#0071e3"):
-        assert color in html
-    assert "960px" in html
-    assert "Inter, system-ui, sans-serif" in html
+    for token in (
+        "#f4f7fb",
+        "#17324a",
+        "#1163AE",
+        "#0f3f69",
+        "border-radius:22px",
+    ):
+        assert token in html
+    assert 'font-family:"Akrobat"' in html
+    assert 'font-family:"Roboto"' in html
+    assert "data:font/" in html
+
+
+def test_html_v5_export_has_no_external_runtime_dependency(
+    document_with_image: WorkingDocument,
+    html_template: FormattingTemplate,
+) -> None:
+    html = HtmlExporter(image_loader=fake_image_loader).render(
+        document_with_image,
+        html_template,
+    ).content.decode("utf-8")
+
+    assert "cdn.jsdelivr.net" not in html
+    assert "<link" not in html
+    assert "<script" not in html
+    assert "@import" not in html
+    assert "url(http" not in html
+    assert "data:image/png;base64," in html
+    assert "<svg" in html
 
 
 # --- local_storage_image_loader (the production ImageLoader implementation) ---

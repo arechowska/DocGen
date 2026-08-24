@@ -1,5 +1,5 @@
 {% macro render_node(node) %}
-<section id="node-{{ node.id }}" class="dg-node dg-node-{{ node.kind.value }}">
+<article id="node-{{ node.id }}" class="dg-node dg-node-{{ node.kind.value }}">
   {% if node.kind.value == "heading" %}
     {% set level = node.data.get('level', 1)|int(1) %}
     {% set level = [level, 1]|max %}
@@ -37,11 +37,9 @@
     {% if has_headers or has_rows %}
       {% if node.text %}<p class="dg-caption">{{ node.text }}</p>{% endif %}
       <div class="dg-table-wrap">
-        <table>
+        <table{{ style_attribute(node.data.get('style')) }}>
           {% if has_headers %}
-          <thead>
-            <tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr>
-          </thead>
+          <thead><tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
           {% endif %}
           {% if has_rows %}
           <tbody>
@@ -57,9 +55,14 @@
     {% endif %}
   {% elif node.kind.value == "image" %}
     {% set data_url = image_data_url(node.data.get('src')) %}
-    <figure class="dg-image">
+    {% set alignment = node.data.get('alignment', 'center') %}
+    {% if alignment not in ['left', 'center', 'right'] %}{% set alignment = 'center' %}{% endif %}
+    {% set width = node.data.get('width', 80)|int(80) %}
+    {% set width = [width, 10]|max %}
+    {% set width = [width, 100]|min %}
+    <figure class="dg-image dg-image-{{ alignment }}">
       {% if data_url %}
-        <img src="{{ data_url }}" alt="{{ node.data.get('alt') or node.text or '' }}">
+        <img src="{{ data_url }}" alt="{{ node.data.get('alt') or node.text or '' }}" style="max-width:{{ width }}%">
       {% else %}
         <div class="dg-image-placeholder">Изображение или схема</div>
       {% endif %}
@@ -74,7 +77,7 @@
     {% for child in node.children %}{{ render_node(child) }}{% endfor %}
   </div>
   {% endif %}
-</section>
+</article>
 {% endmacro %}
 <!doctype html>
 <html lang="ru">
@@ -82,32 +85,54 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ document.title }}</title>
-    <style>{{ css|safe }}</style>
+    <style>
+      @font-face{font-family:"Akrobat";src:url("{{ font_data_urls['Akrobat-Bold.otf'] }}") format("opentype");font-weight:700;font-style:normal;font-display:swap}
+      @font-face{font-family:"Roboto";src:url("{{ font_data_urls['Roboto-Regular.ttf'] }}") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+      @font-face{font-family:"Roboto";src:url("{{ font_data_urls['Roboto-Light.ttf'] }}") format("truetype");font-weight:300;font-style:normal;font-display:swap}
+      @font-face{font-family:"Roboto";src:url("{{ font_data_urls['Roboto-Bold.ttf'] }}") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+      {{ css|safe }}
+    </style>
   </head>
   <body>
-    <main class="dg-document">
-      <h1 class="dg-title">{{ document.title }}</h1>
+    <main id="top" class="page-shell">
+      <header class="card-shell hero">
+        <div class="brand-box" aria-hidden="true"></div>
+        <h1 class="page-title">{{ document.title }}</h1>
+      </header>
+
       {% if view.introduction or not view.sections %}
       <section class="section card-shell dg-introduction">
-        {% for node in view.introduction %}{{ render_node(node) }}{% endfor %}
+        <div class="section-content">
+          {% for node in view.introduction %}{{ render_node(node) }}{% endfor %}
+        </div>
       </section>
       {% endif %}
+
       {% if view.show_contents %}
       <nav id="contents" class="contents card-shell" aria-label="Содержание">
-        <h2>Содержание</h2>
-        <ul>
-          {% for section in view.sections %}
-          <li><a href="#{{ section.anchor }}">{{ section.heading.text or "" }}</a></li>
-          {% endfor %}
-        </ul>
+        <div class="section-content">
+          <h2>Содержание</h2>
+          <ul>
+            {% for section in view.sections %}
+            <li><a href="#{{ section.anchor }}">{{ section.heading.text or "" }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
       </nav>
       {% endif %}
+
       {% for section in view.sections %}
       <section id="{{ section.anchor }}" class="section card-shell">
-        {{ render_node(section.heading) }}
-        {% for node in section.nodes %}{{ render_node(node) }}{% endfor %}
+        <div class="section-content">
+          {{ render_node(section.heading) }}
+          {% for node in section.nodes %}{{ render_node(node) }}{% endfor %}
+        </div>
       </section>
       {% endfor %}
+
+      <a class="step-link back-to-top-fab" href="{% if view.show_contents %}#contents{% else %}#top{% endif %}" aria-label="Наверх">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
     </main>
   </body>
 </html>
