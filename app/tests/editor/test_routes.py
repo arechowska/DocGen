@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from docgen.config import Settings
 from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, DocumentOrigin, NodeKind, WorkingDocument
+from docgen.editor import routes as editor_routes
 from docgen.extraction.schemas import Provenance
 from docgen.jobs.models import Job
 from docgen.main import create_app
@@ -192,6 +193,46 @@ def test_workspace_save_preserves_semantic_metadata(
     assert saved.nodes[0].section_id == original.nodes[0].section_id
     assert saved.nodes[0].provenance == original.nodes[0].provenance
     assert saved.nodes[0].flags == original.nodes[0].flags
+
+
+def test_workspace_save_allows_large_assembled_document_and_deleted_section(
+    client: TestClient, project_with_document: Project
+) -> None:
+    large_text = "Содержимое " * 50_000
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Документ без аннотации",
+            "html": f'<p data-node-id="p1">{large_text}</p>',
+            "revision": 1,
+        },
+    )
+
+    assert len(response.request.content) > 500_000
+    assert response.status_code == 200
+    saved = _stored_document(client, project_with_document.id)
+    assert [node.id for node in saved.nodes] == ["p1"]
+    assert saved.nodes[0].text == large_text.strip()
+
+
+def test_workspace_save_rejects_oversized_document_with_friendly_detail(
+    client: TestClient,
+    project_with_document: Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(editor_routes, "MAX_WORKSPACE_HTML_CHARS", 100)
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/editor/save",
+        json={
+            "title": "Слишком большой документ",
+            "html": "<p>" + ("Текст " * 30) + "</p>",
+            "revision": 1,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Документ слишком большой для сохранения"}
 
 
 def test_workspace_save_creates_first_document_for_empty_project(

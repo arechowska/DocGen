@@ -42,11 +42,12 @@ from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 router = APIRouter(prefix="/projects")
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+MAX_WORKSPACE_HTML_CHARS = 20_000_000
 
 
 class Docgen2SavePayload(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    html: str = Field(max_length=500_000)
+    html: str
     revision: int | None = Field(default=None, ge=1)
 
 
@@ -137,6 +138,11 @@ def save_docgen2_workspace(
     session: SessionDependency,
 ) -> Response:
     _project_or_404(session, project_id)
+    if len(payload.html) > MAX_WORKSPACE_HTML_CHARS:
+        return JSONResponse(
+            {"detail": "Документ слишком большой для сохранения"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
     title = payload.title.strip()
     if not title:
         raise HTTPException(

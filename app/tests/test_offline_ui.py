@@ -789,6 +789,63 @@ if (!saveStatus.textContent.includes("Обнови")) {{
     )
 
 
+@_requires_node
+def test_editor_save_shows_friendly_validation_error(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: "<p>Большой документ</p>", focus() {{}} }});
+const title = element({{ value: "Документ" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+globalThis.document = {{
+  querySelector(selector) {{ return selector === "#docgen2Editor" ? editor : null; }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{ getSelection() {{ return null; }} }};
+globalThis.fetch = async () => ({{
+  ok: false,
+  status: 422,
+  async json() {{
+    return {{ detail: [{{ type: "string_too_long", loc: ["body", "html"] }}] }};
+  }},
+}});
+{script.text}
+await saveButton.listeners.get("click")();
+if (!saveStatus.textContent.includes("Документ слишком большой")) {{
+  throw new Error(`missing friendly detail: ${{saveStatus.textContent}}`);
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_non_htmx_create_start_cancel_retry_flow_uses_standard_forms(
     client: TestClient,
 ) -> None:

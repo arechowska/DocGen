@@ -448,6 +448,23 @@
     sendButton?.removeAttribute("disabled");
   };
 
+  const editorSaveErrorDetail = (result) => {
+    const detail = result?.detail;
+    if (typeof detail === "string") return detail;
+    if (!Array.isArray(detail)) return "Не удалось сохранить";
+    const issues = detail.filter((item) => item && typeof item === "object");
+    if (issues.some((item) => item.loc?.includes?.("html") && item.type === "string_too_long")) {
+      return "Документ слишком большой для сохранения";
+    }
+    if (issues.some((item) => item.loc?.includes?.("title"))) {
+      return "Проверь название документа";
+    }
+    if (issues.some((item) => item.loc?.includes?.("revision"))) {
+      return "Не удалось определить версию документа. Обнови страницу и повтори сохранение";
+    }
+    return "Не удалось сохранить: проверь содержимое документа";
+  };
+
   const saveWorkspace = async () => {
     const saveUrl = editor.dataset.saveUrl;
     if (!saveUrl || !saveButton) return;
@@ -469,7 +486,7 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const detail = typeof result.detail === "string" ? result.detail : "Не удалось сохранить";
+        const detail = editorSaveErrorDetail(result);
         if (response.status === 409) {
           throw new Error(`${detail}. Обнови страницу и повтори сохранение.`);
         }
