@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from zipfile import BadZipFile, ZipFile
 
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
 from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.styles.style import BaseStyle
@@ -111,7 +112,11 @@ class DocxExtractor:
             if element.tag.endswith("}p"):
                 paragraph_index += 1
                 paragraph = Paragraph(element, document)
-                if not paragraph.text.strip():
+                paragraph_text = _workspace_paragraph_text(paragraph).strip()
+                if not paragraph_text:
+                    if pending_list is not None:
+                        blocks.append(pending_list.to_block())
+                        pending_list = None
                     continue
                 list_context = _workspace_list_context(paragraph, document)
                 if list_context is not None:
@@ -122,7 +127,7 @@ class DocxExtractor:
                         pending_list = _WorkspaceListGroup(source, paragraph_index, list_context)
                     pending_list.add(
                         list_context,
-                        paragraph.text.strip(),
+                        paragraph_text,
                         _workspace_paragraph_html(paragraph),
                         f"paragraph:{paragraph_index}",
                     )
@@ -130,7 +135,12 @@ class DocxExtractor:
                 if pending_list is not None:
                     blocks.append(pending_list.to_block())
                     pending_list = None
-                block = self._paragraph_block(source, paragraph, paragraph_index)
+                block = self._paragraph_block(
+                    source,
+                    paragraph,
+                    paragraph_index,
+                    text=paragraph_text,
+                )
                 blocks.append(
                     block.model_copy(
                         update={"data": {**block.data, "html": _workspace_paragraph_html(paragraph)}}
@@ -151,8 +161,14 @@ class DocxExtractor:
         )
 
     @staticmethod
-    def _paragraph_block(source: Source, paragraph: Paragraph, index: int) -> NormalizedBlock:
-        text = paragraph.text.strip()
+    def _paragraph_block(
+        source: Source,
+        paragraph: Paragraph,
+        index: int,
+        *,
+        text: str | None = None,
+    ) -> NormalizedBlock:
+        text = paragraph.text.strip() if text is None else text
         style_name = paragraph.style.name
         heading_match = _HEADING_STYLE_ID.match(paragraph.style.style_id)
         outline_level = _outline_level(paragraph)
@@ -261,11 +277,12 @@ class _WorkspaceListGroup:
         self._index = index
         self._num_id = context.num_id
         self._ordered = context.ordered
+        self._root_level = context.level
         self._roots: list[_WorkspaceListItem] = []
         self._last_by_level: dict[int, _WorkspaceListItem] = {}
 
     def accepts(self, context: _WorkspaceListContext) -> bool:
-        return context.level > 0 or (
+        return context.level > self._root_level or (
             context.num_id == self._num_id and context.ordered == self._ordered
         )
 
@@ -282,10 +299,11 @@ class _WorkspaceListGroup:
             ordered=context.ordered,
             provenance=Provenance(source_id=self._source.id, locator=locator),
         )
+        normalized_level = max(0, context.level - self._root_level)
         parent = next(
             (
                 self._last_by_level[level]
-                for level in range(context.level - 1, -1, -1)
+                for level in range(normalized_level - 1, -1, -1)
                 if level in self._last_by_level
             ),
             None,
@@ -295,7 +313,7 @@ class _WorkspaceListGroup:
             context_level = 0
         else:
             parent.children.append(item)
-            context_level = context.level
+            context_level = normalized_level
         self._last_by_level = {
             level: previous for level, previous in self._last_by_level.items() if level < context_level
         }
@@ -409,41 +427,85 @@ def _numbering_format(document: Document, num_id: int, level: int) -> str:
 
 
 def _workspace_paragraph_html(paragraph: Paragraph) -> str:
-    fragments: list[str] = []
-    for child in paragraph._p.iterchildren():
-        if child.tag == qn("w:r"):
-            fragments.append(_workspace_run_html(child))
-        elif child.tag == qn("w:hyperlink"):
-            content = "".join(_workspace_run_html(run) for run in child.xpath("./w:r"))
-            href = _safe_hyperlink_url(paragraph, child.get(qn("r:id")))
-            fragments.append(f'<a href="{html.escape(href, quote=True)}">{content}</a>' if href else content)
-    return "".join(fragments).strip()
+    return "".join(
+        _workspace_element_html(child, paragraph)
+        for child in paragraph._p.iterchildren()
+        if child.tag != qn("w:pPr")
+    ).strip()
 
 
-def _workspace_run_html(run) -> str:
-    text_parts: list[str] = []
-    for child in run.iterchildren():
-        if child.tag == qn("w:t"):
-            text_parts.append(child.text or "")
-        elif child.tag == qn("w:tab"):
-            text_parts.append("\t")
-        elif child.tag in {qn("w:br"), qn("w:cr")}:
-            text_parts.append("\n")
-    fragment = html.escape("".join(text_parts))
-    properties = run.find(qn("w:rPr"))
-    if properties is None:
+def _workspace_paragraph_text(paragraph: Paragraph) -> str:
+    return "".join(
+        _workspace_element_text(child)
+        for child in paragraph._p.iterchildren()
+        if child.tag != qn("w:pPr")
+    )
+
+
+def _workspace_element_text(element) -> str:
+    if element.tag == qn("w:t"):
+        return element.text or ""
+    if element.tag == qn("w:tab"):
+        return "\t"
+    if element.tag in {qn("w:br"), qn("w:cr")}:
+        return "\n"
+    return "".join(_workspace_element_text(child) for child in element.iterchildren())
+
+
+def _workspace_element_html(element, paragraph: Paragraph) -> str:
+    if element.tag == qn("w:r"):
+        return _workspace_run_html(element, paragraph)
+    if element.tag == qn("w:hyperlink"):
+        content = "".join(
+            _workspace_element_html(child, paragraph)
+            for child in element.iterchildren()
+        )
+        href = _safe_hyperlink_url(paragraph, element.get(qn("r:id")))
+        if href:
+            return f'<a href="{html.escape(href, quote=True)}">{content}</a>'
+        return content
+    if element.tag == qn("w:t"):
+        return html.escape(element.text or "")
+    if element.tag == qn("w:tab"):
+        return "\t"
+    if element.tag in {qn("w:br"), qn("w:cr")}:
+        return "<br>"
+    return "".join(
+        _workspace_element_html(child, paragraph)
+        for child in element.iterchildren()
+    )
+
+
+def _workspace_run_html(run, paragraph: Paragraph) -> str:
+    fragment = "".join(
+        _workspace_element_html(child, paragraph)
+        for child in run.iterchildren()
+        if child.tag != qn("w:rPr")
+    )
+    properties_chain = list(_run_properties_chain(run, paragraph))
+    if not properties_chain:
         return fragment
+
     wrappers: list[str] = []
-    if _run_property_enabled(properties, "w:b"):
+    if _effective_run_property_enabled(properties_chain, "w:b"):
         wrappers.append("strong")
-    if _run_property_enabled(properties, "w:i"):
+    if _effective_run_property_enabled(properties_chain, "w:i"):
         wrappers.append("em")
-    if _run_property_enabled(properties, "w:u"):
+    if _effective_run_property_enabled(properties_chain, "w:u"):
         wrappers.append("u")
-    if _run_property_enabled(properties, "w:strike"):
+    if _effective_run_property_enabled(
+        properties_chain, "w:strike"
+    ) or _effective_run_property_enabled(properties_chain, "w:dstrike"):
         wrappers.append("s")
-    color = properties.find(qn("w:color"))
-    color_value = color.get(qn("w:val"), "") if color is not None else ""
+    vertical_alignment = _effective_run_property_value(
+        properties_chain,
+        "w:vertAlign",
+    )
+    if vertical_alignment == "subscript":
+        wrappers.append("sub")
+    elif vertical_alignment == "superscript":
+        wrappers.append("sup")
+    color_value = _effective_run_property_value(properties_chain, "w:color") or ""
     if re.fullmatch(r"[0-9a-fA-F]{6}", color_value):
         wrappers.append(f'span style="color:#{color_value.lower()}"')
     for wrapper in reversed(wrappers):
@@ -454,9 +516,48 @@ def _workspace_run_html(run) -> str:
     return fragment
 
 
-def _run_property_enabled(properties, name: str) -> bool:
-    element = properties.find(qn(name))
-    return element is not None and element.get(qn("w:val"), "1").lower() not in {"0", "false", "off"}
+def _run_properties_chain(run, paragraph: Paragraph) -> Iterator:
+    direct_properties = run.find(qn("w:rPr"))
+    if direct_properties is not None:
+        yield direct_properties
+        style_reference = direct_properties.find(qn("w:rStyle"))
+    else:
+        style_reference = None
+    if style_reference is None:
+        return
+    style_id = style_reference.get(qn("w:val"))
+    if not style_id:
+        return
+    style = paragraph.part.document.styles.get_by_id(
+        style_id,
+        WD_STYLE_TYPE.CHARACTER,
+    )
+    seen: set[int] = set()
+    while style is not None and id(style.element) not in seen:
+        seen.add(id(style.element))
+        if style.element.rPr is not None:
+            yield style.element.rPr
+        style = style.base_style
+
+
+def _effective_run_property_enabled(properties_chain: list, name: str) -> bool:
+    disabled_values = {"0", "false", "none", "off"}
+    for properties in properties_chain:
+        element = properties.find(qn(name))
+        if element is not None:
+            return element.get(qn("w:val"), "1").lower() not in disabled_values
+    return False
+
+
+def _effective_run_property_value(
+    properties_chain: list,
+    name: str,
+) -> str | None:
+    for properties in properties_chain:
+        element = properties.find(qn(name))
+        if element is not None:
+            return element.get(qn("w:val"))
+    return None
 
 
 def _safe_hyperlink_url(paragraph: Paragraph, relationship_id: str | None) -> str | None:

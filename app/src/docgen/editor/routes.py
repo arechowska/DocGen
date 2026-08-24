@@ -29,7 +29,9 @@ from docgen.documents.style import (
 )
 from docgen.editor.validation import ImagePayload, ListPayload, TablePayload
 from docgen.extraction.confluence import ConfluenceClient
+from docgen.extraction.docx import DocxExtractor
 from docgen.extraction.registry import ExtractionError, ExtractorRegistry
+from docgen.models import SourceKind
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session, project_detail_response
 from docgen.sources.repository import SourceRepository
@@ -82,14 +84,20 @@ def import_source_into_editor(
 
     source = project_sources[0]
     settings = request.app.state.settings
-    workspace_fidelity = import_profile == "no-template-html"
+    workspace_profile = import_profile == "no-template-html"
     try:
+        extractors = ExtractorRegistry.default(settings)
+        workspace_docx_fidelity = (
+            workspace_profile
+            and source.kind is SourceKind.FILE
+            and isinstance(extractors.for_source(source), DocxExtractor)
+        )
         normalized = NormalizationWorkflow(
             sources,
             LocalStorage(settings.data_dir),
-            ExtractorRegistry.default(settings),
+            extractors,
             ConfluenceClient.from_settings(settings),
-        ).run(project_id, workspace_docx_fidelity=workspace_fidelity)
+        ).run(project_id, workspace_docx_fidelity=workspace_docx_fidelity)
         blocks = [
             block
             for block in normalized.blocks
@@ -100,7 +108,7 @@ def import_source_into_editor(
         document = conversion_document(
             blocks,
             source.display_name or project.name,
-            rebase_heading_levels=workspace_fidelity,
+            rebase_heading_levels=workspace_docx_fidelity,
         ).model_copy(
             update={
                 "origin": DocumentOrigin.IMPORTED,

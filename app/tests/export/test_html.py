@@ -8,8 +8,10 @@ from bs4 import BeautifulSoup
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.html import HtmlExporter, local_storage_image_loader
 from docgen.export.storage import ExportStorage
+from docgen.extraction.schemas import BlockKind, NormalizedBlock
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
 from docgen.sources.storage import LocalStorage
+from docgen.workflows.conversion import conversion_document
 
 # A minimal valid 1x1 transparent PNG, used to exercise the "resolvable src"
 # image embedding path without depending on any real asset file.
@@ -231,6 +233,32 @@ def test_html_preserves_nested_rich_lists_in_sectioned_documents(
     nested_list = parent_list.select_one("li > ul")
     assert nested_list is not None
     assert nested_list.find("strong", string="Nested") is not None
+
+
+def test_html_does_not_render_workspace_list_accounting_text_as_caption(
+    html_template: FormattingTemplate,
+) -> None:
+    block = NormalizedBlock(
+        id="rich-list",
+        kind=BlockKind.LIST,
+        text="Parent\nNested",
+        data={
+            "ordered": True,
+            "items": ["Parent"],
+            "items_html": ["<strong>Parent</strong><ul><li>Nested</li></ul>"],
+        },
+        confidence=1.0,
+    )
+    document = conversion_document([block], "Imported DOCX")
+
+    rendered = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    list_node = BeautifulSoup(rendered, "html.parser").select_one(".dg-node-list")
+
+    assert document.nodes[0].text is None
+    assert list_node is not None
+    assert list_node.select_one(".dg-caption") is None
+    assert list_node.get_text(" ", strip=True) == "Parent Nested"
+
 
 def test_html_builds_contents_for_two_level_one_sections(
     html_template: FormattingTemplate,

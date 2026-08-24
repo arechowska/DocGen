@@ -53,6 +53,20 @@ def _set_numbering(paragraph, num_id: int, level: int) -> None:
     paragraph._p.get_or_add_pPr().append(numbering)
 
 
+def _append_container_text(paragraph, container_tag: str, text: str) -> None:
+    container = OxmlElement(container_tag)
+    content = container
+    if container_tag == "w:sdt":
+        content = OxmlElement("w:sdtContent")
+        container.append(content)
+    run = OxmlElement("w:r")
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run.append(text_element)
+    content.append(run)
+    paragraph._p.append(container)
+
+
 @pytest.fixture
 def workspace_fidelity_docx(tmp_path: Path) -> Path:
     path = tmp_path / "workspace-fidelity.docx"
@@ -184,6 +198,109 @@ def test_docx_workspace_extraction_preserves_editor_safe_rich_content_and_lists(
         "items": ["First", "Second"],
         "items_html": ["First", "Second<ul><li>Nested</li></ul>"],
     }
+
+
+def test_docx_workspace_preserves_text_inside_unsupported_containers(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "containers.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    _append_container_text(paragraph, "w:ins", "Inserted")
+    _append_container_text(paragraph, "w:sdt", "Controlled")
+    _append_container_text(paragraph, "w:smartTag", "Tagged")
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].text == "InsertedControlledTagged"
+    assert result.blocks[0].data["html"] == "InsertedControlledTagged"
+
+
+def test_docx_workspace_serializes_word_break_as_br(tmp_path: Path) -> None:
+    path = tmp_path / "break.docx"
+    document = Document()
+    run = document.add_paragraph().add_run("Before")
+    run.add_break()
+    run.add_text("After")
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["html"] == "Before<br>After"
+
+
+def test_docx_workspace_applies_character_style_rich_formatting(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "character-style.docx"
+    document = Document()
+    rich_style = document.styles.add_style("Rich Character", WD_STYLE_TYPE.CHARACTER)
+    rich_style.font.bold = True
+    rich_style.font.italic = True
+    rich_style.font.underline = True
+    rich_style.font.strike = True
+    rich_style.font.color.rgb = RGBColor(0x12, 0x34, 0x56)
+    run = document.add_paragraph().add_run("Styled")
+    run.style = rich_style
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["html"] == (
+        '<strong><em><u><s><span style="color:#123456">Styled</span></s></u></em></strong>'
+    )
+
+
+def test_docx_workspace_serializes_subscript_and_superscript(tmp_path: Path) -> None:
+    path = tmp_path / "vertical-align.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run("H")
+    subscript = paragraph.add_run("2")
+    subscript.font.subscript = True
+    paragraph.add_run("O")
+    superscript = paragraph.add_run("2")
+    superscript.font.superscript = True
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["html"] == "H<sub>2</sub>O<sup>2</sup>"
+
+
+def test_docx_workspace_treats_first_observed_numbering_level_as_root(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "level-one-root.docx"
+    document = Document()
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    first = document.add_paragraph("First")
+    _set_numbering(first, bullet_id, 1)
+    second = document.add_paragraph("Second")
+    _set_numbering(second, bullet_id, 1)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["items"] == ["First", "Second"]
+    assert result.blocks[0].data["items_html"] == ["First", "Second"]
+
+
+def test_docx_workspace_flushes_lists_at_blank_paragraphs(tmp_path: Path) -> None:
+    path = tmp_path / "separated-lists.docx"
+    document = Document()
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    first = document.add_paragraph("First")
+    _set_numbering(first, bullet_id, 0)
+    document.add_paragraph()
+    second = document.add_paragraph("Second")
+    _set_numbering(second, bullet_id, 0)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert [block.data["items"] for block in result.blocks] == [["First"], ["Second"]]
 
 
 def test_docx_uses_builtin_style_ids_when_display_names_are_cyrillic(

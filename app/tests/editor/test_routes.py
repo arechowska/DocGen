@@ -408,6 +408,38 @@ def test_no_template_html_profile_imports_docx_with_rebased_heading_and_ordered_
         assert document.nodes[1].data["items"] == ["First", "Second"]
 
 
+def test_no_template_html_profile_keeps_markdown_heading_level(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Markdown no-template HTML")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={"file": ("guide.md", b"### Details", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        data={"import_profile": "no-template-html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.nodes[0].kind is NodeKind.HEADING
+        assert document.nodes[0].data["level"] == 3
+
+
 def test_import_source_without_profile_keeps_default_docx_heading_level(
     client: TestClient,
 ) -> None:

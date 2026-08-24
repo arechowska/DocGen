@@ -29,16 +29,20 @@ def conversion_document(
     nodes: list[DocumentNode] = []
     for block in blocks:
         data = dict(block.data)
+        node_text = block.text
         if block.kind is BlockKind.HEADING and rebase_heading_levels:
             level = int(data.get("level", 1)) - heading_offset
             data["level"] = max(1, min(6, level))
-        if block.kind is BlockKind.LIST and "items" not in data:
-            data["items"] = [block.text]
+        if block.kind is BlockKind.LIST:
+            if "items" not in data:
+                data["items"] = [block.text]
+            if "items_html" in data:
+                node_text = None
         nodes.append(
             DocumentNode(
                 id=f"document-node:{block.id}",
                 kind=node_kinds[block.kind],
-                text=block.text,
+                text=node_text,
                 data=data,
                 provenance=list(block.provenance),
             )
