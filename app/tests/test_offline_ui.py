@@ -508,17 +508,11 @@ const format = {{
   options: [{{ value: "docx" }}, {{ value: "html" }}],
   addEventListener(type, listener) {{ formatListeners.set(type, listener); }},
 }};
-const formatting = {{ value: "docgen-light", disabled: false }};
-const conversionFormat = {{ value: "" }};
-const conversionTemplate = {{ value: "" }};
 globalThis.document = {{
   querySelector(selector) {{
     if (selector === "[data-template-source]") return source;
     if (selector === "#buildButton") return buildButton;
     if (selector === "#formatSelect") return format;
-    if (selector === "#export-template-select select[name='template_id']") return formatting;
-    if (selector === "[data-conversion-format]") return conversionFormat;
-    if (selector === "[data-conversion-template]") return conversionTemplate;
     return null;
   }},
   querySelectorAll(selector) {{
@@ -545,9 +539,7 @@ source.value = "no-template";
 listeners.get("change")();
 if (buildButton.formTarget !== "assembleForm") throw new Error("project build form was not selected");
 if (label.textContent !== "Собрать") throw new Error("build button label was changed");
-if (conversionFormat.value !== "html" || conversionTemplate.value !== "docgen-light") {{
-  throw new Error("conversion output was not synchronized");
-}}
+if (buildButton.disabled) throw new Error("project build was disabled despite an available source");
 format.value = "docx";
 formatListeners.get("change")();
 if (savedFormats.at(-1)?.join(":") !== "docgen:format:p1:docx") {{

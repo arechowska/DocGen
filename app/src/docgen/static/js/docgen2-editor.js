@@ -98,21 +98,10 @@
   }
   const synchronizeConversion = () => {
     const buildButton = document.querySelector("#buildButton");
-    const formattingSource = document.querySelector(
-      "#export-template-select select[name='template_id']",
-    );
-    const conversionFormat = document.querySelector("[data-conversion-format]");
-    const conversionTemplate = document.querySelector("[data-conversion-template]");
-    const withoutTemplate = templateSource?.value === "no-template";
-    if (conversionFormat) conversionFormat.value = formatSource?.value || "";
-    if (conversionTemplate) {
-      conversionTemplate.value = formattingSource?.disabled ? "" : formattingSource?.value || "";
-    }
     if (!buildButton) return;
     buildButton.setAttribute("form", "assembleForm");
     const sourceAvailable = buildButton.dataset.sourceAvailable === "true";
-    const conversionReady = Boolean(formatSource?.value && conversionTemplate?.value);
-    buildButton.disabled = !sourceAvailable || (withoutTemplate && !conversionReady);
+    buildButton.disabled = !sourceAvailable;
   };
   const synchronizeTemplate = () => {
     document.querySelectorAll("[data-template-target]").forEach((target) => {
