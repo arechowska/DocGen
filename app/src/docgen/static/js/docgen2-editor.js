@@ -109,7 +109,7 @@
       conversionTemplate.value = formattingSource?.disabled ? "" : formattingSource?.value || "";
     }
     if (!buildButton) return;
-    buildButton.setAttribute("form", withoutTemplate ? "conversionForm" : "assembleForm");
+    buildButton.setAttribute("form", "assembleForm");
     const sourceAvailable = buildButton.dataset.sourceAvailable === "true";
     const conversionReady = Boolean(formatSource?.value && conversionTemplate?.value);
     buildButton.disabled = !sourceAvailable || (withoutTemplate && !conversionReady);

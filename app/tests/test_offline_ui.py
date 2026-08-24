@@ -543,7 +543,7 @@ if (targets.some((target) => target.value !== "faq")) {{
 }}
 source.value = "no-template";
 listeners.get("change")();
-if (buildButton.formTarget !== "conversionForm") throw new Error("conversion form was not selected");
+if (buildButton.formTarget !== "assembleForm") throw new Error("project build form was not selected");
 if (label.textContent !== "Собрать") throw new Error("build button label was changed");
 if (conversionFormat.value !== "html" || conversionTemplate.value !== "docgen-light") {{
   throw new Error("conversion output was not synchronized");

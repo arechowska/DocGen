@@ -111,7 +111,7 @@ def test_start_assemble_enqueues_job(
     assert _jobs_for_project(client, project_with_source.id)[0].kind is JobKind.ASSEMBLE
 
 
-def test_start_assemble_without_template_does_not_create_editor_document(
+def test_start_assemble_without_template_enqueues_project_document_build(
     client: TestClient, project_with_source: Project
 ) -> None:
     response = client.post(
@@ -119,9 +119,11 @@ def test_start_assemble_without_template_does_not_create_editor_document(
         data={"template_id": "no-template"},
     )
 
-    assert response.status_code == 422
-    assert "конвертацию" in response.text
-    assert _jobs_for_project(client, project_with_source.id) == []
+    assert response.status_code == 202
+    jobs = _jobs_for_project(client, project_with_source.id)
+    assert len(jobs) == 1
+    assert jobs[0].kind is JobKind.ASSEMBLE
+    assert jobs[0].template_id == "no-template"
     with _session(client) as session:
         assert DocumentRepository(session).get_document(project_with_source.id) is None
 

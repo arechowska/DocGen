@@ -63,15 +63,6 @@ def start_assemble(
     template_id: Annotated[str, Form()],
     session: SessionDependency,
 ) -> Response:
-    if template_id == NO_TEMPLATE_ID:
-        project = _project_or_404(session, project_id)
-        return _setup_error(
-            request,
-            session,
-            project,
-            "Без шаблона источник нужно открывать как конвертацию",
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-        )
     return _start_job(request, session, project_id, JobKind.ASSEMBLE, template_id)
 
 

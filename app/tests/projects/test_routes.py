@@ -283,6 +283,7 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     assert template_select is not None
     assert not template_select.has_attr("disabled")
     assert soup.find(id="buildButton") is not None
+    assert soup.find(id="conversionForm") is None
     assert soup.find(id="formatSelect").get("data-format-storage-key")
     assert soup.find(id="chat-panel") is None
 
