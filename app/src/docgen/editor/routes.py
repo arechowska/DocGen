@@ -42,40 +42,13 @@ from docgen.workflows.normalize import NormalizationWorkflow, PageLimitExceeded
 router = APIRouter(prefix="/projects")
 
 SessionDependency = Annotated[Session, Depends(get_session)]
+MAX_WORKSPACE_HTML_CHARS = 20_000_000
 
 
 class Docgen2SavePayload(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    html: str = Field(max_length=500_000)
+    html: str
     revision: int | None = Field(default=None, ge=1)
-
-
-@router.post("/{project_id}/editor/create")
-def create_blank_editor_document(
-    request: Request,
-    project_id: str,
-    session: SessionDependency,
-) -> Response:
-    project = _project_or_404(session, project_id)
-    document = WorkingDocument(
-        title=project.name,
-        template_id=NO_TEMPLATE_ID,
-        nodes=[],
-    )
-    if DocumentRepository(session).create_document(project_id, document) is None:
-        session.rollback()
-        return _editor_start_error(
-            request,
-            session,
-            project_id,
-            "Документ уже создан. Обнови страницу, чтобы продолжить редактирование.",
-            status.HTTP_409_CONFLICT,
-        )
-    session.commit()
-    return RedirectResponse(
-        url=f"/projects/{project_id}#docgen2Editor",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
 
 
 @router.post("/{project_id}/editor/import-source")
@@ -165,6 +138,11 @@ def save_docgen2_workspace(
     session: SessionDependency,
 ) -> Response:
     _project_or_404(session, project_id)
+    if len(payload.html) > MAX_WORKSPACE_HTML_CHARS:
+        return JSONResponse(
+            {"detail": "Документ слишком большой для сохранения"},
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
     title = payload.title.strip()
     if not title:
         raise HTTPException(
@@ -856,6 +834,7 @@ def _workspace_node(element: Tag, existing: DocumentNode | None) -> DocumentNode
         _update_workspace_style_data(data, element)
     elif kind is NodeKind.LIST:
         items = element.find_all("li", recursive=False)
+        data["ordered"] = element.name == "ol"
         data["items"] = [item.get_text(" ", strip=True) for item in items]
         data["items_html"] = [_inner_html(item) for item in items]
         item_styles = [_workspace_item_style_attribute(item) for item in items]

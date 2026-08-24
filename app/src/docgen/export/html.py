@@ -13,7 +13,7 @@ from jinja2 import Environment, FileSystemLoader
 from markupsafe import Markup, escape
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
-from docgen.documents.style import normalized_style_attribute
+from docgen.documents.style import node_style_attribute, normalized_style_attribute
 from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
@@ -22,7 +22,22 @@ from docgen.sources.storage import LocalStorage
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "formatting" / "templates"
 
 _RICH_TAGS = frozenset(
-    {"a", "b", "br", "code", "em", "i", "mark", "s", "span", "strong", "sub", "sup", "u"}
+    {
+        "a",
+        "b",
+        "br",
+        "code",
+        "em",
+        "i",
+        "img",
+        "mark",
+        "s",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "u",
+    }
 )
 _BLOCKED_RICH_TAGS = frozenset({"script", "style", "template"})
 _FONT_MEDIA_TYPES = {".otf": "font/otf", ".ttf": "font/ttf"}
@@ -113,6 +128,7 @@ class HtmlExporter:
                 if Path(asset).suffix.lower() in _FONT_MEDIA_TYPES
             },
             image_data_url=self._image_data_url,
+            node_style_attribute=node_style_attribute,
             rich_html=safe_rich_html,
             style_attribute=safe_style_attribute,
         )
@@ -239,6 +255,12 @@ def safe_rich_html(value: object, fallback: str = "") -> Markup:
                 if attribute == "href" and not _is_safe_rich_url(tag.attrs[attribute]):
                     del tag.attrs[attribute]
                 continue
+            if tag.name == "img" and attribute in {"alt", "src", "title"}:
+                if attribute == "src" and not _is_safe_rich_image_source(
+                    tag.attrs[attribute]
+                ):
+                    del tag.attrs[attribute]
+                continue
             del tag.attrs[attribute]
     return Markup("".join(str(item) for item in soup.contents))
 
@@ -262,6 +284,20 @@ def _is_safe_rich_url(value: object) -> bool:
         return False
     normalized = value.strip().lower()
     return normalized.startswith(("#", "/", "http://", "https://", "mailto:"))
+
+
+def _is_safe_rich_image_source(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(
+        (
+            "data:image/gif;base64,",
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+        )
+    )
 
 
 def prepare_document_view(document: WorkingDocument) -> HtmlDocumentView:

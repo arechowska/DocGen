@@ -118,6 +118,41 @@ def test_html_preserves_safe_editor_rich_text_and_removes_xss(
     assert "onclick" not in html
 
 
+def test_html_preserves_safe_inline_images_and_node_style_aliases(
+    html_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Editor result",
+        template_id="no-template",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                text="Formatted content",
+                data={
+                    "html": (
+                        '<span style="color:#123456;position:absolute">color</span>'
+                        '<img src="data:image/png;base64,iVBORw0KGgo=" alt="png">'
+                        '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="svg">'
+                    ),
+                    "text_align": "right",
+                },
+            )
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    paragraph = BeautifulSoup(html, "html.parser").select_one(
+        ".dg-node-paragraph > p"
+    )
+
+    assert paragraph is not None
+    assert paragraph.get("style") == "text-align:right"
+    assert paragraph.find("span").get("style") == "color:#123456"
+    images = paragraph.find_all("img")
+    assert images[0].get("src") == "data:image/png;base64,iVBORw0KGgo="
+    assert images[1].get("src") is None
+
+
 def test_html_preserves_rich_list_items_and_individual_styles(
     html_template: FormattingTemplate,
 ) -> None:

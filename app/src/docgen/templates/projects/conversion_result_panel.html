@@ -18,7 +18,7 @@
         </div>
       </div>
       <div class="result-actions">
-        <div id="conversion-result-actions" class="export-result">
+        <div id="conversion-result-actions" class="export-result conversion-result-buttons">
           {% if export_format.value == "html" %}
             <a
               class="button secondary"
@@ -26,6 +26,11 @@
               target="_blank"
               rel="noopener"
             >Открыть</a>
+            {% if not document and sources | default([]) | length == 1 %}
+              <form action="/projects/{{ project_id }}/editor/import-source" method="post" data-editor-start-action>
+                <button class="button primary" type="submit">Редактировать</button>
+              </form>
+            {% endif %}
           {% else %}
             <a class="button primary" href="/projects/{{ project_id }}/conversions/{{ conversion_export.filename | urlencode }}/download">
               <span>Скачать</span>

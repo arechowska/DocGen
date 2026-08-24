@@ -52,7 +52,6 @@
         aria-label="Название документа"
       >
     </div>
-    {% include "projects/editor_start_action.html" %}
   </div>
 
   <div class="toolbar" role="toolbar" aria-label="Форматирование документа">
@@ -202,7 +201,8 @@
                   {% endfor %}
                 </ol>
               {% else %}
-                <ul data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% for item in node.data.get("items", []) %}{% set item_style = "" %}{% if node.data.get("item_styles") and node.data.get("item_styles")|length > loop.index0 %}{% set item_style = node.data.get("item_styles")[loop.index0] %}{% endif %}<li{{ style_attribute(item_style) }}>{% if node.data.get("items_html") and node.data.get("items_html")|length > loop.index0 %}{{ node.data.get("items_html")[loop.index0] | safe }}{% else %}{{ item }}{% endif %}</li>{% endfor %}</ul>
+                {% set list_tag = "ol" if node.data.get("ordered", false) else "ul" %}
+                <{{ list_tag }} data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>{% for item in node.data.get("items", []) %}{% set item_style = "" %}{% if node.data.get("item_styles") and node.data.get("item_styles")|length > loop.index0 %}{% set item_style = node.data.get("item_styles")[loop.index0] %}{% endif %}<li{{ style_attribute(item_style) }}>{% if node.data.get("items_html") and node.data.get("items_html")|length > loop.index0 %}{{ node.data.get("items_html")[loop.index0] | safe }}{% else %}{{ item }}{% endif %}</li>{% endfor %}</{{ list_tag }}>
               {% endif %}
             {% elif node.kind.value == "table" %}
               <table data-node-id="{{ node.id }}" data-kind="{{ node.kind.value }}"{% if node.section_id %} data-section-id="{{ node.section_id }}"{% endif %}{{ node_style_attribute(node) }}>
