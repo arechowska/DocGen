@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import OutputFormat
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_CONVERSION_PREFIX = "conversion-"
 _FORMAT_SUFFIXES: dict[OutputFormat, str] = {
     OutputFormat.DOCX: ".docx",
     OutputFormat.PDF: ".pdf",
@@ -89,6 +91,22 @@ class ExportStorage:
             size_bytes=len(rendered.content),
         )
 
+    def save_conversion(
+        self,
+        project_id: str,
+        format: OutputFormat,
+        template_id: str,
+        rendered: RenderedFile,
+    ) -> StoredExport:
+        """Save a direct source conversion without sharing an export filename."""
+        validated_template_id = self._validated_identifier(template_id)
+        return self.save(
+            project_id,
+            format,
+            f"{_CONVERSION_PREFIX}{validated_template_id}",
+            rendered,
+        )
+
     def resolve(self, relative_path: str) -> Path:
         path = Path(relative_path)
         if not relative_path or path.is_absolute() or ".." in path.parts or "\\" in relative_path:
@@ -102,9 +120,12 @@ class ExportStorage:
         project_id: str,
         format: OutputFormat,
         template_id: str,
+        *,
+        excluded_relative_paths: Iterable[str] = (),
     ) -> StoredExport | None:
         """Return the newest completed export for one project/format/template."""
         validated_template_id = self._validated_identifier(template_id)
+        excluded = frozenset(excluded_relative_paths)
         project_dir = self._resolved_project_dir(project_id)
         exports_dir = project_dir / "exports"
         if not exports_dir.exists():
@@ -115,13 +136,17 @@ class ExportStorage:
         self._require_within(exports_dir, project_dir)
 
         expected_suffix = f"-{validated_template_id}{_FORMAT_SUFFIXES[format]}"
-        candidates = [
-            path
-            for path in exports_dir.iterdir()
-            if not path.is_symlink()
-            and path.is_file()
-            and path.name.endswith(expected_suffix)
-        ]
+        candidates = []
+        for path in exports_dir.iterdir():
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or not path.name.endswith(expected_suffix)
+            ):
+                continue
+            relative_path = path.relative_to(self._data_dir).as_posix()
+            if relative_path not in excluded:
+                candidates.append(path)
         if not candidates:
             return None
         latest = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
@@ -130,6 +155,30 @@ class ExportStorage:
             relative_path=latest.relative_to(self._data_dir).as_posix(),
             filename=latest.name,
             size_bytes=latest.stat().st_size,
+        )
+
+    def latest_conversion(
+        self,
+        project_id: str,
+        format: OutputFormat,
+        template_id: str,
+        *,
+        legacy_export_paths: Iterable[str] = (),
+    ) -> StoredExport | None:
+        """Return a direct conversion, with compatibility for legacy filenames."""
+        validated_template_id = self._validated_identifier(template_id)
+        stored = self.latest(
+            project_id,
+            format,
+            f"{_CONVERSION_PREFIX}{validated_template_id}",
+        )
+        if stored is not None:
+            return stored
+        return self.latest(
+            project_id,
+            format,
+            validated_template_id,
+            excluded_relative_paths=legacy_export_paths,
         )
 
     def _exports_dir(self, project_id: str) -> Path:

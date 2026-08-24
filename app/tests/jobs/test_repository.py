@@ -216,6 +216,10 @@ def test_record_export_result_persists_fields_while_job_stays_running(
     assert succeeded.export_media_type == "text/html"
     assert succeeded.export_size_bytes == 42
     assert succeeded.export_document_revision == 4
+    assert job_repository.export_paths_for_project("p1") == {
+        "projects/p1/exports/document-docgen-light.html"
+    }
+    assert job_repository.export_paths_for_project("p2") == set()
 
 
 def test_claim_next_is_fifo_and_marks_running(job_repository: JobRepository) -> None:

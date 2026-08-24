@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set selected_output_format = conversion_format | default(none) %}
 
 {% block content %}
   <div class="app-shell">
@@ -43,7 +44,7 @@
             hx-swap="innerHTML"
           >
             {% for value, label in [("docx", "DOCX"), ("html", "HTML"), ("pdf", "PDF"), ("markdown", "Markdown")] %}
-              <option value="{{ value }}">{{ label }}</option>
+              <option value="{{ value }}"{% if selected_output_format and selected_output_format.value == value %} selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
         </label>

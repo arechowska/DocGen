@@ -10,7 +10,7 @@ from docgen.documents.schemas import WorkingDocument
 from docgen.export.storage import ExportStorage
 from docgen.formatting.schemas import OutputFormat
 from docgen.generation.targets import supported_check_targets
-from docgen.jobs.repository import ActiveProjectJobExists
+from docgen.jobs.repository import ActiveProjectJobExists, JobRepository
 from docgen.sources.service import SourceService
 from docgen.sources.storage import LocalStorage
 from docgen.templates_catalog.loader import NO_TEMPLATE_ID, TemplateCatalog
@@ -133,10 +133,13 @@ def project_detail_response(
     sources = source_service.list(project_id)
     current_template_id = selected_template_id(document, latest_report)
     saved_html_export = (
-        ExportStorage(request.app.state.settings.data_dir).latest(
+        ExportStorage(request.app.state.settings.data_dir).latest_conversion(
             project_id,
             OutputFormat.HTML,
             "docgen-light",
+            legacy_export_paths=JobRepository(session).export_paths_for_project(
+                project_id
+            ),
         )
         if current_template_id == NO_TEMPLATE_ID
         else None

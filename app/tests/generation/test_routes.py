@@ -20,8 +20,12 @@ from docgen.documents.schemas import (
     Severity,
     WorkingDocument,
 )
+from docgen.export.protocol import RenderedFile
+from docgen.export.service import ExportResult
+from docgen.export.storage import ExportStorage
 from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
+from docgen.formatting.schemas import OutputFormat
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner
@@ -216,6 +220,74 @@ def test_template_free_html_result_survives_reload_with_legacy_editor_document(
     assert result.find("a", string="Открыть") is not None
     assert result.find("a", string="Скачать") is None
     assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_saved_legacy_conversion_is_not_replaced_by_editor_html_export_on_reload(
+    client: TestClient, project_with_source: Project
+) -> None:
+    settings = client.app.state.settings
+    storage = ExportStorage(settings.data_dir)
+    saved_conversion = storage.save(
+        project_with_source.id,
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(
+            filename="source.html",
+            media_type="text/html",
+            content=b"<html><body>saved source version</body></html>",
+        ),
+    )
+    with _session(client) as session:
+        DocumentRepository(session).save_document(
+            project_with_source.id,
+            WorkingDocument(title="html 2", template_id="no-template", nodes=[]),
+        )
+        session.commit()
+
+        jobs = JobRepository(session, worker_id="route-test-worker")
+        jobs.enqueue(
+            project_with_source.id,
+            JobKind.EXPORT,
+            "docgen-light",
+            export_format=OutputFormat.HTML,
+            requested_document_revision=1,
+        )
+        claimed = jobs.claim_next()
+        assert claimed is not None
+        rebuilt = storage.save(
+            project_with_source.id,
+            OutputFormat.HTML,
+            "docgen-light",
+            RenderedFile(
+                filename="html-2.html",
+                media_type="text/html",
+                content=b"<html><body>rebuilt editor placeholder</body></html>",
+            ),
+        )
+        jobs.record_export_result(
+            claimed.id,
+            ExportResult(
+                relative_path=rebuilt.relative_path,
+                filename=rebuilt.filename,
+                media_type="text/html",
+                size_bytes=rebuilt.size_bytes,
+                document_revision=1,
+            ),
+        )
+        jobs.mark_succeeded(claimed.id)
+
+    response = client.get(f"/projects/{project_with_source.id}")
+    page = BeautifulSoup(response.text, "html.parser")
+    result = page.find(id="resultPanel")
+    selected_format = page.find(id="formatSelect").find("option", selected=True)
+
+    assert response.status_code == 200
+    assert result.find(id="resultFilename").get_text(strip=True) == saved_conversion.filename
+    assert result.find(id="conversion-result-actions") is not None
+    assert result.find(id="export-result") is None
+    assert selected_format["value"] == "html"
+    opened = client.get(result.find("a", string="Открыть")["href"])
+    assert opened.content == b"<html><body>saved source version</body></html>"
 
 
 def test_saved_conversion_does_not_replace_semantic_document_result_on_reload(

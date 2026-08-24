@@ -157,12 +157,21 @@ def convert_source(
             templates_dir=formatting_directory,
         )[output_format]
         rendered = exporter.render(document, formatting_template)
-        stored = ExportStorage(settings.data_dir).save(
-            project_id,
-            output_format,
-            formatting_template_id,
-            rendered,
-        )
+        export_storage = ExportStorage(settings.data_dir)
+        if output_format is OutputFormat.HTML:
+            stored = export_storage.save_conversion(
+                project_id,
+                output_format,
+                formatting_template_id,
+                rendered,
+            )
+        else:
+            stored = export_storage.save(
+                project_id,
+                output_format,
+                formatting_template_id,
+                rendered,
+            )
     except (
         ExportError,
         ExtractionError,
