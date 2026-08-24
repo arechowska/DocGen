@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.export.html import local_storage_image_loader
 from docgen.export.protocol import ExportError
 from docgen.export.service import default_exporters
+from docgen.export.storage import ExportStorage
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractionError, ExtractorRegistry
 from docgen.formatting.catalog import (
@@ -53,6 +55,12 @@ SessionDependency = Annotated[Session, Depends(get_session)]
 _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
 _FAILED_MESSAGE = "Не удалось обработать источники"
 _PROJECT_ACTIVE_MESSAGE = "Проект уже обрабатывается"
+_CONVERSION_MEDIA_TYPES = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".html": "text/html; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".pdf": "application/pdf",
+}
 
 
 @router.post("/{project_id}/jobs/assemble", status_code=status.HTTP_202_ACCEPTED)
@@ -68,7 +76,7 @@ def start_assemble(
             request,
             session,
             project,
-            "Без шаблона источник нужно открывать как конвертацию",
+            "Без шаблона используйте лёгкую конвертацию",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
     return _start_job(request, session, project_id, JobKind.ASSEMBLE, template_id)
@@ -86,6 +94,31 @@ def convert_source(
     project = _project_or_404(session, project_id)
     sources = SourceRepository(session).list_for_project(project_id)
     if len(sources) != 1:
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request=request,
+                name="projects/conversion_result_panel.html",
+                context={
+                    "project_id": project_id,
+                    "document": None,
+                    "has_document": False,
+                    "conversion_error": (
+                        "Без шаблона можно собрать только один источник. "
+                        f"Сейчас в проекте: {len(sources)}."
+                    ),
+                },
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            )
+        if "text/html" in request.headers.get("Accept", ""):
+            return templates.TemplateResponse(
+                request=request,
+                name="generation/conversion_error.html",
+                context={
+                    "project_id": project_id,
+                    "source_count": len(sources),
+                },
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Для конвертации без шаблона нужен ровно один источник",
@@ -103,10 +136,10 @@ def convert_source(
         formatting_template = FormattingCatalog(formatting_directory).get(
             output_format, formatting_template_id
         )
-        storage = LocalStorage(settings.data_dir)
+        source_storage = LocalStorage(settings.data_dir)
         normalized = NormalizationWorkflow(
             SourceRepository(session),
-            storage,
+            source_storage,
             ExtractorRegistry.default(settings),
             ConfluenceClient.from_settings(settings),
         ).run(project_id)
@@ -120,10 +153,25 @@ def convert_source(
             raise ExtractionError("В источнике нет извлекаемого содержимого")
         document = conversion_document(blocks, source.display_name or project.name)
         exporter = default_exporters(
-            image_loader=local_storage_image_loader(storage),
+            image_loader=local_storage_image_loader(source_storage),
             templates_dir=formatting_directory,
         )[output_format]
         rendered = exporter.render(document, formatting_template)
+        export_storage = ExportStorage(settings.data_dir)
+        if output_format is OutputFormat.HTML:
+            stored = export_storage.save_conversion(
+                project_id,
+                output_format,
+                formatting_template_id,
+                rendered,
+            )
+        else:
+            stored = export_storage.save(
+                project_id,
+                output_format,
+                formatting_template_id,
+                rendered,
+            )
     except (
         ExportError,
         ExtractionError,
@@ -131,13 +179,39 @@ def convert_source(
         PageLimitExceeded,
         ValueError,
     ) as error:
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request=request,
+                name="projects/conversion_result_panel.html",
+                context={
+                    "project_id": project_id,
+                    "document": None,
+                    "has_document": False,
+                    "conversion_error": str(error),
+                },
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(error),
         ) from error
 
+    if request.headers.get("HX-Request") == "true":
+        return templates.TemplateResponse(
+            request=request,
+            name="projects/conversion_result_panel.html",
+            context={
+                "project": project,
+                "project_id": project_id,
+                "document": None,
+                "has_document": False,
+                "saved_conversion_export": stored,
+                "conversion_format": output_format,
+            },
+        )
+
     disposition = "inline" if output_format is OutputFormat.HTML else "attachment"
-    encoded_filename = quote(rendered.filename)
+    encoded_filename = quote(stored.filename)
     return Response(
         content=rendered.content,
         media_type=rendered.media_type,
@@ -146,6 +220,76 @@ def convert_source(
                 f"{disposition}; filename*=UTF-8''{encoded_filename}"
             )
         },
+    )
+
+
+@router.get("/{project_id}/conversions/{filename}/open")
+def open_saved_html_conversion(
+    request: Request,
+    project_id: str,
+    filename: str,
+    session: SessionDependency,
+) -> Response:
+    _project_or_404(session, project_id)
+    if (
+        not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or not filename.lower().endswith(".html")
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+
+    storage = ExportStorage(request.app.state.settings.data_dir)
+    relative_path = f"projects/{project_id}/exports/{filename}"
+    try:
+        path = storage.resolve(relative_path)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл не найден",
+        ) from error
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    return FileResponse(
+        path,
+        media_type="text/html; charset=utf-8",
+        filename=filename,
+        content_disposition_type="inline",
+    )
+
+
+@router.get("/{project_id}/conversions/{filename}/download")
+def download_saved_conversion(
+    request: Request,
+    project_id: str,
+    filename: str,
+    session: SessionDependency,
+) -> Response:
+    _project_or_404(session, project_id)
+    suffix = Path(filename).suffix.lower()
+    if (
+        not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or suffix not in _CONVERSION_MEDIA_TYPES
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    storage = ExportStorage(request.app.state.settings.data_dir)
+    try:
+        path = storage.resolve(f"projects/{project_id}/exports/{filename}")
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл не найден",
+        ) from error
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    return FileResponse(
+        path,
+        media_type=_CONVERSION_MEDIA_TYPES[suffix],
+        filename=filename,
     )
 
 

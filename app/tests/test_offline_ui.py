@@ -526,6 +526,7 @@ listeners.get("change")();
 if (targets.some((target) => target.value !== "faq")) {{
   throw new Error(`template targets were not synchronized: ${{targets.map((target) => target.value)}}`);
 }}
+if (buildButton.formTarget !== "assembleForm") throw new Error("semantic build form was changed");
 source.value = "no-template";
 listeners.get("change")();
 if (buildButton.formTarget !== "conversionForm") throw new Error("conversion form was not selected");

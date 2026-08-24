@@ -20,8 +20,12 @@ from docgen.documents.schemas import (
     Severity,
     WorkingDocument,
 )
+from docgen.export.protocol import RenderedFile
+from docgen.export.service import ExportResult
+from docgen.export.storage import ExportStorage
 from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
+from docgen.formatting.schemas import OutputFormat
 from docgen.jobs.models import Job, JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner
@@ -120,13 +124,13 @@ def test_start_assemble_without_template_does_not_create_editor_document(
     )
 
     assert response.status_code == 422
-    assert "конвертацию" in response.text
+    assert "конвертаци" in response.text
     assert _jobs_for_project(client, project_with_source.id) == []
     with _session(client) as session:
         assert DocumentRepository(session).get_document(project_with_source.id) is None
 
 
-def test_template_free_html_conversion_opens_inline_without_changing_editor(
+def test_template_free_html_conversion_saves_export_and_opens_inline_without_changing_editor(
     client: TestClient, project_with_source: Project
 ) -> None:
     original = _document()
@@ -141,10 +145,180 @@ def test_template_free_html_conversion_opens_inline_without_changing_editor(
     assert response.headers["content-type"].startswith("text/html")
     assert response.headers["content-disposition"].startswith("inline;")
     assert b"Case" in response.content
+    export_directory = (
+        client.app.state.settings.data_dir
+        / "projects"
+        / project_with_source.id
+        / "exports"
+    )
+    saved_exports = list(export_directory.glob("*.html"))
+    assert len(saved_exports) == 1
+    assert saved_exports[0].read_bytes() == response.content
     with _session(client) as session:
         assert DocumentRepository(session).get_document_with_revision(
             project_with_source.id
         ) == (original, 1)
+
+
+def test_template_free_html_conversion_updates_result_and_survives_reload(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+
+    assert response.status_code == 200
+    result = BeautifulSoup(response.text, "html.parser")
+    assert result.find(id="resultStatus").get_text(strip=True) == "Готово"
+    open_link = result.find("a", string="Открыть")
+    assert open_link is not None
+    assert open_link.get("target") == "_blank"
+
+    opened = client.get(open_link["href"])
+    assert opened.status_code == 200
+    assert opened.headers["content-type"].startswith("text/html")
+    assert opened.headers["content-disposition"].startswith("inline;")
+    assert b"Case" in opened.content
+    assert b"<style>" in opened.content
+    assert b"font-family: Inter, system-ui, sans-serif" in opened.content
+
+    reloaded = client.get(f"/projects/{project_with_source.id}")
+    reloaded_page = BeautifulSoup(reloaded.text, "html.parser")
+    reloaded_open_link = reloaded_page.find(id="resultPanel").find(
+        "a", string="Открыть"
+    )
+    assert reloaded_open_link is not None
+    assert reloaded_open_link["href"] == open_link["href"]
+    with _session(client) as session:
+        assert DocumentRepository(session).get_document(project_with_source.id) is None
+    assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_template_free_html_result_survives_reload_with_legacy_editor_document(
+    client: TestClient, project_with_source: Project
+) -> None:
+    with _session(client) as session:
+        DocumentRepository(session).save_document(
+            project_with_source.id,
+            WorkingDocument(title="Legacy", template_id="no-template", nodes=[]),
+        )
+        session.commit()
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+    assert response.status_code == 200
+
+    reloaded = client.get(f"/projects/{project_with_source.id}")
+    result = BeautifulSoup(reloaded.text, "html.parser").find(id="resultPanel")
+
+    assert result is not None
+    assert result.find("a", string="Открыть") is not None
+    assert result.find("a", string="Скачать") is None
+    assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_saved_legacy_conversion_is_not_replaced_by_editor_html_export_on_reload(
+    client: TestClient, project_with_source: Project
+) -> None:
+    settings = client.app.state.settings
+    storage = ExportStorage(settings.data_dir)
+    saved_conversion = storage.save(
+        project_with_source.id,
+        OutputFormat.HTML,
+        "docgen-light",
+        RenderedFile(
+            filename="source.html",
+            media_type="text/html",
+            content=b"<html><body>saved source version</body></html>",
+        ),
+    )
+    with _session(client) as session:
+        DocumentRepository(session).save_document(
+            project_with_source.id,
+            WorkingDocument(title="html 2", template_id="no-template", nodes=[]),
+        )
+        session.commit()
+
+        jobs = JobRepository(session, worker_id="route-test-worker")
+        jobs.enqueue(
+            project_with_source.id,
+            JobKind.EXPORT,
+            "docgen-light",
+            export_format=OutputFormat.HTML,
+            requested_document_revision=1,
+        )
+        claimed = jobs.claim_next()
+        assert claimed is not None
+        rebuilt = storage.save(
+            project_with_source.id,
+            OutputFormat.HTML,
+            "docgen-light",
+            RenderedFile(
+                filename="html-2.html",
+                media_type="text/html",
+                content=b"<html><body>rebuilt editor placeholder</body></html>",
+            ),
+        )
+        jobs.record_export_result(
+            claimed.id,
+            ExportResult(
+                relative_path=rebuilt.relative_path,
+                filename=rebuilt.filename,
+                media_type="text/html",
+                size_bytes=rebuilt.size_bytes,
+                document_revision=1,
+            ),
+        )
+        jobs.mark_succeeded(claimed.id)
+
+    response = client.get(f"/projects/{project_with_source.id}")
+    page = BeautifulSoup(response.text, "html.parser")
+    result = page.find(id="resultPanel")
+    selected_format = page.find(id="formatSelect").find("option", selected=True)
+
+    assert response.status_code == 200
+    assert result.find(id="resultFilename").get_text(strip=True) == saved_conversion.filename
+    assert result.find(id="conversion-result-actions") is not None
+    assert result.find(id="export-result") is None
+    assert selected_format["value"] == "html"
+    opened = client.get(result.find("a", string="Открыть")["href"])
+    assert opened.content == b"<html><body>saved source version</body></html>"
+
+
+def test_saved_conversion_does_not_replace_semantic_document_result_on_reload(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+    assert response.status_code == 200
+
+    with _session(client) as session:
+        DocumentRepository(session).save_document(
+            project_with_source.id,
+            WorkingDocument(
+                title="Semantic result",
+                template_id="faq",
+                origin=DocumentOrigin.ASSEMBLED,
+                build_template_id="faq",
+                nodes=[],
+            ),
+        )
+        session.commit()
+
+    reloaded = client.get(f"/projects/{project_with_source.id}")
+    result = BeautifulSoup(reloaded.text, "html.parser").find(id="resultPanel")
+
+    assert result is not None
+    assert result.find(id="resultFilename").get_text(strip=True) == "Semantic result"
+    assert result.find("a", string="Открыть") is None
 
 
 def test_template_free_docx_conversion_downloads_without_creating_editor_document(
@@ -211,6 +385,53 @@ def test_template_free_conversion_requires_exactly_one_source(
     assert response.status_code == 422
     assert "ровно один источник" in response.text
     assert _jobs_for_project(client, project_with_source.id) == []
+
+
+def test_template_free_conversion_shows_friendly_browser_error_for_multiple_sources(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("second.md", b"# Second", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"Accept": "text/html"},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Выбери один источник" in response.text
+    assert "Сейчас в проекте их 2" in response.text
+    assert f'href="/projects/{project_with_source.id}#sourcesPanel"' in response.text
+    assert '"detail"' not in response.text
+
+
+def test_template_free_conversion_shows_friendly_inline_error_for_multiple_sources(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("second.md", b"# Second", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"HX-Request": "true", "Accept": "text/html"},
+    )
+
+    assert response.status_code == 422
+    result = BeautifulSoup(response.text, "html.parser")
+    assert result.find(id="resultStatus").get_text(strip=True) == "Ошибка"
+    assert "Сейчас в проекте: 2" in result.get_text(" ")
+    assert '"detail"' not in response.text
 
 
 def test_start_assemble_accepts_external_semantic_template(

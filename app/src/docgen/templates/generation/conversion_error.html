@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main class="mx-auto max-w-4xl px-6 py-12 sm:px-10">
+    <section class="rounded-[28px] bg-white p-7 sm:p-10" role="alert">
+      <p class="text-sm font-medium text-[#5f6873]">Сборка HTML без шаблона</p>
+      <h1 class="mt-2 text-3xl font-semibold tracking-tight">
+        {% if source_count == 0 %}Добавь источник{% else %}Выбери один источник{% endif %}
+      </h1>
+      <p class="mt-4 text-[#5f6873]">
+        {% if source_count == 0 %}
+          В проекте пока нет материалов. Добавь файл или ссылку на Wiki и повтори сборку.
+        {% else %}
+          Без структурного шаблона можно конвертировать только один источник. Сейчас в проекте их {{ source_count }}. Удали лишние или выбери шаблон для сборки из нескольких материалов.
+        {% endif %}
+      </p>
+      <a class="docgen-primary-button mt-5 inline-flex" href="/projects/{{ project_id }}#sourcesPanel">
+        Вернуться к источникам
+      </a>
+    </section>
+  </main>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% set conversion_export = saved_conversion_export | default(none) %}
+{% set export_format = conversion_format | default(none) %}
+{% set error = conversion_error | default(none) %}
+<section id="resultPanel" class="result-panel" aria-labelledby="resultTitle">
+  <div class="result-heading">
+    <h2 id="resultTitle">Результат</h2>
+    <span id="resultStatus" class="ready-label {% if conversion_export %}done{% endif %}">{% if error %}Ошибка{% elif conversion_export %}Готово{% else %}Не собран{% endif %}</span>
+  </div>
+  {% if error %}
+    <div class="result-empty error-banner" role="alert">{{ error }}</div>
+  {% elif conversion_export %}
+    <div id="resultReady" class="result-ready">
+      <div class="result-file">
+        <span id="resultFileIcon" class="result-file-icon">H</span>
+        <div>
+          <strong id="resultFilename">{{ conversion_export.filename }}</strong>
+          <span id="resultMeta">{{ export_format.value | upper }} сохранён в проекте</span>
+        </div>
+      </div>
+      <div class="result-actions">
+        <div id="conversion-result-actions" class="export-result">
+          {% if export_format.value == "html" %}
+            <a
+              class="button secondary"
+              href="/projects/{{ project_id }}/conversions/{{ conversion_export.filename | urlencode }}/open"
+              target="_blank"
+              rel="noopener"
+            >Открыть</a>
+          {% else %}
+            <a class="button primary" href="/projects/{{ project_id }}/conversions/{{ conversion_export.filename | urlencode }}/download">
+              <span>Скачать</span>
+            </a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+</section>
