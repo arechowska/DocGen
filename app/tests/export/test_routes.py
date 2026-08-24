@@ -484,6 +484,8 @@ def test_open_html_export_returns_the_saved_html_inline(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "inline" in response.headers["content-disposition"]
+    assert "style-src 'unsafe-inline'" in response.headers["content-security-policy"]
+    assert "font-src data:" in response.headers["content-security-policy"]
     assert response.content == b"<html><body>saved export</body></html>"
 
 

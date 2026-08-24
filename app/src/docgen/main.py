@@ -29,6 +29,18 @@ _CONTENT_SECURITY_POLICY = (
     "frame-ancestors 'none'; "
     "form-action 'self'"
 )
+_STANDALONE_HTML_CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; "
+    "script-src 'none'; "
+    "style-src 'unsafe-inline'; "
+    "img-src data:; "
+    "font-src data:; "
+    "connect-src 'none'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'none'"
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -53,7 +65,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def security_headers(request, call_next):
         response = await call_next(request)
-        response.headers["Content-Security-Policy"] = _CONTENT_SECURITY_POLICY
+        if request.url.path.endswith("/open"):
+            response.headers["Content-Security-Policy"] = (
+                _STANDALONE_HTML_CONTENT_SECURITY_POLICY
+            )
+        else:
+            response.headers["Content-Security-Policy"] = _CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
