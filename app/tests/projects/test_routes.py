@@ -238,6 +238,7 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
 ) -> None:
     created = client.post("/projects", data={"name": "Интерфейс"}, follow_redirects=False)
     project_url = created.headers["location"]
+    project_id = project_url.rsplit("/", 1)[-1]
 
     response = client.get(project_url)
 
@@ -281,7 +282,13 @@ def test_project_detail_renders_layout_agent_workspace_without_document(
     template_select = soup.find(id="templateSelect")
     assert template_select is not None
     assert not template_select.has_attr("disabled")
-    assert soup.find(id="buildButton") is not None
+    import_form = soup.find(id="editorImportForm")
+    assert import_form is not None
+    assert import_form["action"] == f"/projects/{project_id}/editor/import-source"
+    assert import_form["method"] == "post"
+    build = soup.find(id="buildButton")
+    assert build is not None
+    assert build["data-has-document"] == "false"
     conversion_form = soup.find(id="conversionForm")
     assert conversion_form is not None
     assert conversion_form.get("hx-target") == "#resultPanel"
@@ -309,6 +316,7 @@ def test_project_detail_embeds_editor_when_document_exists(client: TestClient) -
 
     assert response.status_code == 200
     soup = BeautifulSoup(response.text, "html.parser")
+    assert soup.find(id="buildButton")["data-has-document"] == "true"
     editor_panel = soup.find(id="docgen2Editor")
     assert editor_panel is not None
     assert editor_panel.get("hx-get") == project_url

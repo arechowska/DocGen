@@ -90,10 +90,18 @@
       conversionTemplate.value = formattingSource?.disabled ? "" : formattingSource?.value || "";
     }
     if (!buildButton) return;
-    buildButton.setAttribute("form", withoutTemplate ? "conversionForm" : "assembleForm");
+    const htmlWithoutTemplate = withoutTemplate && formatSource?.value === "html";
+    const hasDocument = buildButton.dataset.hasDocument === "true";
+    const buildForm = htmlWithoutTemplate
+      ? (hasDocument ? "export-form" : "editorImportForm")
+      : (withoutTemplate ? "conversionForm" : "assembleForm");
+    buildButton.setAttribute("form", buildForm);
     const sourceAvailable = buildButton.dataset.sourceAvailable === "true";
     const conversionReady = Boolean(formatSource?.value && conversionTemplate?.value);
-    buildButton.disabled = !sourceAvailable || (withoutTemplate && !conversionReady);
+    const needsSource = !(htmlWithoutTemplate && hasDocument);
+    buildButton.disabled =
+      (needsSource && !sourceAvailable) ||
+      (withoutTemplate && !conversionReady);
   };
   const synchronizeTemplate = () => {
     document.querySelectorAll("[data-template-target]").forEach((target) => {
@@ -467,7 +475,7 @@
 
   const saveWorkspace = async () => {
     const saveUrl = editor.dataset.saveUrl;
-    if (!saveUrl || !saveButton) return;
+    if (!saveUrl || !saveButton) return null;
     const creatingDocument = !Number.isInteger(
       Number.parseInt(editor.dataset.revision, 10),
     );
@@ -511,13 +519,17 @@
       if (creatingDocument && typeof window.location?.reload === "function") {
         window.location.reload();
       }
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Не удалось сохранить";
       setSaveStatus(message, "error");
+      return null;
     } finally {
       saveButton.disabled = false;
     }
   };
+
+  editor.docgenSaveWorkspace = saveWorkspace;
 
   const closeTableMenu = () => {
     if (!tableMenu || !tableButton) return;
@@ -721,6 +733,24 @@
     return saveWorkspace();
   });
   };
+
+  document.addEventListener("submit", async (event) => {
+    const buildButton = event.submitter;
+    if (event.target?.id !== "export-form" || buildButton?.id !== "buildButton") return;
+    const noTemplateHtml =
+      document.querySelector("[data-template-source]")?.value === "no-template" &&
+      document.querySelector("#formatSelect")?.value === "html";
+    if (!noTemplateHtml) return;
+    event.preventDefault();
+    const editor = document.querySelector("#docgen2Editor");
+    const saved = await editor?.docgenSaveWorkspace?.();
+    if (!saved) return;
+    window.htmx?.trigger?.(
+      document.body,
+      "docgen:html-build",
+      {revision: saved.revision},
+    );
+  });
 
   document.addEventListener("click", (event) => {
     const activeEditor = document.querySelector("#docgen2Editor");

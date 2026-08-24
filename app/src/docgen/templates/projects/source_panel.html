@@ -110,6 +110,11 @@
     <input type="hidden" name="template_id" value="{{ selected_template_id | default('no-template') }}" data-template-target>
   </form>
   <form
+    id="editorImportForm"
+    action="/projects/{{ project.id }}/editor/import-source"
+    method="post"
+  ></form>
+  <form
     id="conversionForm"
     action="/projects/{{ project.id }}/convert"
     method="post"
