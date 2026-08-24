@@ -129,7 +129,7 @@ def start_export(
             request, str(error), status.HTTP_422_UNPROCESSABLE_CONTENT
         )
 
-    return _status_response(request, job, status_code=status.HTTP_202_ACCEPTED)
+    return _status_response(session, request, job, status_code=status.HTTP_202_ACCEPTED)
 
 
 @router.get("/{project_id}/exports/{job_id}/status")
@@ -141,7 +141,7 @@ def export_status(
 ) -> Response:
     _project_or_404(session, project_id)
     job = _owned_export_job_or_404(session, project_id, job_id)
-    return _status_response(request, job)
+    return _status_response(session, request, job)
 
 
 @router.get("/{project_id}/exports/{job_id}/download")
@@ -260,7 +260,21 @@ def _error_response(request: Request, message: str, status_code: int) -> Respons
     )
 
 
+def _is_no_template_html_export(session: Session, job: Job) -> bool:
+    if (
+        job.export_format is not OutputFormat.HTML
+        or job.requested_document_revision is None
+    ):
+        return False
+    document = DocumentRepository(session).get_document_at_revision(
+        job.project_id,
+        job.requested_document_revision,
+    )
+    return document is not None and document.template_id == NO_TEMPLATE_ID
+
+
 def _status_response(
+    session: Session,
     request: Request,
     job: Job,
     *,
@@ -273,6 +287,7 @@ def _status_response(
             "job": job,
             "is_active": job.status in _ACTIVE_STATUSES,
             "safe_error": _safe_export_error(job),
+            "show_html_download": _is_no_template_html_export(session, job),
         },
         status_code=status_code,
     )
