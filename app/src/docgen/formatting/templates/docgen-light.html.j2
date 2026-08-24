@@ -1,30 +1,31 @@
-{% macro render_rich_text(node) %}{% if node.data.get('html') %}{{ safe_rich_html(node.data.get('html')) }}{% else %}{{ node.text or "" }}{% endif %}{% endmacro %}
 {% macro render_node(node) %}
-<section id="node-{{ node.id }}" class="dg-node dg-node-{{ node.kind.value }}">
+<article id="node-{{ node.id }}" class="dg-node dg-node-{{ node.kind.value }}">
   {% if node.kind.value == "heading" %}
     {% set level = node.data.get('level', 1)|int(1) %}
     {% set level = [level, 1]|max %}
     {% set level = [level, 6]|min %}
-    {% if level == 1 %}<h1{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</h1>
-    {% elif level == 2 %}<h2{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</h2>
-    {% elif level == 3 %}<h3{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</h3>
-    {% elif level == 4 %}<h4{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</h4>
-    {% elif level == 5 %}<h5{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</h5>
-    {% else %}<h6{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</h6>
+    {% if level == 1 %}<h1{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h1>
+    {% elif level == 2 %}<h2{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h2>
+    {% elif level == 3 %}<h3{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h3>
+    {% elif level == 4 %}<h4{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h4>
+    {% elif level == 5 %}<h5{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h5>
+    {% else %}<h6{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h6>
     {% endif %}
   {% elif node.kind.value == "paragraph" %}
-    <p{{ node_style_attribute(node) }}>{{ render_rich_text(node) }}</p>
+    <p{{ node_style_attribute(node) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</p>
   {% elif node.kind.value == "list" %}
     {% if node.text %}<p class="dg-caption">{{ node.text }}</p>{% endif %}
     {% set items = node.data.get('items', []) %}
+    {% set rich_items = node.data.get('items_html', []) %}
+    {% set item_styles = node.data.get('item_styles', []) %}
     {% if items is sequence and items is not string %}
       {% if node.data.get('ordered', False) %}
       <ol{{ node_style_attribute(node) }}>
-        {% for item in items %}{% set item_style = node.data.get('item_styles', [])[loop.index0] if node.data.get('item_styles', [])|length > loop.index0 else "" %}<li{{ style_attribute(item_style) }}>{% if node.data.get('items_html', [])|length > loop.index0 %}{{ safe_rich_html(node.data.get('items_html', [])[loop.index0]) }}{% else %}{{ item }}{% endif %}</li>{% endfor %}
+        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item, allow_lists=True) }}</li>{% endfor %}
       </ol>
       {% else %}
       <ul{{ node_style_attribute(node) }}>
-        {% for item in items %}{% set item_style = node.data.get('item_styles', [])[loop.index0] if node.data.get('item_styles', [])|length > loop.index0 else "" %}<li{{ style_attribute(item_style) }}>{% if node.data.get('items_html', [])|length > loop.index0 %}{{ safe_rich_html(node.data.get('items_html', [])[loop.index0]) }}{% else %}{{ item }}{% endif %}</li>{% endfor %}
+        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item, allow_lists=True) }}</li>{% endfor %}
       </ul>
       {% endif %}
     {% endif %}
@@ -38,9 +39,7 @@
       <div class="dg-table-wrap">
         <table{{ node_style_attribute(node) }}>
           {% if has_headers %}
-          <thead>
-            <tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr>
-          </thead>
+          <thead><tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
           {% endif %}
           {% if has_rows %}
           <tbody>
@@ -56,9 +55,14 @@
     {% endif %}
   {% elif node.kind.value == "image" %}
     {% set data_url = image_data_url(node.data.get('src')) %}
-    <figure class="dg-image"{{ node_style_attribute(node) }}>
+    {% set alignment = node.data.get('alignment', 'center') %}
+    {% if alignment not in ['left', 'center', 'right'] %}{% set alignment = 'center' %}{% endif %}
+    {% set width = node.data.get('width', 80)|int(80) %}
+    {% set width = [width, 10]|max %}
+    {% set width = [width, 100]|min %}
+    <figure class="dg-image dg-image-{{ alignment }}"{{ node_style_attribute(node) }}>
       {% if data_url %}
-        <img src="{{ data_url }}" alt="{{ node.data.get('alt') or node.text or '' }}">
+        <img src="{{ data_url }}" alt="{{ node.data.get('alt') or node.text or '' }}" style="max-width:{{ width }}%">
       {% else %}
         <div class="dg-image-placeholder">Изображение или схема</div>
       {% endif %}
@@ -73,7 +77,7 @@
     {% for child in node.children %}{{ render_node(child) }}{% endfor %}
   </div>
   {% endif %}
-</section>
+</article>
 {% endmacro %}
 <!doctype html>
 <html lang="ru">
@@ -81,12 +85,54 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ document.title }}</title>
-    <style>{{ css|safe }}</style>
+    <style>
+      @font-face{font-family:"Akrobat";src:url("{{ font_data_urls['Akrobat-Bold.otf'] }}") format("opentype");font-weight:700;font-style:normal;font-display:swap}
+      @font-face{font-family:"Roboto";src:url("{{ font_data_urls['Roboto-Regular.ttf'] }}") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+      @font-face{font-family:"Roboto";src:url("{{ font_data_urls['Roboto-Light.ttf'] }}") format("truetype");font-weight:300;font-style:normal;font-display:swap}
+      @font-face{font-family:"Roboto";src:url("{{ font_data_urls['Roboto-Bold.ttf'] }}") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+      {{ css|safe }}
+    </style>
   </head>
   <body>
-    <main class="dg-document">
-      <h1 class="dg-title">{{ document.title }}</h1>
-      {% for node in document.nodes %}{{ render_node(node) }}{% endfor %}
+    <main id="top" class="page-shell">
+      <header class="card-shell hero">
+        <div class="brand-box" aria-hidden="true"></div>
+        <h1 class="page-title">{{ document.title }}</h1>
+      </header>
+
+      {% if view.introduction or not view.sections %}
+      <section class="section card-shell dg-introduction">
+        <div class="section-content">
+          {% for node in view.introduction %}{{ render_node(node) }}{% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {% if view.show_contents %}
+      <nav id="contents" class="contents card-shell" aria-label="Содержание">
+        <div class="section-content">
+          <h2>Содержание</h2>
+          <ul>
+            {% for section in view.sections %}
+            <li><a href="#{{ section.anchor }}">{{ section.heading.text or "" }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+      </nav>
+      {% endif %}
+
+      {% for section in view.sections %}
+      <section id="{{ section.anchor }}" class="section card-shell">
+        <div class="section-content">
+          {{ render_node(section.heading) }}
+          {% for node in section.nodes %}{{ render_node(node) }}{% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+
+      <a class="step-link back-to-top-fab" href="{% if view.show_contents %}#contents{% else %}#top{% endif %}" aria-label="Наверх">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
     </main>
   </body>
 </html>

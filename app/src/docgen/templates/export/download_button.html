@@ -19,6 +19,11 @@
       target="_blank"
       rel="noopener"
     >Открыть</a>
+    {% if show_html_download | default(false) %}
+      <a class="button primary" href="/projects/{{ job.project_id }}/exports/{{ job.id }}/download">
+        <span>Скачать</span>
+      </a>
+    {% endif %}
   {% else %}
   <a class="button primary" href="/projects/{{ job.project_id }}/exports/{{ job.id }}/download">
     <span>Скачать</span>

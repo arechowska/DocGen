@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
 from docgen.documents.repository import DocumentRepository
@@ -92,6 +93,36 @@ def test_html_format_exposes_single_lightweight_formatting_option(
     assert response.text.count("<option") == 1
     assert 'value="docgen-light"' in response.text
     assert "Облегченный HTML" in response.text
+
+
+def test_no_template_html_options_wait_for_explicit_build(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(
+        f"/projects/{project_with_document.id}/export/templates",
+        params={"format": "html", "semantic_template_id": "no-template"},
+    )
+
+    select = BeautifulSoup(response.text, "html.parser").find("select")
+    assert select is not None
+    trigger = select["hx-trigger"]
+    assert "docgen:html-build from:body" in trigger
+    assert "docgen:document-updated from:body" not in trigger
+
+
+def test_other_export_options_keep_document_update_trigger(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(
+        f"/projects/{project_with_document.id}/export/templates",
+        params={"format": "html", "semantic_template_id": "faq"},
+    )
+
+    select = BeautifulSoup(response.text, "html.parser").find("select")
+    assert select is not None
+    trigger = select["hx-trigger"]
+    assert "docgen:document-updated from:body" in trigger
+    assert "docgen:html-build from:body" not in trigger
 
 
 def test_format_selection_rejects_invalid_format(
@@ -269,6 +300,72 @@ def test_export_status_reports_html_open_link(
     assert ">Открыть</a>" in response.text
 
 
+def test_no_template_html_status_offers_open_and_download(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        repository = DocumentRepository(session)
+        current = repository.get_document_with_revision(project_with_document.id)
+        assert current is not None
+        _, revision = current
+        revision = repository.save_document(
+            project_with_document.id,
+            WorkingDocument(
+                title="Ручная версия",
+                template_id="no-template",
+                nodes=[DocumentNode(id="p1", kind=NodeKind.PARAGRAPH, text="Правка")],
+            ),
+        )
+        assert revision == 2
+        session.commit()
+    job = _make_export_job(
+        client,
+        project_with_document.id,
+        state="succeeded",
+        export_format=OutputFormat.HTML,
+        filename="document.html",
+        requested_document_revision=2,
+    )
+
+    response = client.get(f"/projects/{project_with_document.id}/exports/{job.id}/status")
+
+    assert response.status_code == 200
+    assert f"/exports/{job.id}/open" in response.text
+    assert f"/exports/{job.id}/download" in response.text
+    assert ">Открыть</a>" in response.text
+    assert ">Скачать<" in response.text
+
+
+def test_stale_semantic_html_status_does_not_offer_download_for_current_no_template(
+    client: TestClient, project_with_document: Project
+) -> None:
+    with _session(client) as session:
+        revision = DocumentRepository(session).save_document(
+            project_with_document.id,
+            WorkingDocument(
+                title="Ручная версия",
+                template_id="no-template",
+                nodes=[DocumentNode(id="p1", kind=NodeKind.PARAGRAPH, text="Правка")],
+            ),
+        )
+        assert revision == 2
+        session.commit()
+    job = _make_export_job(
+        client,
+        project_with_document.id,
+        state="succeeded",
+        export_format=OutputFormat.HTML,
+        filename="document.html",
+        requested_document_revision=1,
+    )
+
+    response = client.get(f"/projects/{project_with_document.id}/exports/{job.id}/status")
+
+    assert response.status_code == 200
+    assert f"/exports/{job.id}/open" in response.text
+    assert f"/exports/{job.id}/download" not in response.text
+
+
 def test_export_status_reports_failure(
     client: TestClient, project_with_document: Project
 ) -> None:
@@ -387,6 +484,8 @@ def test_open_html_export_returns_the_saved_html_inline(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "inline" in response.headers["content-disposition"]
+    assert "style-src 'unsafe-inline'" in response.headers["content-security-policy"]
+    assert "font-src data:" in response.headers["content-security-policy"]
     assert response.content == b"<html><body>saved export</body></html>"
 
 
@@ -441,6 +540,7 @@ def _make_export_job(
     write_file: bool = True,
     filename: str = "document.docx",
     export_format: OutputFormat = OutputFormat.DOCX,
+    requested_document_revision: int = 1,
 ) -> Job:
     with _session(client) as session:
         repository = JobRepository(session, worker_id="route-test-worker")
@@ -449,7 +549,7 @@ def _make_export_job(
             JobKind.EXPORT,
             "docgen-light",
             export_format=export_format,
-            requested_document_revision=1,
+            requested_document_revision=requested_document_revision,
         )
         if state == "queued":
             session.expunge(job)
@@ -491,7 +591,7 @@ def _make_export_job(
                 filename=stored.filename,
                 media_type=rendered.media_type,
                 size_bytes=stored.size_bytes,
-                document_revision=1,
+                document_revision=requested_document_revision,
             )
             repository.record_export_result(claimed.id, result)
             succeeded = repository.mark_succeeded(claimed.id)

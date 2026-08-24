@@ -1,10 +1,12 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from bs4 import BeautifulSoup
+from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,7 +16,8 @@ from docgen.documents.repository import DocumentRepository
 from docgen.documents.schemas import DocumentNode, DocumentOrigin, NodeKind, WorkingDocument
 from docgen.editor import routes as editor_routes
 from docgen.extraction.schemas import Provenance
-from docgen.jobs.models import Job
+from docgen.formatting.schemas import OutputFormat
+from docgen.jobs.models import Job, JobKind
 from docgen.main import create_app
 from docgen.models import Project
 from docgen.sources.repository import SourceRepository
@@ -361,6 +364,196 @@ def test_single_source_can_be_imported_into_editor_without_job(
     assert result.find(id="export-result") is not None
     assert result.find(id="conversion-result-actions") is None
     assert selected_format["value"] == "html"
+
+
+def test_no_template_html_profile_imports_docx_with_rebased_heading_and_ordered_list(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="DOCX no-template HTML")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={
+            "file": (
+                "guide.docx",
+                _docx_with_outline_heading_and_ordered_list(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        data={"import_profile": "no-template-html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project_id}#docgen2Editor"
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.nodes[0].kind is NodeKind.HEADING
+        assert document.nodes[0].data["level"] == 1
+        assert document.nodes[1].kind is NodeKind.LIST
+        assert document.nodes[1].data["ordered"] is True
+        assert document.nodes[1].data["items"] == ["First", "Second"]
+
+
+def test_no_template_html_profile_keeps_markdown_heading_level(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Markdown no-template HTML")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={"file": ("guide.md", b"### Details", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        data={"import_profile": "no-template-html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.nodes[0].kind is NodeKind.HEADING
+        assert document.nodes[0].data["level"] == 3
+
+
+def test_import_source_without_profile_keeps_default_docx_heading_level(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Default DOCX import")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={
+            "file": (
+                "guide.docx",
+                _docx_with_outline_heading_and_ordered_list(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.nodes[0].kind is NodeKind.HEADING
+        assert document.nodes[0].data["level"] == 2
+
+
+def test_no_template_html_rebuild_targets_edited_revision_without_reimport(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name='HTML from editor')
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    client.post(
+        f'/projects/{project_id}/sources/files',
+        files={'file': ('source.md', b'# Source\n\nOriginal', 'text/markdown')},
+        headers={'HX-Request': 'true'},
+    )
+    imported = client.post(
+        f'/projects/{project_id}/editor/import-source',
+        follow_redirects=False,
+    )
+    assert imported.status_code == 303
+    with _session(client) as session:
+        document, revision = DocumentRepository(session).get_document_with_revision(
+            project_id
+        )
+        assert revision == 1
+        heading_id, _ = [node.id for node in document.nodes]
+
+    saved = client.post(
+        f'/projects/{project_id}/editor/save',
+        json={
+            'title': 'Edited revision',
+            'html': (
+                f"<h1 data-node-id='{heading_id}'>Source</h1>"
+                "<ol><li>Parent<ul><li><strong>Nested</strong></li></ul></li></ol>"
+                "<h1>Second section</h1>"
+            ),
+            'revision': 1,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()['revision'] == 2
+
+    export = client.post(
+        f'/projects/{project_id}/export',
+        data={'format': 'html', 'template_id': 'docgen-light', 'revision': 2},
+    )
+    assert export.status_code == 202
+
+    with _session(client) as session:
+        document, revision = DocumentRepository(session).get_document_with_revision(
+            project_id
+        )
+        assert revision == 2
+        assert document.origin is DocumentOrigin.IMPORTED
+        sources = SourceRepository(session).list_for_project(project_id)
+        assert document.source_id is not None
+        assert len(sources) == 1
+        assert document.source_id == sources[0].id
+        assert [node.kind for node in document.nodes] == [
+            NodeKind.HEADING,
+            NodeKind.LIST,
+            NodeKind.HEADING,
+        ]
+        assert document.nodes[0].text == 'Source'
+        assert document.nodes[2].text == 'Second section'
+        list_node = document.nodes[1]
+        assert list_node.kind is NodeKind.LIST
+        assert list_node.data['items_html'] == [
+            'Parent<ul><li><strong>Nested</strong></li></ul>'
+        ]
+        job = session.scalar(
+            select(Job)
+            .where(Job.project_id == project_id, Job.kind == JobKind.EXPORT)
+            .order_by(Job.created_at.desc())
+        )
+        assert job is not None
+        assert job.requested_document_revision == 2
+        assert job.export_format is OutputFormat.HTML
 
 
 def test_import_source_does_not_replace_existing_editor_document(
@@ -1478,6 +1671,16 @@ def _save_workspace(client: TestClient, project_id: str, revision: int):
             "revision": revision,
         },
     )
+
+
+def _docx_with_outline_heading_and_ordered_list() -> bytes:
+    document = Document()
+    document.add_heading("Guide", level=2)
+    document.add_paragraph("First", style="List Number")
+    document.add_paragraph("Second", style="List Number")
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 def _stored_document(client: TestClient, project_id: str) -> WorkingDocument:

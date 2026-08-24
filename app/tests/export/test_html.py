@@ -8,8 +8,10 @@ from bs4 import BeautifulSoup
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.html import HtmlExporter, local_storage_image_loader
 from docgen.export.storage import ExportStorage
+from docgen.extraction.schemas import BlockKind, NormalizedBlock
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
 from docgen.sources.storage import LocalStorage
+from docgen.workflows.conversion import conversion_document
 
 # A minimal valid 1x1 transparent PNG, used to exercise the "resolvable src"
 # image embedding path without depending on any real asset file.
@@ -34,7 +36,14 @@ def html_template() -> FormattingTemplate:
         name="Облегченный HTML",
         format=OutputFormat.HTML,
         renderer=OutputFormat.HTML,
-        assets=["docgen-light.html.j2", "docgen-light.css"],
+        assets=[
+            "docgen-light.html.j2",
+            "docgen-light.css",
+            "Akrobat-Bold.otf",
+            "Roboto-Regular.ttf",
+            "Roboto-Light.ttf",
+            "Roboto-Bold.ttf",
+        ],
     )
 
 
@@ -75,56 +84,271 @@ def test_html_is_standalone_and_escaped(
     assert "<script>" not in html
 
 
-def test_html_preserves_safe_editor_formatting_with_lightweight_design(
+def test_html_preserves_safe_editor_rich_text_and_removes_xss(
+    html_template: FormattingTemplate,
+) -> None:
+    """Rich editor markup survives, while executable markup does not."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                text="Важный текст",
+                data={
+                    "html": (
+                        '<strong>Важный</strong> <em>текст</em>'
+                        '<script>alert(1)</script>'
+                        '<a href="javascript:alert(2)" onclick="alert(3)">ссылка</a>'
+                    ),
+                    "style": {"text-align": "center", "position": "fixed"},
+                },
+            )
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+    paragraph = soup.select_one(".dg-node-paragraph > p")
+
+    assert "<strong>Важный</strong>" in html
+    assert "<em>текст</em>" in html
+    assert paragraph is not None
+    assert paragraph.get("style") == "text-align:center"
+    assert "<script" not in html
+    assert "javascript:" not in html
+    assert "onclick" not in html
+
+
+def test_html_preserves_safe_inline_images_and_node_style_aliases(
     html_template: FormattingTemplate,
 ) -> None:
     document = WorkingDocument(
-        title="Отредактированный документ",
+        title="Editor result",
         template_id="no-template",
         nodes=[
             DocumentNode(
                 kind=NodeKind.PARAGRAPH,
-                text="Обычный жирный цвет опасная ссылка",
+                text="Formatted content",
                 data={
                     "html": (
-                        "Обычный <strong>жирный</strong> "
-                        '<span style="color:#123456;position:absolute">цвет</span>'
-                        '<script>alert(1)</script>'
-                        '<a href="javascript:alert(2)" onclick="alert(3)">опасная ссылка</a>'
+                        '<span style="color:#123456;position:absolute">color</span>'
+                        '<img src="data:image/png;base64,iVBORw0KGgo=" alt="png">'
                         '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="svg">'
                     ),
-                    "style": {"text-align": "center", "position": "absolute"},
+                    "text_align": "right",
                 },
+            )
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    paragraph = BeautifulSoup(html, "html.parser").select_one(
+        ".dg-node-paragraph > p"
+    )
+
+    assert paragraph is not None
+    assert paragraph.get("style") == "text-align:right"
+    assert paragraph.find("span").get("style") == "color:#123456"
+    images = paragraph.find_all("img")
+    assert images[0].get("src") == "data:image/png;base64,iVBORw0KGgo="
+    assert images[1].get("src") is None
+
+
+def test_html_preserves_rich_list_items_and_individual_styles(
+    html_template: FormattingTemplate,
+) -> None:
+    """List markup and supported per-item styles survive editor export."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.LIST,
+                data={
+                    "ordered": True,
+                    "items": ["Первый", "Второй"],
+                    "items_html": ["<strong>Первый</strong>", "<em>Второй</em>"],
+                    "item_styles": [
+                        "text-align:left",
+                        "text-align:right;position:fixed",
+                    ],
+                    "style": {"margin-left": "24px"},
+                },
+            )
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+    exported_list = soup.select_one(".dg-node-list > ol")
+    exported_items = soup.select(".dg-node-list > ol > li")
+
+    assert "<strong>Первый</strong>" in html
+    assert "<em>Второй</em>" in html
+    assert exported_list is not None
+    assert exported_list.get("style") == "margin-left:24px"
+    assert exported_items[1].get("style") == "text-align:right"
+
+
+def test_html_preserves_nested_rich_lists_in_sectioned_documents(
+    html_template: FormattingTemplate,
+) -> None:
+    """A nested list saved by the editor remains available in exported HTML."""
+    document = WorkingDocument(
+        title="Document",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="First section",
+                data={"level": 1},
             ),
             DocumentNode(
                 kind=NodeKind.LIST,
                 data={
-                    "items": ["Первый пункт"],
-                    "items_html": ["Первый <em>пункт</em>"],
-                    "item_styles": ["font-weight:700;position:absolute"],
+                    "ordered": True,
+                    "items": ["Parent Nested"],
+                    "items_html": [
+                        "Parent<ul><li><strong>Nested</strong></li></ul>"
+                    ],
                 },
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Second section",
+                data={"level": 1},
             ),
         ],
     )
 
-    rendered = HtmlExporter().render(document, html_template)
-    html = rendered.content.decode("utf-8")
-    page = BeautifulSoup(html, "html.parser")
-    paragraph = page.select_one(".dg-node-paragraph > p")
-    list_item = page.select_one(".dg-node-list li")
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
 
-    assert paragraph is not None
-    assert paragraph.get("style") == "text-align:center"
-    assert paragraph.find("strong").get_text(strip=True) == "жирный"
-    assert paragraph.find("span").get("style") == "color:#123456"
-    assert paragraph.find("script") is None
-    assert paragraph.find("a").get("href") is None
-    assert paragraph.find("a").get("onclick") is None
-    assert paragraph.find("img").get("src") is None
-    assert list_item is not None
-    assert list_item.get("style") == "font-weight:700"
-    assert list_item.find("em").get_text(strip=True) == "пункт"
-    assert "font-family: Inter, system-ui, sans-serif" in html
+    assert soup.find(id="contents") is not None
+    assert soup.find("a", href="#section-1") is not None
+    assert soup.find("a", href="#section-2") is not None
+    parent_list = soup.select_one(".dg-node-list > ol")
+    assert parent_list is not None
+    nested_list = parent_list.select_one("li > ul")
+    assert nested_list is not None
+    assert nested_list.find("strong", string="Nested") is not None
+
+
+def test_html_does_not_render_workspace_list_accounting_text_as_caption(
+    html_template: FormattingTemplate,
+) -> None:
+    block = NormalizedBlock(
+        id="rich-list",
+        kind=BlockKind.LIST,
+        text="Parent\nNested",
+        data={
+            "ordered": True,
+            "items": ["Parent"],
+            "items_html": ["<strong>Parent</strong><ul><li>Nested</li></ul>"],
+        },
+        confidence=1.0,
+    )
+    document = conversion_document([block], "Imported DOCX")
+
+    rendered = HtmlExporter().render(document, html_template).content.decode("utf-8")
+    list_node = BeautifulSoup(rendered, "html.parser").select_one(".dg-node-list")
+
+    assert document.nodes[0].text is None
+    assert list_node is not None
+    assert list_node.select_one(".dg-caption") is None
+    assert list_node.get_text(" ", strip=True) == "Parent Nested"
+
+
+def test_html_builds_contents_for_two_level_one_sections(
+    html_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Введение"),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Первый раздел",
+                data={"level": 1},
+            ),
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Первое содержание"),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Второй раздел",
+                data={"level": 1},
+            ),
+            DocumentNode(kind=NodeKind.PARAGRAPH, text="Второе содержание"),
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert '<nav id="contents"' in html
+    assert 'href="#section-1"' in html
+    assert 'href="#section-2"' in html
+    assert html.index("Введение") < html.index("Первый раздел")
+    assert html.count('class="section card-shell') == 3
+
+
+@pytest.mark.parametrize(
+    "headings",
+    [[], ["Единственный раздел"]],
+    ids=["no-sections", "one-section"],
+)
+def test_html_omits_contents_for_zero_or_one_section(
+    headings: list[str], html_template: FormattingTemplate
+) -> None:
+    nodes = [
+        DocumentNode(kind=NodeKind.HEADING, text=text, data={"level": 1})
+        for text in headings
+    ]
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=nodes,
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert '<nav id="contents"' not in html
+
+
+def test_html_section_anchors_ignore_repeated_titles_and_keep_nested_content(
+    html_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Одинаковый раздел",
+                data={"level": 1},
+                children=[
+                    DocumentNode(kind=NodeKind.PARAGRAPH, text="Дочерний текст")
+                ],
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Вложенный заголовок",
+                data={"level": 2},
+            ),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Одинаковый раздел",
+                data={"level": 1},
+            ),
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert html.count('id="section-1"') == 1
+    assert html.count('id="section-2"') == 1
+    assert html.count("Дочерний текст") == 1
+    assert html.count("Вложенный заголовок") == 1
 
 
 def test_html_image_without_src_renders_placeholder(
@@ -425,17 +649,44 @@ def test_html_css_is_embedded_unescaped(html_template: FormattingTemplate) -> No
     assert "&quot;" not in html
 
 
-def test_html_uses_design_constraint_colors(html_template: FormattingTemplate) -> None:
-    """CSS asset must use the exact DocGen Light colors from the plan."""
+def test_html_uses_v5_visual_tokens_and_embeds_fonts(
+    html_template: FormattingTemplate,
+) -> None:
+    """The exported page carries the approved v5 identity without local URLs."""
     document = WorkingDocument(title="Документ", template_id="docgen-light-html", nodes=[])
 
     rendered = HtmlExporter().render(document, html_template)
     html = rendered.content.decode("utf-8")
 
-    for color in ("#ffffff", "#f5f5f7", "#1d1d1f", "#707070", "#0071e3"):
-        assert color in html
-    assert "960px" in html
-    assert "Inter, system-ui, sans-serif" in html
+    for token in (
+        "#f4f7fb",
+        "#17324a",
+        "#1163AE",
+        "#0f3f69",
+        "border-radius:22px",
+    ):
+        assert token in html
+    assert 'font-family:"Akrobat"' in html
+    assert 'font-family:"Roboto"' in html
+    assert "data:font/" in html
+
+
+def test_html_v5_export_has_no_external_runtime_dependency(
+    document_with_image: WorkingDocument,
+    html_template: FormattingTemplate,
+) -> None:
+    html = HtmlExporter(image_loader=fake_image_loader).render(
+        document_with_image,
+        html_template,
+    ).content.decode("utf-8")
+
+    assert "cdn.jsdelivr.net" not in html
+    assert "<link" not in html
+    assert "<script" not in html
+    assert "@import" not in html
+    assert "url(http" not in html
+    assert "data:image/png;base64," in html
+    assert "<svg" in html
 
 
 # --- local_storage_image_loader (the production ImageLoader implementation) ---

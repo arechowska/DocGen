@@ -4,6 +4,7 @@
   type="submit"
   form="assembleForm"
   data-source-available="{{ 'true' if sources else 'false' }}"
+  data-has-document="{{ 'true' if has_document else 'false' }}"
   {% if not sources %}disabled{% endif %}
   {% if build_button_oob | default(false) %}hx-swap-oob="outerHTML"{% endif %}
 >

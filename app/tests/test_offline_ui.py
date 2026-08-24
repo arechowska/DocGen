@@ -494,7 +494,7 @@ const source = {{
 const targets = [{{ value: "use-case" }}, {{ value: "use-case" }}];
 const label = {{ textContent: "Собрать" }};
 const buildButton = {{
-  dataset: {{ sourceAvailable: "true" }},
+  dataset: {{ sourceAvailable: "true", hasDocument: "false" }},
   disabled: false,
   formTarget: "",
   setAttribute(name, value) {{ if (name === "form") this.formTarget = value; }},
@@ -504,6 +504,7 @@ const format = {{ value: "html" }};
 const formatting = {{ value: "docgen-light", disabled: false }};
 const conversionFormat = {{ value: "" }};
 const conversionTemplate = {{ value: "" }};
+const importProfile = {{ value: "" }};
 globalThis.document = {{
   querySelector(selector) {{
     if (selector === "[data-template-source]") return source;
@@ -512,6 +513,7 @@ globalThis.document = {{
     if (selector === "#export-template-select select[name='template_id']") return formatting;
     if (selector === "[data-conversion-format]") return conversionFormat;
     if (selector === "[data-conversion-template]") return conversionTemplate;
+    if (selector === "[data-editor-import-profile]") return importProfile;
     return null;
   }},
   querySelectorAll(selector) {{
@@ -521,6 +523,9 @@ globalThis.document = {{
   addEventListener() {{}},
 }};
 {script.text}
+if (importProfile.value !== "") {{
+  throw new Error("templated HTML build must not request workspace DOCX fidelity");
+}}
 source.value = "faq";
 listeners.get("change")();
 if (targets.some((target) => target.value !== "faq")) {{
@@ -528,15 +533,164 @@ if (targets.some((target) => target.value !== "faq")) {{
 }}
 if (buildButton.formTarget !== "assembleForm") throw new Error("semantic build form was changed");
 source.value = "no-template";
+format.value = "html";
+buildButton.dataset.hasDocument = "false";
 listeners.get("change")();
-if (buildButton.formTarget !== "conversionForm") throw new Error("conversion form was not selected");
+if (buildButton.formTarget !== "editorImportForm") {{
+  throw new Error("first no-template HTML build must import the source");
+}}
+if (importProfile.value !== "no-template-html") {{
+  throw new Error("first no-template HTML build must request workspace DOCX fidelity");
+}}
+
+buildButton.dataset.hasDocument = "true";
+listeners.get("change")();
+if (buildButton.formTarget !== "export-form") {{
+  throw new Error("repeated no-template HTML build must use the editor");
+}}
+
+format.value = "pdf";
+listeners.get("change")();
+if (buildButton.formTarget !== "conversionForm") {{
+  throw new Error("other no-template formats must keep direct conversion");
+}}
+if (importProfile.value !== "") {{
+  throw new Error("non-HTML builds must not request workspace DOCX fidelity");
+}}
 if (label.textContent !== "Собрать") throw new Error("build button label was changed");
-if (conversionFormat.value !== "html" || conversionTemplate.value !== "docgen-light") {{
+if (conversionFormat.value !== "pdf" || conversionTemplate.value !== "docgen-light") {{
   throw new Error("conversion output was not synchronized");
 }}
 """
 
-    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [_NODE or "node", "--input-type=module"],
+        input=harness.encode("utf-8"),
+        check=True,
+        capture_output=True,
+    )
+
+
+@_requires_node
+def test_repeated_no_template_html_build_saves_then_exports(client: TestClient) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+
+    assert script.status_code == 200
+    harness = f"""
+const listeners = new Map();
+const events = [];
+const revisionInput = {{ value: "1" }};
+const source = {{ value: "no-template", addEventListener() {{}} }};
+const format = {{ value: "html" }};
+const buildButton = {{
+  id: "buildButton",
+  dataset: {{ hasDocument: "true", sourceAvailable: "true" }},
+  setAttribute() {{}},
+}};
+const exportForm = {{ id: "export-form" }};
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const changedHtml = '<p data-node-id="n1">\u0420\u0443\u0447\u043d\u0430\u044f \u043f\u0440\u0430\u0432\u043a\u0430</p>';
+const canvas = element({{ innerHTML: changedHtml, focus() {{}} }});
+const title = element({{ value: "Документ" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save", revision: "1" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+let posted = null;
+globalThis.document = {{
+  body: {{}},
+  querySelector(selector) {{
+    if (selector === "[data-template-source]") return source;
+    if (selector === "#formatSelect") return format;
+    if (selector === "#buildButton") return buildButton;
+    if (selector === "#docgen2Editor") return editor;
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-template-target]') return [];
+    if (selector === 'input[name="revision"]') return [revisionInput];
+    return [];
+  }},
+  addEventListener(type, listener) {{ listeners.set(type, listener); }},
+  execCommand() {{}},
+}};
+globalThis.window = {{
+  getSelection() {{ return null; }},
+  htmx: {{
+    trigger(target, name) {{ events.push(name.replace("docgen:", "")); }},
+  }},
+}};
+globalThis.setTimeout = () => 1;
+globalThis.clearTimeout = () => {{}};
+globalThis.fetch = async (url, options) => {{
+  events.push("save");
+  posted = {{ url, payload: JSON.parse(options.body) }};
+  return {{
+    ok: true,
+    async json() {{ return {{ revision: 2, html: changedHtml }}; }},
+  }};
+}};
+{script.text}
+let prevented = false;
+await listeners.get("submit")({{
+  target: exportForm,
+  submitter: buildButton,
+  preventDefault() {{ prevented = true; }},
+}});
+if (!prevented) throw new Error("target HTML build was not intercepted");
+if (events.join(",") !== "save,document-updated,html-build") {{
+  throw new Error(`unexpected build sequence: ${{events}}`);
+}}
+if (posted.payload.html !== changedHtml) {{
+  throw new Error("current editor HTML was not saved");
+}}
+if (posted.payload.revision !== 1 || revisionInput.value !== "2") {{
+  throw new Error("export did not receive the saved revision");
+}}
+if (posted.url.includes("import-source")) {{
+  throw new Error("repeated build reread the source");
+}}
+
+events.length = 0;
+globalThis.fetch = async () => ({{
+  ok: false,
+  status: 409,
+  async json() {{ return {{ detail: "stale" }}; }},
+}});
+await listeners.get("submit")({{
+  target: exportForm,
+  submitter: buildButton,
+  preventDefault() {{}},
+}});
+if (events.includes("html-build")) {{
+  throw new Error("conflicted save must not start HTML export");
+}}
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module"],
+        input=harness,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
 
 
 @_requires_node
@@ -639,10 +793,12 @@ if (saveStatus.textContent || saveStatus.title || saveStatus.ariaLabel || saveSt
 """
 
     subprocess.run(
-        [_NODE or "node", "--input-type=module", "-e", harness],
+        [_NODE or "node", "--input-type=module"],
+        input=harness,
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
 
 
@@ -1026,3 +1182,70 @@ def test_non_htmx_source_and_project_delete_fallbacks(client: TestClient) -> Non
     assert deleted_project.headers["location"] == "/projects"
 
     assert client.get(project_url).status_code == 404
+
+@_requires_node
+def test_first_no_template_html_editor_save_does_not_reload_workspace(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: "<h1>New document</h1><p>Text</p>", focus() {{}} }});
+const title = element({{ value: "Manual document" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const templateSource = {{ value: "no-template", addEventListener() {{}} }};
+const formatSource = {{ value: "html" }};
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+let reloaded = false;
+globalThis.document = {{
+  body: {{}},
+  querySelector(selector) {{
+    if (selector === "#docgen2Editor") return editor;
+    if (selector === "[data-template-source]") return templateSource;
+    if (selector === "#formatSelect") return formatSource;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{
+  getSelection() {{ return null; }},
+  location: {{ reload() {{ reloaded = true; }} }},
+}};
+globalThis.fetch = async () => ({{
+  ok: true,
+  async json() {{
+    return {{ revision: 1, html: '<h1 data-node-id="n1">New document</h1><p data-node-id="p1">Text</p>' }};
+  }},
+}});
+{script.text}
+await saveButton.listeners.get("click")();
+if (reloaded) throw new Error("first no-template HTML editor save reloaded the workspace");
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

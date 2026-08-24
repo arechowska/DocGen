@@ -5,43 +5,44 @@ from __future__ import annotations
 import base64
 import mimetypes
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Comment
 from jinja2 import Environment, FileSystemLoader
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
-from docgen.documents.schemas import WorkingDocument
-from docgen.documents.style import (
-    node_style_attribute,
-    normalized_style_attribute,
-    style_attribute,
-)
+from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.style import node_style_attribute, normalized_style_attribute
 from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
 from docgen.sources.storage import LocalStorage
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "formatting" / "templates"
-_RICH_TEXT_TAGS = {
-    "a",
-    "b",
-    "br",
-    "code",
-    "em",
-    "i",
-    "img",
-    "s",
-    "span",
-    "strong",
-    "sub",
-    "sup",
-    "u",
-}
-_RICH_TEXT_ATTRIBUTES = {
-    "a": {"href", "title"},
-    "img": {"alt", "src", "title"},
-}
+
+_RICH_TAGS = frozenset(
+    {
+        "a",
+        "b",
+        "br",
+        "code",
+        "em",
+        "i",
+        "img",
+        "mark",
+        "s",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "u",
+    }
+)
+_RICH_LIST_TAGS = frozenset({"ol", "ul", "li"})
+
+_BLOCKED_RICH_TAGS = frozenset({"script", "style", "template"})
+_FONT_MEDIA_TYPES = {".otf": "font/otf", ".ttf": "font/ttf"}
 
 ImageAsset = tuple[bytes, str]
 """Resolved image content and its MIME type, e.g. ``(b"...", "image/png")``."""
@@ -53,6 +54,21 @@ Must return ``None`` when the reference cannot be safely resolved (missing,
 outside storage, wrong type, etc.). Callers fall back to a placeholder in
 that case -- they never fabricate content or fetch external resources.
 """
+
+
+@dataclass(frozen=True)
+class HtmlSection:
+    anchor: str
+    heading: DocumentNode
+    nodes: tuple[DocumentNode, ...]
+
+
+@dataclass(frozen=True)
+class HtmlDocumentView:
+    title: str
+    introduction: tuple[DocumentNode, ...]
+    sections: tuple[HtmlSection, ...]
+    show_contents: bool
 
 
 class HtmlExporter:
@@ -106,11 +122,17 @@ class HtmlExporter:
 
         html = jinja_template.render(
             document=document,
+            view=prepare_document_view(document),
             css=css_text,
+            font_data_urls={
+                asset: self._asset_data_url(template, asset)
+                for asset in template.assets
+                if Path(asset).suffix.lower() in _FONT_MEDIA_TYPES
+            },
             image_data_url=self._image_data_url,
             node_style_attribute=node_style_attribute,
-            safe_rich_html=_safe_rich_html,
-            style_attribute=style_attribute,
+            rich_html=safe_rich_html,
+            style_attribute=safe_style_attribute,
         )
 
         return RenderedFile(
@@ -137,10 +159,28 @@ class HtmlExporter:
 
     def _read_asset_text(self, name: str) -> str:
         """Read a catalog-declared asset file, enforcing containment."""
+        return self._asset_path(name).read_text(encoding="utf-8")
+
+    def _read_asset_bytes(self, name: str) -> bytes:
+        """Read a catalog-declared binary asset, enforcing containment."""
+        return self._asset_path(name).read_bytes()
+
+    def _asset_path(self, name: str) -> Path:
+        """Resolve one template asset without allowing path traversal."""
         path = (self._templates_dir / name).resolve()
         if not path.is_relative_to(self._templates_dir):
             raise ValueError("Недопустимый путь ассета")
-        return path.read_text(encoding="utf-8")
+        return path
+
+    def _asset_data_url(self, template: FormattingTemplate, name: str) -> str:
+        """Embed one declared font asset as a self-contained data URL."""
+        if name not in template.assets:
+            raise ValueError("Ассет не объявлен в шаблоне")
+        media_type = _FONT_MEDIA_TYPES.get(Path(name).suffix.lower())
+        if media_type is None:
+            raise ValueError("Неподдерживаемый тип встраиваемого ассета")
+        encoded = base64.b64encode(self._read_asset_bytes(name)).decode("ascii")
+        return f"data:{media_type};base64,{encoded}"
 
     def _image_data_url(self, src: object) -> str | None:
         """Resolve a node's image src to an embeddable data: URL, or None.
@@ -160,63 +200,6 @@ class HtmlExporter:
             return None
         encoded = base64.b64encode(content).decode("ascii")
         return f"data:{media_type};base64,{encoded}"
-
-
-def _safe_rich_html(value: object) -> Markup:
-    """Keep editor formatting while removing executable markup and unsafe styles."""
-    if not isinstance(value, str) or not value:
-        return Markup("")
-    soup = BeautifulSoup(value, "html.parser")
-    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
-        comment.extract()
-    for tag in list(soup.find_all(True)):
-        if tag.name in {"script", "style", "template"}:
-            tag.decompose()
-            continue
-        if tag.name not in _RICH_TEXT_TAGS:
-            tag.unwrap()
-            continue
-        allowed_attributes = _RICH_TEXT_ATTRIBUTES.get(tag.name, set()) | {"style"}
-        for attribute in list(tag.attrs):
-            if attribute not in allowed_attributes:
-                del tag.attrs[attribute]
-                continue
-            value = tag.attrs.get(attribute)
-            if attribute == "style":
-                normalized = normalized_style_attribute(str(value))
-                if normalized:
-                    tag.attrs[attribute] = normalized
-                else:
-                    del tag.attrs[attribute]
-            elif (
-                attribute == "href"
-                and not _safe_rich_href(value)
-                or attribute == "src"
-                and not _safe_rich_image_source(value)
-            ):
-                del tag.attrs[attribute]
-    return Markup("".join(str(item) for item in soup.contents).strip())
-
-
-def _safe_rich_href(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    normalized = value.strip().lower()
-    return normalized.startswith(("#", "/", "http://", "https://", "mailto:"))
-
-
-def _safe_rich_image_source(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    normalized = value.strip().lower()
-    return normalized.startswith(
-        (
-            "data:image/gif;base64,",
-            "data:image/jpeg;base64,",
-            "data:image/png;base64,",
-            "data:image/webp;base64,",
-        )
-    )
 
 
 def local_storage_image_loader(storage: LocalStorage) -> ImageLoader:
@@ -246,3 +229,126 @@ def local_storage_image_loader(storage: LocalStorage) -> ImageLoader:
         return content, media_type
 
     return _load
+
+
+def safe_rich_html(
+    value: object, fallback: str = "", *, allow_lists: bool = False
+) -> Markup:
+    """Return a small, sanitized editor rich-text fragment."""
+    if not isinstance(value, str) or not value:
+        return Markup(escape(fallback))
+
+    soup = BeautifulSoup(value, "html.parser")
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+    for tag in list(soup.find_all(_BLOCKED_RICH_TAGS)):
+        tag.decompose()
+    allowed_tags = _RICH_TAGS | _RICH_LIST_TAGS if allow_lists else _RICH_TAGS
+    for tag in list(soup.find_all(True)):
+        if tag.name not in allowed_tags:
+            tag.unwrap()
+            continue
+        for attribute in list(tag.attrs):
+            if attribute == "style":
+                style = normalized_style_attribute(str(tag.attrs[attribute]))
+                if style:
+                    tag.attrs[attribute] = style
+                else:
+                    del tag.attrs[attribute]
+                continue
+            if tag.name == "a" and attribute in {"href", "title"}:
+                if attribute == "href" and not _is_safe_rich_url(tag.attrs[attribute]):
+                    del tag.attrs[attribute]
+                continue
+            if tag.name == "img" and attribute in {"alt", "src", "title"}:
+                if attribute == "src" and not _is_safe_rich_image_source(
+                    tag.attrs[attribute]
+                ):
+                    del tag.attrs[attribute]
+                continue
+            del tag.attrs[attribute]
+    return Markup("".join(str(item) for item in soup.contents))
+
+
+def safe_style_attribute(value: object) -> Markup:
+    """Serialize only style properties already supported by the editor."""
+    if isinstance(value, dict):
+        raw_style = ";".join(f"{key}:{item}" for key, item in value.items())
+    elif isinstance(value, str):
+        raw_style = value
+    else:
+        raw_style = ""
+    style = normalized_style_attribute(raw_style)
+    if not style:
+        return Markup("")
+    return Markup(f' style="{escape(style)}"')
+
+
+def _is_safe_rich_url(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(("#", "/", "http://", "https://", "mailto:"))
+
+
+def _is_safe_rich_image_source(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(
+        (
+            "data:image/gif;base64,",
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+        )
+    )
+
+
+def prepare_document_view(document: WorkingDocument) -> HtmlDocumentView:
+    """Group top-level editor nodes into deterministic level-one sections."""
+    introduction: list[DocumentNode] = []
+    sections: list[HtmlSection] = []
+    current_heading: DocumentNode | None = None
+    current_nodes: list[DocumentNode] = []
+
+    for node in document.nodes:
+        if node.kind is NodeKind.HEADING and _heading_level(node) == 1:
+            if current_heading is not None:
+                sections.append(
+                    HtmlSection(
+                        anchor=f"section-{len(sections) + 1}",
+                        heading=current_heading,
+                        nodes=tuple(current_nodes),
+                    )
+                )
+            current_heading = node
+            current_nodes = []
+        elif current_heading is None:
+            introduction.append(node)
+        else:
+            current_nodes.append(node)
+
+    if current_heading is not None:
+        sections.append(
+            HtmlSection(
+                anchor=f"section-{len(sections) + 1}",
+                heading=current_heading,
+                nodes=tuple(current_nodes),
+            )
+        )
+
+    return HtmlDocumentView(
+        title=document.title,
+        introduction=tuple(introduction),
+        sections=tuple(sections),
+        show_contents=len(sections) >= 2,
+    )
+
+
+def _heading_level(node: DocumentNode) -> int:
+    try:
+        level = int(node.data.get("level", 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(level, 6))

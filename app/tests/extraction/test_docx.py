@@ -4,8 +4,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import RGBColor
 
 from docgen.extraction.docx import DocxExtractor
 from docgen.extraction.registry import ExtractionError
@@ -24,6 +26,77 @@ def make_source() -> Source:
         storage_path="projects/p1/sources/s1.docx",
         status="stored",
     )
+
+def _add_hyperlink(paragraph, text: str, url: str) -> None:
+    relationship_id = paragraph.part.relate_to(
+        url,
+        RELATIONSHIP_TYPE.HYPERLINK,
+        is_external=True,
+    )
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+    run = OxmlElement("w:r")
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run.append(text_element)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+
+
+def _set_numbering(paragraph, num_id: int, level: int) -> None:
+    numbering = OxmlElement("w:numPr")
+    level_element = OxmlElement("w:ilvl")
+    level_element.set(qn("w:val"), str(level))
+    number_id_element = OxmlElement("w:numId")
+    number_id_element.set(qn("w:val"), str(num_id))
+    numbering.extend((level_element, number_id_element))
+    paragraph._p.get_or_add_pPr().append(numbering)
+
+
+def _append_container_text(paragraph, container_tag: str, text: str) -> None:
+    container = OxmlElement(container_tag)
+    content = container
+    if container_tag == "w:sdt":
+        content = OxmlElement("w:sdtContent")
+        container.append(content)
+    run = OxmlElement("w:r")
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run.append(text_element)
+    content.append(run)
+    paragraph._p.append(container)
+
+
+@pytest.fixture
+def workspace_fidelity_docx(tmp_path: Path) -> Path:
+    path = tmp_path / "workspace-fidelity.docx"
+    document = Document()
+    document.add_heading("Guide", level=2)
+
+    paragraph = document.add_paragraph()
+    bold = paragraph.add_run("Bold")
+    bold.bold = True
+    italic = paragraph.add_run("Italic")
+    italic.italic = True
+    underline = paragraph.add_run("Under")
+    underline.underline = True
+    strike = paragraph.add_run("Strike")
+    strike.font.strike = True
+    red = paragraph.add_run("Red")
+    red.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+    _add_hyperlink(paragraph, "Link", "https://example.test")
+
+    number_id = document.styles["List Number"].element.pPr.numPr.numId.val
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    first = document.add_paragraph("First")
+    _set_numbering(first, number_id, 0)
+    second = document.add_paragraph("Second")
+    _set_numbering(second, number_id, 0)
+    nested = document.add_paragraph("Nested")
+    _set_numbering(nested, bullet_id, 1)
+    document.save(path)
+    return path
+
 
 
 @pytest.fixture
@@ -99,6 +172,135 @@ def test_docx_preserves_document_order_and_structure(tmp_path: Path) -> None:
     assert result.blocks[0].data == {"level": 1}
     assert result.blocks[2].data == {"style": "List Bullet"}
     assert result.blocks[3].data == {"rows": [["Ключ", "Значение"]]}
+
+
+def test_docx_workspace_extraction_preserves_editor_safe_rich_content_and_lists(
+    workspace_fidelity_docx: Path,
+) -> None:
+    extractor = DocxExtractor()
+
+    regular = extractor.extract(make_source(), workspace_fidelity_docx)
+    result = extractor.extract_workspace(make_source(), workspace_fidelity_docx)
+
+    assert [block.kind for block in regular.blocks] == [
+        BlockKind.HEADING,
+        BlockKind.TEXT,
+        BlockKind.LIST,
+        BlockKind.LIST,
+        BlockKind.LIST,
+    ]
+    assert result.blocks[1].data["html"] == (
+        '<strong>Bold</strong><em>Italic</em><u>Under</u><s>Strike</s>'
+        '<span style="color:#ff0000">Red</span><a href="https://example.test">Link</a>'
+    )
+    assert result.blocks[2].data == {
+        "ordered": True,
+        "items": ["First", "Second"],
+        "items_html": ["First", "Second<ul><li>Nested</li></ul>"],
+    }
+
+
+def test_docx_workspace_preserves_text_inside_unsupported_containers(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "containers.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    _append_container_text(paragraph, "w:ins", "Inserted")
+    _append_container_text(paragraph, "w:sdt", "Controlled")
+    _append_container_text(paragraph, "w:smartTag", "Tagged")
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].text == "InsertedControlledTagged"
+    assert result.blocks[0].data["html"] == "InsertedControlledTagged"
+
+
+def test_docx_workspace_serializes_word_break_as_br(tmp_path: Path) -> None:
+    path = tmp_path / "break.docx"
+    document = Document()
+    run = document.add_paragraph().add_run("Before")
+    run.add_break()
+    run.add_text("After")
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["html"] == "Before<br>After"
+
+
+def test_docx_workspace_applies_character_style_rich_formatting(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "character-style.docx"
+    document = Document()
+    rich_style = document.styles.add_style("Rich Character", WD_STYLE_TYPE.CHARACTER)
+    rich_style.font.bold = True
+    rich_style.font.italic = True
+    rich_style.font.underline = True
+    rich_style.font.strike = True
+    rich_style.font.color.rgb = RGBColor(0x12, 0x34, 0x56)
+    run = document.add_paragraph().add_run("Styled")
+    run.style = rich_style
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["html"] == (
+        '<strong><em><u><s><span style="color:#123456">Styled</span></s></u></em></strong>'
+    )
+
+
+def test_docx_workspace_serializes_subscript_and_superscript(tmp_path: Path) -> None:
+    path = tmp_path / "vertical-align.docx"
+    document = Document()
+    paragraph = document.add_paragraph()
+    paragraph.add_run("H")
+    subscript = paragraph.add_run("2")
+    subscript.font.subscript = True
+    paragraph.add_run("O")
+    superscript = paragraph.add_run("2")
+    superscript.font.superscript = True
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["html"] == "H<sub>2</sub>O<sup>2</sup>"
+
+
+def test_docx_workspace_treats_first_observed_numbering_level_as_root(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "level-one-root.docx"
+    document = Document()
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    first = document.add_paragraph("First")
+    _set_numbering(first, bullet_id, 1)
+    second = document.add_paragraph("Second")
+    _set_numbering(second, bullet_id, 1)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].data["items"] == ["First", "Second"]
+    assert result.blocks[0].data["items_html"] == ["First", "Second"]
+
+
+def test_docx_workspace_flushes_lists_at_blank_paragraphs(tmp_path: Path) -> None:
+    path = tmp_path / "separated-lists.docx"
+    document = Document()
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    first = document.add_paragraph("First")
+    _set_numbering(first, bullet_id, 0)
+    document.add_paragraph()
+    second = document.add_paragraph("Second")
+    _set_numbering(second, bullet_id, 0)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert [block.data["items"] for block in result.blocks] == [["First"], ["Second"]]
 
 
 def test_docx_uses_builtin_style_ids_when_display_names_are_cyrillic(
@@ -253,3 +455,21 @@ def test_docx_returns_safe_error_for_malformed_package_xml(tmp_path: Path) -> No
 
     with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
         DocxExtractor().extract(make_source(), path)
+
+
+def test_docx_workspace_counts_nested_list_text_for_page_limits(tmp_path: Path) -> None:
+    path = tmp_path / "nested-page-count.docx"
+    document = Document()
+    number_id = document.styles["List Number"].element.pPr.numPr.numId.val
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    parent = document.add_paragraph("Parent")
+    _set_numbering(parent, number_id, 0)
+    nested_text = "x" * 1800
+    nested = document.add_paragraph(nested_text)
+    _set_numbering(nested, bullet_id, 1)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].text == f"Parent\n{nested_text}"
+    assert result.page_units == 2
