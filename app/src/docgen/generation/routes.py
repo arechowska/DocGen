@@ -87,6 +87,16 @@ def convert_source(
     project = _project_or_404(session, project_id)
     sources = SourceRepository(session).list_for_project(project_id)
     if len(sources) != 1:
+        if "text/html" in request.headers.get("Accept", ""):
+            return templates.TemplateResponse(
+                request=request,
+                name="generation/conversion_error.html",
+                context={
+                    "project_id": project_id,
+                    "source_count": len(sources),
+                },
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Для конвертации без шаблона нужен ровно один источник",

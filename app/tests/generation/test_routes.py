@@ -222,6 +222,30 @@ def test_template_free_conversion_requires_exactly_one_source(
     assert _jobs_for_project(client, project_with_source.id) == []
 
 
+def test_template_free_conversion_shows_friendly_browser_error_for_multiple_sources(
+    client: TestClient, project_with_source: Project
+) -> None:
+    response = client.post(
+        f"/projects/{project_with_source.id}/sources/files",
+        files={"file": ("second.md", b"# Second", "text/markdown")},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_with_source.id}/convert",
+        data={"output_format": "html", "formatting_template_id": "docgen-light"},
+        headers={"Accept": "text/html"},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Выбери один источник" in response.text
+    assert "Сейчас в проекте их 2" in response.text
+    assert f'href="/projects/{project_with_source.id}#sourcesPanel"' in response.text
+    assert '"detail"' not in response.text
+
+
 def test_start_assemble_accepts_external_semantic_template(
     client: TestClient,
     configured_models: None,
