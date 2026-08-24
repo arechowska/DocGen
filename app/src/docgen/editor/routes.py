@@ -56,6 +56,7 @@ def import_source_into_editor(
     request: Request,
     project_id: str,
     session: SessionDependency,
+    import_profile: Annotated[str | None, Form()] = None,
 ) -> Response:
     project = _project_or_404(session, project_id)
     documents = DocumentRepository(session)
@@ -81,13 +82,14 @@ def import_source_into_editor(
 
     source = project_sources[0]
     settings = request.app.state.settings
+    workspace_fidelity = import_profile == "no-template-html"
     try:
         normalized = NormalizationWorkflow(
             sources,
             LocalStorage(settings.data_dir),
             ExtractorRegistry.default(settings),
             ConfluenceClient.from_settings(settings),
-        ).run(project_id)
+        ).run(project_id, workspace_docx_fidelity=workspace_fidelity)
         blocks = [
             block
             for block in normalized.blocks
@@ -98,6 +100,7 @@ def import_source_into_editor(
         document = conversion_document(
             blocks,
             source.display_name or project.name,
+            rebase_heading_levels=workspace_fidelity,
         ).model_copy(
             update={
                 "origin": DocumentOrigin.IMPORTED,

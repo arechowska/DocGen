@@ -113,7 +113,9 @@
     id="editorImportForm"
     action="/projects/{{ project.id }}/editor/import-source"
     method="post"
-  ></form>
+  >
+    <input type="hidden" name="import_profile" value="" data-editor-import-profile>
+  </form>
   <form
     id="conversionForm"
     action="/projects/{{ project.id }}/convert"

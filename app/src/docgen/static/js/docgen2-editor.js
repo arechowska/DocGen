@@ -84,13 +84,15 @@
     );
     const conversionFormat = document.querySelector("[data-conversion-format]");
     const conversionTemplate = document.querySelector("[data-conversion-template]");
+    const importProfile = document.querySelector("[data-editor-import-profile]");
     const withoutTemplate = templateSource?.value === "no-template";
     if (conversionFormat) conversionFormat.value = formatSource?.value || "";
     if (conversionTemplate) {
       conversionTemplate.value = formattingSource?.disabled ? "" : formattingSource?.value || "";
     }
-    if (!buildButton) return;
     const htmlWithoutTemplate = withoutTemplate && formatSource?.value === "html";
+    if (importProfile) importProfile.value = htmlWithoutTemplate ? "no-template-html" : "";
+    if (!buildButton) return;
     const hasDocument = buildButton.dataset.hasDocument === "true";
     const buildForm = htmlWithoutTemplate
       ? (hasDocument ? "export-form" : "editorImportForm")

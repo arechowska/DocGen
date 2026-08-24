@@ -1,10 +1,12 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from bs4 import BeautifulSoup
+from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -362,6 +364,85 @@ def test_single_source_can_be_imported_into_editor_without_job(
     assert result.find(id="export-result") is not None
     assert result.find(id="conversion-result-actions") is None
     assert selected_format["value"] == "html"
+
+
+def test_no_template_html_profile_imports_docx_with_rebased_heading_and_ordered_list(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="DOCX no-template HTML")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={
+            "file": (
+                "guide.docx",
+                _docx_with_outline_heading_and_ordered_list(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        data={"import_profile": "no-template-html"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project_id}#docgen2Editor"
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.nodes[0].kind is NodeKind.HEADING
+        assert document.nodes[0].data["level"] == 1
+        assert document.nodes[1].kind is NodeKind.LIST
+        assert document.nodes[1].data["ordered"] is True
+        assert document.nodes[1].data["items"] == ["First", "Second"]
+
+
+def test_import_source_without_profile_keeps_default_docx_heading_level(
+    client: TestClient,
+) -> None:
+    with _session(client) as session:
+        project = Project(name="Default DOCX import")
+        session.add(project)
+        session.commit()
+        project_id = project.id
+
+    upload = client.post(
+        f"/projects/{project_id}/sources/files",
+        files={
+            "file": (
+                "guide.docx",
+                _docx_with_outline_heading_and_ordered_list(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        f"/projects/{project_id}/editor/import-source",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with _session(client) as session:
+        stored = DocumentRepository(session).get_document_with_revision(project_id)
+        assert stored is not None
+        document, revision = stored
+        assert revision == 1
+        assert document.nodes[0].kind is NodeKind.HEADING
+        assert document.nodes[0].data["level"] == 2
 
 
 def test_no_template_html_rebuild_targets_edited_revision_without_reimport(
@@ -1540,6 +1621,16 @@ def _save_workspace(client: TestClient, project_id: str, revision: int):
             "revision": revision,
         },
     )
+
+
+def _docx_with_outline_heading_and_ordered_list() -> bytes:
+    document = Document()
+    document.add_heading("Guide", level=2)
+    document.add_paragraph("First", style="List Number")
+    document.add_paragraph("Second", style="List Number")
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 def _stored_document(client: TestClient, project_id: str) -> WorkingDocument:

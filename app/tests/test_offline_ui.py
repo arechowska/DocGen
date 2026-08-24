@@ -504,6 +504,7 @@ const format = {{ value: "html" }};
 const formatting = {{ value: "docgen-light", disabled: false }};
 const conversionFormat = {{ value: "" }};
 const conversionTemplate = {{ value: "" }};
+const importProfile = {{ value: "" }};
 globalThis.document = {{
   querySelector(selector) {{
     if (selector === "[data-template-source]") return source;
@@ -512,6 +513,7 @@ globalThis.document = {{
     if (selector === "#export-template-select select[name='template_id']") return formatting;
     if (selector === "[data-conversion-format]") return conversionFormat;
     if (selector === "[data-conversion-template]") return conversionTemplate;
+    if (selector === "[data-editor-import-profile]") return importProfile;
     return null;
   }},
   querySelectorAll(selector) {{
@@ -521,6 +523,9 @@ globalThis.document = {{
   addEventListener() {{}},
 }};
 {script.text}
+if (importProfile.value !== "") {{
+  throw new Error("templated HTML build must not request workspace DOCX fidelity");
+}}
 source.value = "faq";
 listeners.get("change")();
 if (targets.some((target) => target.value !== "faq")) {{
@@ -534,6 +539,9 @@ listeners.get("change")();
 if (buildButton.formTarget !== "editorImportForm") {{
   throw new Error("first no-template HTML build must import the source");
 }}
+if (importProfile.value !== "no-template-html") {{
+  throw new Error("first no-template HTML build must request workspace DOCX fidelity");
+}}
 
 buildButton.dataset.hasDocument = "true";
 listeners.get("change")();
@@ -546,13 +554,21 @@ listeners.get("change")();
 if (buildButton.formTarget !== "conversionForm") {{
   throw new Error("other no-template formats must keep direct conversion");
 }}
+if (importProfile.value !== "") {{
+  throw new Error("non-HTML builds must not request workspace DOCX fidelity");
+}}
 if (label.textContent !== "Собрать") throw new Error("build button label was changed");
 if (conversionFormat.value !== "pdf" || conversionTemplate.value !== "docgen-light") {{
   throw new Error("conversion output was not synchronized");
 }}
 """
 
-    subprocess.run([_NODE or "node", "-e", harness], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [_NODE or "node", "--input-type=module"],
+        input=harness.encode("utf-8"),
+        check=True,
+        capture_output=True,
+    )
 
 
 @_requires_node
