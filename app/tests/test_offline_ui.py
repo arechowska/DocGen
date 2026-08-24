@@ -1166,3 +1166,69 @@ def test_non_htmx_source_and_project_delete_fallbacks(client: TestClient) -> Non
     assert deleted_project.headers["location"] == "/projects"
 
     assert client.get(project_url).status_code == 404
+
+def test_first_no_template_html_editor_save_does_not_reload_workspace(
+    client: TestClient,
+) -> None:
+    script = client.get("/static/js/docgen2-editor.js")
+    assert script.status_code == 200
+    harness = f"""
+const element = (extra = {{}}) => ({{
+  dataset: {{}},
+  listeners: new Map(),
+  addEventListener(type, listener) {{ this.listeners.set(type, listener); }},
+  querySelector() {{ return null; }},
+  querySelectorAll() {{ return []; }},
+  ...extra,
+}});
+const canvas = element({{ innerHTML: "<h1>New document</h1><p>Text</p>", focus() {{}} }});
+const title = element({{ value: "Manual document" }});
+const saveButton = element({{ disabled: false }});
+const saveStatus = element({{ textContent: "" }});
+const templateSource = {{ value: "no-template", addEventListener() {{}} }};
+const formatSource = {{ value: "html" }};
+const editor = element({{
+  dataset: {{ saveUrl: "/projects/p1/editor/save" }},
+  querySelector(selector) {{
+    if (selector === "#docgen2DocumentCanvas") return canvas;
+    if (selector === "#docgen2EditorTitle") return title;
+    if (selector === "[data-editor-save]") return saveButton;
+    if (selector === "[data-editor-save-status]") return saveStatus;
+    return null;
+  }},
+  contains() {{ return false; }},
+}});
+let reloaded = false;
+globalThis.document = {{
+  body: {{}},
+  querySelector(selector) {{
+    if (selector === "#docgen2Editor") return editor;
+    if (selector === "[data-template-source]") return templateSource;
+    if (selector === "#formatSelect") return formatSource;
+    return null;
+  }},
+  querySelectorAll() {{ return []; }},
+  addEventListener() {{}},
+  execCommand() {{}},
+}};
+globalThis.window = {{
+  getSelection() {{ return null; }},
+  location: {{ reload() {{ reloaded = true; }} }},
+}};
+globalThis.fetch = async () => ({{
+  ok: true,
+  async json() {{
+    return {{ revision: 1, html: '<h1 data-node-id="n1">New document</h1><p data-node-id="p1">Text</p>' }};
+  }},
+}});
+{script.text}
+await saveButton.listeners.get("click")();
+if (reloaded) throw new Error("first no-template HTML editor save reloaded the workspace");
+"""
+
+    subprocess.run(
+        [_NODE or "node", "--input-type=module", "-e", harness],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

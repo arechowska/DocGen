@@ -516,7 +516,10 @@
       );
       markDocumentReady();
       setSaveStatus("Сохранено в проекте", "saved");
-      if (creatingDocument && typeof window.location?.reload === "function") {
+      const noTemplateHtml =
+        templateSource?.value === "no-template" &&
+        document.querySelector("#formatSelect")?.value === "html";
+      if (creatingDocument && !noTemplateHtml && typeof window.location?.reload === "function") {
         window.location.reload();
       }
       return result;
