@@ -338,3 +338,21 @@ def test_docx_returns_safe_error_for_malformed_package_xml(tmp_path: Path) -> No
 
     with pytest.raises(ExtractionError, match="Не удалось прочитать DOCX-файл"):
         DocxExtractor().extract(make_source(), path)
+
+
+def test_docx_workspace_counts_nested_list_text_for_page_limits(tmp_path: Path) -> None:
+    path = tmp_path / "nested-page-count.docx"
+    document = Document()
+    number_id = document.styles["List Number"].element.pPr.numPr.numId.val
+    bullet_id = document.styles["List Bullet"].element.pPr.numPr.numId.val
+    parent = document.add_paragraph("Parent")
+    _set_numbering(parent, number_id, 0)
+    nested_text = "x" * 1800
+    nested = document.add_paragraph(nested_text)
+    _set_numbering(nested, bullet_id, 1)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert result.blocks[0].text == f"Parent\n{nested_text}"
+    assert result.page_units == 2

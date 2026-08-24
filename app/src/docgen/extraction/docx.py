@@ -303,7 +303,7 @@ class _WorkspaceListGroup:
 
     def to_block(self) -> NormalizedBlock:
         items = [item.text for item in self._roots]
-        text = "\n".join(items)
+        text = "\n".join(item.text for item in self._walk_items())
         return NormalizedBlock(
             id=stable_block_id(self._source.id, BlockKind.LIST, f"paragraph:{self._index}", text),
             kind=BlockKind.LIST,
