@@ -19,7 +19,12 @@
 
       <label class="control template-control" title="Шаблон определяет структуру документа">
         <span>Шаблон</span>
-        <select id="templateSelect" data-template-source data-template-storage-key="docgen:template:{{ project_id }}">
+        <select
+          id="templateSelect"
+          name="semantic_template_id"
+          data-template-source
+          data-template-storage-key="docgen:template:{{ project_id }}"
+        >
           <option value="no-template" {% if selected_template_id == "no-template" %}selected{% endif %}>Без шаблона</option>
           {% for semantic_template in templates %}
             <option value="{{ semantic_template.id }}" {% if selected_template_id == semantic_template.id %}selected{% endif %}>{{ semantic_template.name }}</option>
@@ -39,6 +44,7 @@
             id="formatSelect"
             name="format"
             hx-get="/projects/{{ project_id }}/export/templates"
+            hx-include="#templateSelect"
             hx-trigger="load, change"
             hx-target="#export-template-select"
             hx-swap="innerHTML"

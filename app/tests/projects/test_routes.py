@@ -386,9 +386,13 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
 
     assert response.status_code == 200
     soup = BeautifulSoup(response.text, "html.parser")
+    template_select = soup.find(id="templateSelect")
+    assert template_select is not None
+    assert template_select["name"] == "semantic_template_id"
     format_select = soup.find(id="formatSelect")
     assert format_select is not None
     assert format_select.get("name") == "format"
+    assert format_select["hx-include"] == "#templateSelect"
     assert soup.find(class_="topbar").find(id="formatSelect") is format_select
     assert format_select.parent.get("title") == "Тип скачиваемого файла"
 

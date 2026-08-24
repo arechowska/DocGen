@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 
 from docgen.documents.repository import DocumentRepository
@@ -92,6 +93,36 @@ def test_html_format_exposes_single_lightweight_formatting_option(
     assert response.text.count("<option") == 1
     assert 'value="docgen-light"' in response.text
     assert "Облегченный HTML" in response.text
+
+
+def test_no_template_html_options_wait_for_explicit_build(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(
+        f"/projects/{project_with_document.id}/export/templates",
+        params={"format": "html", "semantic_template_id": "no-template"},
+    )
+
+    select = BeautifulSoup(response.text, "html.parser").find("select")
+    assert select is not None
+    trigger = select["hx-trigger"]
+    assert "docgen:html-build from:body" in trigger
+    assert "docgen:document-updated from:body" not in trigger
+
+
+def test_other_export_options_keep_document_update_trigger(
+    client: TestClient, project_with_document: Project
+) -> None:
+    response = client.get(
+        f"/projects/{project_with_document.id}/export/templates",
+        params={"format": "html", "semantic_template_id": "faq"},
+    )
+
+    select = BeautifulSoup(response.text, "html.parser").find("select")
+    assert select is not None
+    trigger = select["hx-trigger"]
+    assert "docgen:document-updated from:body" in trigger
+    assert "docgen:html-build from:body" not in trigger
 
 
 def test_format_selection_rejects_invalid_format(

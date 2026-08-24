@@ -35,6 +35,7 @@ from docgen.jobs.repository import (
 from docgen.models import Project
 from docgen.projects.repository import ProjectRepository
 from docgen.projects.routes import get_session
+from docgen.templates_catalog.loader import NO_TEMPLATE_ID
 from docgen.web import templates
 
 router = APIRouter(prefix="/projects")
@@ -69,13 +70,20 @@ def export_templates(
     project_id: str,
     session: SessionDependency,
     format: Annotated[OutputFormat, Query()],
+    semantic_template_id: Annotated[str | None, Query()] = None,
 ) -> Response:
     _project_or_404(session, project_id)
     catalog = _catalog(request)
     return templates.TemplateResponse(
         request=request,
         name="export/template_options.html",
-        context={"templates": catalog.list(format), "project_id": project_id},
+        context={
+            "templates": catalog.list(format),
+            "project_id": project_id,
+            "manual_html_build": (
+                format is OutputFormat.HTML and semantic_template_id == NO_TEMPLATE_ID
+            ),
+        },
     )
 
 
