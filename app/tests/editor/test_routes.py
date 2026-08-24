@@ -267,6 +267,15 @@ def test_workspace_save_creates_first_document_for_empty_project(
         NodeKind.HEADING,
         NodeKind.PARAGRAPH,
     ]
+
+    refreshed = BeautifulSoup(
+        client.get(f"/projects/{project_id}").text,
+        "html.parser",
+    )
+    build_button = refreshed.find(id="buildButton")
+    assert build_button is not None
+    assert build_button.get("form") == "assembleForm"
+    assert build_button.has_attr("disabled")
     assert all(node.flags == ["manual-edit"] for node in saved.nodes)
 
 

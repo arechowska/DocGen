@@ -468,6 +468,9 @@
   const saveWorkspace = async () => {
     const saveUrl = editor.dataset.saveUrl;
     if (!saveUrl || !saveButton) return;
+    const creatingDocument = !Number.isInteger(
+      Number.parseInt(editor.dataset.revision, 10),
+    );
     normalizeSemanticNodeAttributes();
     saveButton.disabled = true;
     setSaveStatus("Сохранение...", "pending");
@@ -505,6 +508,9 @@
       );
       markDocumentReady();
       setSaveStatus("Сохранено в проекте", "saved");
+      if (creatingDocument && typeof window.location?.reload === "function") {
+        window.location.reload();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Не удалось сохранить";
       setSaveStatus(message, "error");
