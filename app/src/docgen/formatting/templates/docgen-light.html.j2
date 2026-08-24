@@ -4,26 +4,28 @@
     {% set level = node.data.get('level', 1)|int(1) %}
     {% set level = [level, 1]|max %}
     {% set level = [level, 6]|min %}
-    {% if level == 1 %}<h1>{{ node.text or "" }}</h1>
-    {% elif level == 2 %}<h2>{{ node.text or "" }}</h2>
-    {% elif level == 3 %}<h3>{{ node.text or "" }}</h3>
-    {% elif level == 4 %}<h4>{{ node.text or "" }}</h4>
-    {% elif level == 5 %}<h5>{{ node.text or "" }}</h5>
-    {% else %}<h6>{{ node.text or "" }}</h6>
+    {% if level == 1 %}<h1{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h1>
+    {% elif level == 2 %}<h2{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h2>
+    {% elif level == 3 %}<h3{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h3>
+    {% elif level == 4 %}<h4{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h4>
+    {% elif level == 5 %}<h5{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h5>
+    {% else %}<h6{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</h6>
     {% endif %}
   {% elif node.kind.value == "paragraph" %}
-    <p>{{ node.text or "" }}</p>
+    <p{{ style_attribute(node.data.get('style')) }}>{{ rich_html(node.data.get('html'), node.text or '') }}</p>
   {% elif node.kind.value == "list" %}
     {% if node.text %}<p class="dg-caption">{{ node.text }}</p>{% endif %}
     {% set items = node.data.get('items', []) %}
+    {% set rich_items = node.data.get('items_html', []) %}
+    {% set item_styles = node.data.get('item_styles', []) %}
     {% if items is sequence and items is not string %}
       {% if node.data.get('ordered', False) %}
-      <ol>
-        {% for item in items %}<li>{{ item }}</li>{% endfor %}
+      <ol{{ style_attribute(node.data.get('style')) }}>
+        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item) }}</li>{% endfor %}
       </ol>
       {% else %}
-      <ul>
-        {% for item in items %}<li>{{ item }}</li>{% endfor %}
+      <ul{{ style_attribute(node.data.get('style')) }}>
+        {% for item in items %}<li{{ style_attribute(item_styles[loop.index0] if item_styles is sequence and item_styles is not string and loop.index0 < item_styles|length else '') }}>{{ rich_html(rich_items[loop.index0] if rich_items is sequence and rich_items is not string and loop.index0 < rich_items|length else '', item) }}</li>{% endfor %}
       </ul>
       {% endif %}
     {% endif %}

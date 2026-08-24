@@ -74,6 +74,73 @@ def test_html_is_standalone_and_escaped(
     assert "<script>" not in html
 
 
+def test_html_preserves_safe_editor_rich_text_and_removes_xss(
+    html_template: FormattingTemplate,
+) -> None:
+    """Rich editor markup survives, while executable markup does not."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.PARAGRAPH,
+                text="Важный текст",
+                data={
+                    "html": (
+                        '<strong>Важный</strong> <em>текст</em>'
+                        '<script>alert(1)</script>'
+                        '<a href="javascript:alert(2)" onclick="alert(3)">ссылка</a>'
+                    ),
+                    "style": {"text-align": "center", "position": "fixed"},
+                },
+            )
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert "<strong>Важный</strong>" in html
+    assert "<em>текст</em>" in html
+    assert "text-align:center" in html
+    assert "<script" not in html
+    assert "javascript:" not in html
+    assert "onclick" not in html
+    assert "position:" not in html
+
+
+def test_html_preserves_rich_list_items_and_individual_styles(
+    html_template: FormattingTemplate,
+) -> None:
+    """List markup and supported per-item styles survive editor export."""
+    document = WorkingDocument(
+        title="Документ",
+        template_id="docgen-light-html",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.LIST,
+                data={
+                    "ordered": True,
+                    "items": ["Первый", "Второй"],
+                    "items_html": ["<strong>Первый</strong>", "<em>Второй</em>"],
+                    "item_styles": [
+                        "text-align:left",
+                        "text-align:right;position:fixed",
+                    ],
+                    "style": {"margin-left": "24px"},
+                },
+            )
+        ],
+    )
+
+    html = HtmlExporter().render(document, html_template).content.decode("utf-8")
+
+    assert "<strong>Первый</strong>" in html
+    assert "<em>Второй</em>" in html
+    assert "text-align:right" in html
+    assert "margin-left:24px" in html
+    assert "position:" not in html
+
+
 def test_html_image_without_src_renders_placeholder(
     html_template: FormattingTemplate,
 ) -> None:

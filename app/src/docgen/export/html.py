@@ -7,15 +7,23 @@ import mimetypes
 from collections.abc import Callable
 from pathlib import Path
 
+from bs4 import BeautifulSoup, Comment
 from jinja2 import Environment, FileSystemLoader
+from markupsafe import Markup, escape
 
 from docgen.documents.schemas import WorkingDocument
+from docgen.documents.style import normalized_style_attribute
 from docgen.export._naming import make_safe_filename
 from docgen.export.protocol import RenderedFile
 from docgen.formatting.schemas import FormattingTemplate
 from docgen.sources.storage import LocalStorage
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "formatting" / "templates"
+
+_RICH_TAGS = frozenset(
+    {"a", "b", "br", "code", "em", "i", "mark", "s", "span", "strong", "sub", "sup", "u"}
+)
+_BLOCKED_RICH_TAGS = frozenset({"script", "style", "template"})
 
 ImageAsset = tuple[bytes, str]
 """Resolved image content and its MIME type, e.g. ``(b"...", "image/png")``."""
@@ -82,6 +90,8 @@ class HtmlExporter:
             document=document,
             css=css_text,
             image_data_url=self._image_data_url,
+            rich_html=safe_rich_html,
+            style_attribute=safe_style_attribute,
         )
 
         return RenderedFile(
@@ -160,3 +170,54 @@ def local_storage_image_loader(storage: LocalStorage) -> ImageLoader:
         return content, media_type
 
     return _load
+
+
+def safe_rich_html(value: object, fallback: str = "") -> Markup:
+    """Return a small, sanitized editor rich-text fragment."""
+    if not isinstance(value, str) or not value:
+        return Markup(escape(fallback))
+
+    soup = BeautifulSoup(value, "html.parser")
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+    for tag in list(soup.find_all(_BLOCKED_RICH_TAGS)):
+        tag.decompose()
+    for tag in list(soup.find_all(True)):
+        if tag.name not in _RICH_TAGS:
+            tag.unwrap()
+            continue
+        for attribute in list(tag.attrs):
+            if attribute == "style":
+                style = normalized_style_attribute(str(tag.attrs[attribute]))
+                if style:
+                    tag.attrs[attribute] = style
+                else:
+                    del tag.attrs[attribute]
+                continue
+            if tag.name == "a" and attribute in {"href", "title"}:
+                if attribute == "href" and not _is_safe_rich_url(tag.attrs[attribute]):
+                    del tag.attrs[attribute]
+                continue
+            del tag.attrs[attribute]
+    return Markup("".join(str(item) for item in soup.contents))
+
+
+def safe_style_attribute(value: object) -> Markup:
+    """Serialize only style properties already supported by the editor."""
+    if isinstance(value, dict):
+        raw_style = ";".join(f"{key}:{item}" for key, item in value.items())
+    elif isinstance(value, str):
+        raw_style = value
+    else:
+        raw_style = ""
+    style = normalized_style_attribute(raw_style)
+    if not style:
+        return Markup("")
+    return Markup(f' style="{escape(style)}"')
+
+
+def _is_safe_rich_url(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized.startswith(("#", "/", "http://", "https://", "mailto:"))
