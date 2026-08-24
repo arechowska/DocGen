@@ -45,12 +45,11 @@
       <h2 id="resultTitle">Результат</h2>
       <span id="resultStatus" class="ready-label {% if has_document %}done{% endif %}">{% if has_document %}Готово{% else %}Не собран{% endif %}</span>
     </div>
-    {% if has_document %}
-      <div id="resultReady" class="result-ready">
+      <div id="resultReady" class="result-ready"{% if not has_document %} hidden{% endif %}>
         <div class="result-file">
           <span id="resultFileIcon" class="result-file-icon">D</span>
           <div>
-            <strong id="resultFilename">{{ document.title }}</strong>
+            <strong id="resultFilename">{{ document.title if document else project.name }}</strong>
             <span id="resultMeta">Текущий документ</span>
           </div>
         </div>
@@ -62,8 +61,6 @@
           </div>
         </div>
       </div>
-    {% else %}
-      <div id="resultEmpty" class="result-empty">Готовый файл появится после сборки.</div>
-    {% endif %}
+      <div id="resultEmpty" class="result-empty"{% if has_document %} hidden{% endif %}>Готовый файл появится после сборки.</div>
   </section>
 </section>
