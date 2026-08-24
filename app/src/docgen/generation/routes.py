@@ -15,6 +15,7 @@ from docgen.documents.schemas import CheckReport, WorkingDocument
 from docgen.export.html import local_storage_image_loader
 from docgen.export.protocol import ExportError
 from docgen.export.service import default_exporters
+from docgen.export.storage import ExportStorage
 from docgen.extraction.confluence import ConfluenceClient
 from docgen.extraction.registry import ExtractionError, ExtractorRegistry
 from docgen.formatting.catalog import (
@@ -103,10 +104,10 @@ def convert_source(
         formatting_template = FormattingCatalog(formatting_directory).get(
             output_format, formatting_template_id
         )
-        storage = LocalStorage(settings.data_dir)
+        source_storage = LocalStorage(settings.data_dir)
         normalized = NormalizationWorkflow(
             SourceRepository(session),
-            storage,
+            source_storage,
             ExtractorRegistry.default(settings),
             ConfluenceClient.from_settings(settings),
         ).run(project_id)
@@ -120,10 +121,16 @@ def convert_source(
             raise ExtractionError("В источнике нет извлекаемого содержимого")
         document = conversion_document(blocks, source.display_name or project.name)
         exporter = default_exporters(
-            image_loader=local_storage_image_loader(storage),
+            image_loader=local_storage_image_loader(source_storage),
             templates_dir=formatting_directory,
         )[output_format]
         rendered = exporter.render(document, formatting_template)
+        stored = ExportStorage(settings.data_dir).save(
+            project_id,
+            output_format,
+            formatting_template_id,
+            rendered,
+        )
     except (
         ExportError,
         ExtractionError,
@@ -137,7 +144,7 @@ def convert_source(
         ) from error
 
     disposition = "inline" if output_format is OutputFormat.HTML else "attachment"
-    encoded_filename = quote(rendered.filename)
+    encoded_filename = quote(stored.filename)
     return Response(
         content=rendered.content,
         media_type=rendered.media_type,

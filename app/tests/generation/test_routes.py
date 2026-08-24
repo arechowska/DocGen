@@ -126,7 +126,7 @@ def test_start_assemble_without_template_does_not_create_editor_document(
         assert DocumentRepository(session).get_document(project_with_source.id) is None
 
 
-def test_template_free_html_conversion_opens_inline_without_changing_editor(
+def test_template_free_html_conversion_saves_export_and_opens_inline_without_changing_editor(
     client: TestClient, project_with_source: Project
 ) -> None:
     original = _document()
@@ -141,6 +141,15 @@ def test_template_free_html_conversion_opens_inline_without_changing_editor(
     assert response.headers["content-type"].startswith("text/html")
     assert response.headers["content-disposition"].startswith("inline;")
     assert b"Case" in response.content
+    export_directory = (
+        client.app.state.settings.data_dir
+        / "projects"
+        / project_with_source.id
+        / "exports"
+    )
+    saved_exports = list(export_directory.glob("*.html"))
+    assert len(saved_exports) == 1
+    assert saved_exports[0].read_bytes() == response.content
     with _session(client) as session:
         assert DocumentRepository(session).get_document_with_revision(
             project_with_source.id
