@@ -1883,15 +1883,21 @@
 
 .result-actions {
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 12px;
 }
 
+.result-actions > .button,
+.result-actions > .export-result {
+  flex: 1 1 160px;
+}
+
 .result-actions .button {
-  width: fit-content;
-  min-width: 180px;
+  width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 6px 12px;
   font-size: 13px;
@@ -1900,8 +1906,18 @@
 .export-result {
   min-width: 0;
   display: flex;
-  flex-direction: column;
+  flex-flow: row wrap;
+  align-items: center;
   gap: 6px;
+}
+
+.export-result > .button,
+.export-result > form {
+  flex: 1 1 160px;
+}
+
+.export-result > form .button {
+  width: 100%;
 }
 
 .export-result.conversion-result-buttons {
@@ -1912,11 +1928,6 @@
 
 .conversion-result-buttons form {
   margin: 0;
-}
-
-.result-actions .conversion-result-buttons .button {
-  width: auto;
-  min-width: 0;
 }
 
 .export-error-message {

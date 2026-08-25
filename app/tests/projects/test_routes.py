@@ -452,12 +452,14 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
 
     stylesheet = client.get("/static/css/docgen.css")
     assert stylesheet.status_code == 200
-    assert ".result-actions .button{width:fit-content;min-width:180px}" in stylesheet.text
+    assert ".result-actions{min-width:0;display:flex;flex-flow:row wrap" in stylesheet.text
+    assert ".result-actions>.button,.result-actions>.export-result{flex:1 1 160px}" in stylesheet.text
+    assert ".result-actions .button{width:100%;min-width:0" in stylesheet.text
     assert ".chat-result-spacer{min-height:0}" in stylesheet.text
     assert ".chat-result-divider{height:3px" in stylesheet.text
-    assert "minmax(0,1fr) auto auto minmax(0,calc(.5cm - 4px)) auto auto" in stylesheet.text
-    assert ".chat-form{min-height:96px}" in stylesheet.text
-    assert ".chat-form textarea{min-height:94px;max-height:150px}" in stylesheet.text
+    assert "grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,.39417cm) auto auto" in stylesheet.text
+    assert ".chat-form{min-height:96px;" in stylesheet.text
+    assert "min-height:94px;max-height:150px;" in stylesheet.text
     assert ".chat-panel>.chat-form{grid-row:4}" in stylesheet.text
     assert ".chat-panel>.chat-result-spacer{grid-row:5}" in stylesheet.text
     assert ".chat-panel>.chat-result-divider{grid-row:6}" in stylesheet.text
