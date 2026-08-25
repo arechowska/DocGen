@@ -695,6 +695,7 @@ def _safe_job_error(job: Job) -> str | None:
 def _job_response(request: Request, session: Session, job: Job) -> Response:
     if job.status is JobStatus.SUCCEEDED:
         documents = DocumentRepository(session)
+        on_standalone_job_page = _polls_from_standalone_job_page(request, job.id)
         if job.kind is JobKind.ASSEMBLE:
             document = (
                 documents.get_document_at_revision(
@@ -712,6 +713,8 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                         standalone=True,
                         warnings=job.warning_messages,
                     )
+                if on_standalone_job_page:
+                    return _htmx_redirect(f"/projects/{job.project_id}/document")
                 return _assemble_complete_response(
                     request,
                     session,
@@ -737,6 +740,8 @@ def _job_response(request: Request, session: Session, job: Job) -> Response:
                         url=f"/projects/{job.project_id}#docgen2Editor",
                         status_code=status.HTTP_303_SEE_OTHER,
                     )
+                if on_standalone_job_page:
+                    return _htmx_redirect(f"/projects/{job.project_id}/report")
                 document = documents.get_document_at_revision(
                     job.project_id,
                     job.result_report_revision,
@@ -770,6 +775,26 @@ def _wants_full_page(request: Request) -> bool:
         request.headers.get("HX-Request") != "true"
         and "text/html" in request.headers.get("Accept", "")
     )
+
+
+def _polls_from_standalone_job_page(request: Request, job_id: str) -> bool:
+    """Detect the bare `/jobs/{id}` page polling for its own completion.
+
+    That page never embeds the project's source/work/action panels, so the
+    OOB-swap fragments `_assemble_complete_response`/`_check_complete_response`
+    build for the in-project polling loop have nowhere to land there -- the
+    visible `#generation-status` swap would end up empty. htmx sends the
+    browser's current URL on every request, letting us tell the two polling
+    contexts apart and redirect this one to a page that renders standalone.
+    """
+    current_url = request.headers.get("HX-Current-URL", "")
+    return f"/jobs/{job_id}" in current_url
+
+
+def _htmx_redirect(url: str) -> Response:
+    response = Response(status_code=status.HTTP_200_OK)
+    response.headers["HX-Redirect"] = url
+    return response
 
 
 def _document_response(

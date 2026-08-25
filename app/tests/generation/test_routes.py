@@ -1646,6 +1646,19 @@ def test_check_route_job_runs_once_and_swaps_to_saved_report(
     assert "Case" in response.text
     assert 'id="chatPanel"' in response.text
 
+    standalone_poll_response = client.get(
+        f"/projects/{project_with_source.id}/jobs/{job.id}",
+        headers={
+            "HX-Request": "true",
+            "HX-Current-URL": f"http://testserver/projects/{project_with_source.id}/jobs/{job.id}",
+        },
+    )
+    assert standalone_poll_response.status_code == 200
+    assert (
+        standalone_poll_response.headers["HX-Redirect"]
+        == f"/projects/{project_with_source.id}/report"
+    )
+
     full_report_response = client.get(f"/projects/{project_with_source.id}/report")
     assert "Результат проверки" in full_report_response.text
     assert "Структура документа не совпадает с полной формой" in full_report_response.text
