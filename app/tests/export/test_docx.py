@@ -407,6 +407,7 @@ def test_docx_contents_is_a_real_updatable_toc_field(
         for element in package.element.body.iter(qn("w:instrText"))
     ]
     assert any(text and "TOC" in text for text in instr_texts)
+    assert sum(bool(text and "PAGEREF" in text) for text in instr_texts) == 1
     field_chars = [
         element.get(qn("w:fldCharType"))
         for element in package.element.body.iter(qn("w:fldChar"))
@@ -415,11 +416,11 @@ def test_docx_contents_is_a_real_updatable_toc_field(
     assert "separate" in field_chars
     assert "end" in field_chars
 
-    # Word refreshes the genuine TOC/PAGEREF fields when the file opens.
+    # Do not ask Word to refresh every field on open: on macOS that produces
+    # an alarming external-file prompt even though these links are internal.
     settings = package.settings.element
     update_fields = settings.find(qn("w:updateFields"))
-    assert update_fields is not None
-    assert update_fields.get(qn("w:val")) == "true"
+    assert update_fields is None
 
 
 def test_docx_contents_with_no_headings_shows_placeholder(
@@ -445,6 +446,32 @@ def test_docx_sets_title_paragraph_and_metadata(docx_template: FormattingTemplat
         p for p in package.paragraphs if p.style.name == "Colvir_Обложка_Название"
     ]
     assert any(p.text == "Заголовок пакета" for p in title_paragraphs)
+
+
+def test_docx_keeps_complete_long_title_and_scales_cover_and_header(
+    docx_template: FormattingTemplate,
+) -> None:
+    title = (
+        "Проверка баланса цифрового счёта в платформе "
+        "для корпоративных клиентов"
+    )
+    rendered = DocxExporter().render(
+        WorkingDocument(title=title, template_id="colvir-docx", nodes=[]),
+        docx_template,
+    )
+    package = _open(rendered.content)
+
+    cover = next(
+        paragraph
+        for paragraph in package.paragraphs
+        if paragraph.style.name == "Colvir_Обложка_Название"
+    )
+    header = package.sections[0].header.paragraphs[0]
+
+    assert cover.text == title
+    assert cover.runs[0].font.size.pt == 24
+    assert header.text == f"Colvir Banking System\t{title}"
+    assert header.runs[-1].font.size.pt == 8
 
 
 def test_docx_uses_short_cover_title_and_faq_paragraphs(

@@ -195,7 +195,7 @@ def _toc_destination_page_labels(pdf_bytes: bytes) -> list[str]:
     """Read TOC destinations in their visual order from LibreOffice's PDF."""
     pdf = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     try:
-        destinations: list[tuple[int, float, float, int]] = []
+        destinations: dict[tuple[int, float, int], tuple[float, int]] = {}
         for source_page, page in enumerate(pdf):
             for link in page.get_links():
                 destination = link.get("page")
@@ -208,11 +208,23 @@ def _toc_destination_page_labels(pdf_bytes: bytes) -> list[str]:
                     or source_rect is None
                 ):
                     continue
-                destinations.append(
-                    (source_page, float(source_rect.y0), float(source_rect.x0), destination)
+                row_key = (source_page, round(float(source_rect.y0), 1), destination)
+                destinations.setdefault(
+                    row_key, (float(source_rect.x0), destination)
                 )
-        destinations.sort(key=lambda item: item[:3])
-        return [pdf[destination].get_label() or str(destination + 1) for *_, destination in destinations]
+        ordered = sorted(
+            (
+                source_page,
+                row_y,
+                source_x,
+                destination,
+            )
+            for (source_page, row_y, _), (source_x, destination) in destinations.items()
+        )
+        return [
+            pdf[destination].get_label() or str(destination + 1)
+            for *_, destination in ordered
+        ]
     finally:
         pdf.close()
 

@@ -154,19 +154,23 @@ def test_colvir_pdf_contents_uses_real_destination_pages(
     pdf = pymupdf.open(stream=rendered.content, filetype="pdf")
     try:
         contents_text = pdf[1].get_text()
-        destination_pages = sorted(
+        destination_pages = sorted({
             link["page"] + 1
             for link in pdf[1].get_links()
             if link.get("kind") == pymupdf.LINK_GOTO
-        )
+        })
     finally:
         pdf.close()
 
     assert len(destination_pages) == 2
     assert destination_pages[0] > 1
     assert destination_pages[1] > destination_pages[0]
-    assert re.search(rf"ПЕРВЫЙ.*{destination_pages[0]}", contents_text)
-    assert re.search(rf"ВТОРОЙ.*{destination_pages[1]}", contents_text)
+    assert re.search(
+        rf"ПЕРВЫЙ.*{destination_pages[0]}", contents_text, re.DOTALL
+    )
+    assert re.search(
+        rf"ВТОРОЙ.*{destination_pages[1]}", contents_text, re.DOTALL
+    )
 
 
 def test_colvir_pdf_footer_and_filename_reflect_document_category(
@@ -180,6 +184,26 @@ def test_colvir_pdf_footer_and_filename_reflect_document_category(
     text = _open_pdf_text(rendered.content)
     assert "FAQ" in text
     assert "Руководство" not in text
+
+
+def test_colvir_pdf_keeps_complete_long_project_title(
+    colvir_pdf_template: FormattingTemplate,
+) -> None:
+    title = (
+        "Проверка баланса цифрового счёта в платформе "
+        "для корпоративных клиентов"
+    )
+    rendered = PdfExporter().render(
+        WorkingDocument(title=title, template_id="colvir-docx", nodes=[]),
+        colvir_pdf_template,
+    )
+    pdf = pymupdf.open(stream=rendered.content, filetype="pdf")
+    try:
+        cover_text = " ".join(pdf[0].get_text().split())
+    finally:
+        pdf.close()
+
+    assert title in cover_text
 
 
 def test_colvir_pdf_preserves_complete_use_case_form_and_separate_flow_items(

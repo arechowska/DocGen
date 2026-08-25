@@ -179,7 +179,6 @@ class DocxExporter:
             for node in document.nodes:
                 self._render_node(docx_document, node, list_num_ids, toc_bookmarks)
 
-        self._request_field_update_on_open(docx_document)
         buffer = BytesIO()
         docx_document.save(buffer)
 
@@ -264,7 +263,12 @@ class DocxExporter:
         cover_elements = set()
         for paragraph in cover_paragraphs:
             cover_elements.add(paragraph._p)
-            paragraph.text = title if paragraph.style.name == _TITLE_STYLE else ""
+            if paragraph.style.name == _TITLE_STYLE:
+                paragraph.text = title
+                for run in paragraph.runs:
+                    run.font.size = Pt(_cover_title_font_size(title))
+            else:
+                paragraph.text = ""
 
         body = docx_document.element.body
         sect_pr = body.find(qn("w:sectPr"))
@@ -285,7 +289,11 @@ class DocxExporter:
                     section.page_width - section.left_margin - section.right_margin,
                     WD_TAB_ALIGNMENT.RIGHT,
                 )
-                paragraph.text = f"Colvir Banking System\t{title}"
+                paragraph.clear()
+                paragraph.add_run("Colvir Banking System")
+                paragraph.add_run("\t")
+                title_run = paragraph.add_run(title)
+                title_run.font.size = Pt(_header_title_font_size(title))
 
     def _prepare_footer(
         self, docx_document: docx.document.Document, label: str
@@ -314,19 +322,9 @@ class DocxExporter:
     ) -> None:
         """Fill the template's dedicated post-cover page with a real TOC field.
 
-        This is a genuine Word ``{ TOC }`` field: right-click -> "Update
-        Field" (or Ctrl+A, F9) recomputes real page numbers and hyperlinks
-        from the actual layout. It does *not* auto-update on open -- an
-        earlier version set `w:updateFields` for that, but letting Word
-        silently recompute the field on its own turned out to be the
-        opposite of reliable, so this only ever shows the cached content
-        below unless the reader asks for an update. That cached content
-        (between the field's ``separate`` and ``end``) is pre-populated from
-        the same document nodes as the rest of the export and hyperlinked to
-        bookmarks placed around each rendered heading (`_wrap_bookmark`), so
-        it reads correctly by default everywhere, including the PDF
-        pipeline, which converts through headless LibreOffice and would
-        otherwise show an empty/stale TOC.
+        Word can rebuild the complete table from heading styles, while the
+        cached entries keep the generated DOCX/PDF readable before Word has
+        refreshed the field.
         """
         title = docx_document.add_paragraph("Оглавление", style=_SECTION_STYLE)
         title.paragraph_format.page_break_before = True
@@ -404,17 +402,6 @@ class DocxExporter:
 
     def _append_field_end(self, paragraph: Any) -> None:
         paragraph._p.append(parse_xml(f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="end"/></w:r>'))
-
-    def _request_field_update_on_open(
-        self, docx_document: docx.document.Document
-    ) -> None:
-        """Ask Word to refresh TOC/PAGEREF fields when the file is opened."""
-        settings = docx_document.settings.element
-        update_fields = settings.find(qn("w:updateFields"))
-        if update_fields is None:
-            update_fields = OxmlElement("w:updateFields")
-            settings.append(update_fields)
-        update_fields.set(qn("w:val"), "true")
 
     def _wrap_bookmark(self, paragraph: Any, name: str) -> None:
         """Surround a rendered heading paragraph with a named bookmark.
@@ -1068,7 +1055,28 @@ def _cover_title(title: str) -> str:
         if lowered.startswith(prefix):
             normalized = f"FAQ {normalized[len(prefix) :].lstrip(' :—-')}"
             break
-    if len(normalized) <= 42:
-        return normalized or "Документ"
-    shortened = normalized[:42].rsplit(" ", 1)[0].rstrip(" ,:;—-")
-    return shortened or normalized[:42].rstrip()
+    return normalized or "Документ"
+
+
+def _cover_title_font_size(title: str) -> int:
+    length = len(title)
+    if length <= 60:
+        return 30
+    if length <= 90:
+        return 24
+    if length <= 130:
+        return 20
+    if length <= 170:
+        return 16
+    return 14
+
+
+def _header_title_font_size(title: str) -> int:
+    length = len(title)
+    if length <= 55:
+        return 10
+    if length <= 80:
+        return 8
+    if length <= 110:
+        return 7
+    return 6
