@@ -7,6 +7,8 @@ from uuid import uuid4
 import pytest
 from bs4 import BeautifulSoup
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -1675,7 +1677,15 @@ def _save_workspace(client: TestClient, project_id: str, revision: int):
 
 def _docx_with_outline_heading_and_ordered_list() -> bytes:
     document = Document()
-    document.add_heading("Guide", level=2)
+    heading = document.add_heading("Guide", level=2)
+    number_id = document.styles["List Number"].element.pPr.numPr.numId.val
+    numbering = OxmlElement("w:numPr")
+    level = OxmlElement("w:ilvl")
+    level.set(qn("w:val"), "0")
+    number = OxmlElement("w:numId")
+    number.set(qn("w:val"), str(number_id))
+    numbering.extend((level, number))
+    heading._p.get_or_add_pPr().append(numbering)
     document.add_paragraph("First", style="List Number")
     document.add_paragraph("Second", style="List Number")
     output = BytesIO()

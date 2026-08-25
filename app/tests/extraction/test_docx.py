@@ -200,6 +200,29 @@ def test_docx_workspace_extraction_preserves_editor_safe_rich_content_and_lists(
     }
 
 
+def test_docx_workspace_keeps_numbered_heading_out_of_ordered_list(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "numbered-heading.docx"
+    document = Document()
+    number_id = document.styles["List Number"].element.pPr.numPr.numId.val
+    heading = document.add_heading("Введение", level=2)
+    _set_numbering(heading, number_id, 0)
+    list_item = document.add_paragraph("Обычный пункт")
+    _set_numbering(list_item, number_id, 0)
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert [block.kind for block in result.blocks] == [
+        BlockKind.HEADING,
+        BlockKind.LIST,
+    ]
+    assert result.blocks[0].text == "Введение"
+    assert result.blocks[0].data == {"level": 2, "html": "Введение"}
+    assert result.blocks[1].data["items"] == ["Обычный пункт"]
+
+
 def test_docx_workspace_preserves_text_inside_unsupported_containers(
     tmp_path: Path,
 ) -> None:

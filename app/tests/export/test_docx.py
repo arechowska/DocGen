@@ -5,14 +5,18 @@ from pathlib import Path
 import pytest
 from docx import Document as OpenDocx
 from docx.enum.text import WD_TAB_ALIGNMENT
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt
+from docx.shared import Pt
 
 from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
 from docgen.export.docx import DocxExporter, local_storage_image_loader
 from docgen.export.storage import ExportStorage
+from docgen.extraction.docx import DocxExtractor
 from docgen.formatting.schemas import FormattingTemplate, OutputFormat
+from docgen.models import Source, SourceKind
 from docgen.sources.storage import LocalStorage
+from docgen.workflows.conversion import conversion_document
 
 # A minimal valid 1x1 transparent PNG, used to exercise the "resolvable src"
 # image embedding path without depending on any real asset file.
@@ -71,6 +75,62 @@ def test_docx_uses_template_styles_headers_and_tables(docx_template: FormattingT
     assert len(package.tables) == 1
     assert package.tables[0].style.name == "Colvir_сетка_таблицы"
     assert package.core_properties.title == document.title
+
+
+def test_numbered_docx_heading_round_trips_through_editor_as_heading(
+    tmp_path: Path,
+    docx_template: FormattingTemplate,
+) -> None:
+    source_path = tmp_path / "numbered-heading.docx"
+    source_document = OpenDocx()
+    number_id = source_document.styles["List Number"].element.pPr.numPr.numId.val
+    heading = source_document.add_heading("Введение", level=2)
+    numbering = OxmlElement("w:numPr")
+    level = OxmlElement("w:ilvl")
+    level.set(qn("w:val"), "0")
+    number = OxmlElement("w:numId")
+    number.set(qn("w:val"), str(number_id))
+    numbering.extend((level, number))
+    heading._p.get_or_add_pPr().append(numbering)
+    source_document.add_paragraph("Обычный пункт", style="List Number")
+    source_document.save(source_path)
+    source = Source(
+        id="s1",
+        project_id="p1",
+        kind=SourceKind.FILE,
+        display_name=source_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size_bytes=source_path.stat().st_size,
+        storage_path="projects/p1/sources/s1.docx",
+        status="stored",
+    )
+
+    blocks = DocxExtractor().extract_workspace(source, source_path).blocks
+    editor_document = conversion_document(
+        blocks,
+        "Руководство",
+        rebase_heading_levels=True,
+    )
+    rendered = DocxExporter(image_loader=fake_image_loader).render(
+        editor_document,
+        docx_template,
+    )
+    exported = _open(rendered.content)
+
+    assert [node.kind for node in editor_document.nodes] == [
+        NodeKind.HEADING,
+        NodeKind.LIST,
+    ]
+    exported_heading = next(
+        paragraph for paragraph in exported.paragraphs if paragraph.text == "Введение"
+    )
+    exported_list_item = next(
+        paragraph
+        for paragraph in exported.paragraphs
+        if paragraph.text == "Обычный пункт"
+    )
+    assert exported_heading.style.name == "Heading 1"
+    assert exported_list_item.style.name != "Heading 1"
 
 
 def test_docx_assembled_use_case_uses_full_corporate_form_with_empty_fields(

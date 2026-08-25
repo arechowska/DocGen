@@ -118,6 +118,31 @@ class DocxExtractor:
                         blocks.append(pending_list.to_block())
                         pending_list = None
                     continue
+                block = self._paragraph_block(
+                    source,
+                    paragraph,
+                    paragraph_index,
+                    text=paragraph_text,
+                )
+                # Numbered Word headings contain both outline/heading metadata
+                # and numPr. Their semantic heading role takes precedence over
+                # numbering; otherwise a document outline becomes one large
+                # ordered list in the editor.
+                if block.kind is BlockKind.HEADING:
+                    if pending_list is not None:
+                        blocks.append(pending_list.to_block())
+                        pending_list = None
+                    blocks.append(
+                        block.model_copy(
+                            update={
+                                "data": {
+                                    **block.data,
+                                    "html": _workspace_paragraph_html(paragraph),
+                                }
+                            }
+                        )
+                    )
+                    continue
                 list_context = _workspace_list_context(paragraph, document)
                 if list_context is not None:
                     if pending_list is None:
@@ -135,12 +160,6 @@ class DocxExtractor:
                 if pending_list is not None:
                     blocks.append(pending_list.to_block())
                     pending_list = None
-                block = self._paragraph_block(
-                    source,
-                    paragraph,
-                    paragraph_index,
-                    text=paragraph_text,
-                )
                 blocks.append(
                     block.model_copy(
                         update={"data": {**block.data, "html": _workspace_paragraph_html(paragraph)}}
