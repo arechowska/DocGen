@@ -9,8 +9,13 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from zipfile import ZIP_DEFLATED, ZipFile
+
+import pymupdf
+from lxml import etree
 
 from docgen.documents.schemas import WorkingDocument
 from docgen.export._naming import make_safe_filename
@@ -30,6 +35,8 @@ __all__ = [
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "formatting" / "templates"
 
 _MEDIA_TYPE = "application/pdf"
+_WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_WORD_NAMESPACES = {"w": _WORD_NAMESPACE}
 
 
 class PdfExporter:
@@ -126,29 +133,27 @@ class PdfExporter:
             output_dir.mkdir()
             profile_dir.mkdir()
             docx_path.write_bytes(rendered_docx.content)
-            try:
-                subprocess.run(
-                    [
-                        office,
-                        "--headless",
-                        f"-env:UserInstallation={profile_dir.as_uri()}",
-                        "--convert-to",
-                        "pdf:writer_pdf_Export",
-                        "--outdir",
-                        str(output_dir),
-                        str(docx_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=90,
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise ExportError("Не удалось сформировать PDF из Word-шаблона") from exc
+            self._convert_docx_to_pdf(
+                office, docx_path, output_dir, profile_dir
+            )
             pdf_path = output_dir / "document.pdf"
             if not pdf_path.is_file():
                 raise ExportError("Не удалось сформировать PDF из Word-шаблона")
             pdf_bytes = pdf_path.read_bytes()
+            page_numbers = _toc_destination_page_labels(pdf_bytes)
+            updated_docx = _replace_cached_toc_page_numbers(
+                rendered_docx.content, page_numbers
+            )
+            if updated_docx is not None:
+                docx_path.write_bytes(updated_docx)
+                second_profile_dir = workspace / "profile-final"
+                second_profile_dir.mkdir()
+                self._convert_docx_to_pdf(
+                    office, docx_path, output_dir, second_profile_dir
+                )
+                if not pdf_path.is_file():
+                    raise ExportError("Не удалось сформировать PDF из Word-шаблона")
+                pdf_bytes = pdf_path.read_bytes()
 
         return RenderedFile(
             filename=make_safe_filename(
@@ -157,3 +162,104 @@ class PdfExporter:
             media_type=_MEDIA_TYPE,
             content=pdf_bytes,
         )
+
+    @staticmethod
+    def _convert_docx_to_pdf(
+        office: str,
+        docx_path: Path,
+        output_dir: Path,
+        profile_dir: Path,
+    ) -> None:
+        try:
+            subprocess.run(
+                [
+                    office,
+                    "--headless",
+                    f"-env:UserInstallation={profile_dir.as_uri()}",
+                    "--convert-to",
+                    "pdf:writer_pdf_Export",
+                    "--outdir",
+                    str(output_dir),
+                    str(docx_path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=90,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ExportError("Не удалось сформировать PDF из Word-шаблона") from exc
+
+
+def _toc_destination_page_labels(pdf_bytes: bytes) -> list[str]:
+    """Read TOC destinations in their visual order from LibreOffice's PDF."""
+    pdf = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        destinations: list[tuple[int, float, float, int]] = []
+        for source_page, page in enumerate(pdf):
+            for link in page.get_links():
+                destination = link.get("page")
+                source_rect = link.get("from")
+                if (
+                    link.get("kind") != pymupdf.LINK_GOTO
+                    or not isinstance(destination, int)
+                    or destination < 0
+                    or destination >= len(pdf)
+                    or source_rect is None
+                ):
+                    continue
+                destinations.append(
+                    (source_page, float(source_rect.y0), float(source_rect.x0), destination)
+                )
+        destinations.sort(key=lambda item: item[:3])
+        return [pdf[destination].get_label() or str(destination + 1) for *_, destination in destinations]
+    finally:
+        pdf.close()
+
+
+def _replace_cached_toc_page_numbers(
+    docx_bytes: bytes, page_numbers: list[str]
+) -> bytes | None:
+    """Replace cached PAGEREF results when every TOC destination was resolved."""
+    source = BytesIO(docx_bytes)
+    with ZipFile(source) as package:
+        document_xml = package.read("word/document.xml")
+        root = etree.fromstring(document_xml)
+        instructions = root.xpath(
+            ".//w:instrText[contains(normalize-space(.), 'PAGEREF')]",
+            namespaces=_WORD_NAMESPACES,
+        )
+        if not instructions or len(instructions) != len(page_numbers):
+            return None
+
+        for instruction, page_number in zip(instructions, page_numbers, strict=True):
+            run = instruction.getparent()
+            container = run.getparent()
+            found_separator = False
+            updated = False
+            for sibling in list(container)[container.index(run) + 1 :]:
+                field_char = sibling.find("w:fldChar", namespaces=_WORD_NAMESPACES)
+                if field_char is not None and field_char.get(
+                    f"{{{_WORD_NAMESPACE}}}fldCharType"
+                ) == "separate":
+                    found_separator = True
+                    continue
+                if not found_separator:
+                    continue
+                text = sibling.find("w:t", namespaces=_WORD_NAMESPACES)
+                if text is not None:
+                    text.text = page_number
+                    updated = True
+                    break
+            if not updated:
+                return None
+
+        updated_xml = etree.tostring(
+            root, xml_declaration=True, encoding="UTF-8", standalone=True
+        )
+        output = BytesIO()
+        with ZipFile(output, "w", ZIP_DEFLATED) as updated_package:
+            for item in package.infolist():
+                content = updated_xml if item.filename == "word/document.xml" else package.read(item)
+                updated_package.writestr(item, content)
+        return output.getvalue()

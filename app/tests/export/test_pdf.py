@@ -123,6 +123,44 @@ def test_colvir_pdf_has_valid_header_and_expected_text(
     assert "Оглавление" in text
 
 
+def test_colvir_pdf_contents_uses_real_destination_pages(
+    colvir_pdf_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Многостраничный документ",
+        template_id="faq",
+        nodes=(
+            [DocumentNode(kind=NodeKind.HEADING, text="Первый", data={"level": 1})]
+            + [
+                DocumentNode(
+                    kind=NodeKind.PARAGRAPH,
+                    text=(f"Длинный абзац {index}. " * 80),
+                )
+                for index in range(25)
+            ]
+            + [DocumentNode(kind=NodeKind.HEADING, text="Второй", data={"level": 1})]
+        ),
+    )
+
+    rendered = PdfExporter().render(document, colvir_pdf_template)
+    pdf = pymupdf.open(stream=rendered.content, filetype="pdf")
+    try:
+        contents_text = pdf[1].get_text()
+        destination_pages = sorted(
+            link["page"] + 1
+            for link in pdf[1].get_links()
+            if link.get("kind") == pymupdf.LINK_GOTO
+        )
+    finally:
+        pdf.close()
+
+    assert len(destination_pages) == 2
+    assert destination_pages[0] > 1
+    assert destination_pages[1] > destination_pages[0]
+    assert re.search(rf"ПЕРВЫЙ.*{destination_pages[0]}", contents_text)
+    assert re.search(rf"ВТОРОЙ.*{destination_pages[1]}", contents_text)
+
+
 def test_colvir_pdf_footer_and_filename_reflect_document_category(
     colvir_pdf_template: FormattingTemplate,
 ) -> None:
