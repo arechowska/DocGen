@@ -9,7 +9,12 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
-from docgen.documents.schemas import DocumentNode, NodeKind, WorkingDocument
+from docgen.documents.schemas import (
+    DocumentNode,
+    DocumentOrigin,
+    NodeKind,
+    WorkingDocument,
+)
 from docgen.export.docx import DocxExporter, local_storage_image_loader
 from docgen.export.storage import ExportStorage
 from docgen.extraction.docx import DocxExtractor
@@ -307,7 +312,7 @@ def test_docx_contents_uses_document_headings(docx_template: FormattingTemplate)
     body_headings = {
         p.text: p for p in package.paragraphs if p.text in ("Общие вопросы", "Настройки")
     }
-    assert body_headings["Общие вопросы"].style.name == "Colvir_Подзаголовок"
+    assert body_headings["Общие вопросы"].style.name == "Heading 2"
     assert body_headings["Настройки"].style.name == "Heading 3"
 
     toc_entries = {
@@ -415,6 +420,13 @@ def test_docx_contents_is_a_real_updatable_toc_field(
     assert "begin" in field_chars
     assert "separate" in field_chars
     assert "end" in field_chars
+    dirty_fields = [
+        element
+        for element in package.element.body.iter(qn("w:fldChar"))
+        if element.get(qn("w:dirty")) == "true"
+    ]
+    assert len(dirty_fields) == 1
+    assert dirty_fields[0].get(qn("w:fldCharType")) == "begin"
 
     # Word must refresh the generated page-reference values on open; without
     # this request the cached fallback values remain "1" until a manual update.
@@ -422,6 +434,30 @@ def test_docx_contents_is_a_real_updatable_toc_field(
     update_fields = settings.find(qn("w:updateFields"))
     assert update_fields is not None
     assert update_fields.get(qn("w:val")) == "true"
+
+
+def test_docx_no_template_level_two_heading_uses_numbered_heading_style(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Импортированный документ",
+        template_id="no-template",
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Область применения",
+                data={"level": 2},
+            )
+        ],
+    )
+
+    rendered = DocxExporter().render(document, docx_template)
+    package = _open(rendered.content)
+
+    heading = next(p for p in package.paragraphs if p.text == "Область применения")
+    assert heading.style.name == "Heading 2"
 
 
 def test_docx_contents_with_no_headings_shows_placeholder(
@@ -480,7 +516,7 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
 ) -> None:
     document = WorkingDocument(
         title="Вопросы и ответы по модулю «Главная Книга» Colvir Banking System",
-        template_id="colvir-docx",
+        template_id="faq",
         nodes=[
             DocumentNode(kind=NodeKind.HEADING, text="Общие вопросы", data={"level": 2}),
             DocumentNode(
@@ -531,7 +567,7 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
 
 @pytest.mark.parametrize(
     "level,expected_style",
-    [(1, "Heading 1"), (2, "Colvir_Подзаголовок"), (3, "Heading 3"), (6, "Heading 6")],
+    [(1, "Heading 1"), (2, "Heading 2"), (3, "Heading 3"), (6, "Heading 6")],
 )
 def test_docx_heading_level_maps_to_style(
     docx_template: FormattingTemplate, level: int, expected_style: str

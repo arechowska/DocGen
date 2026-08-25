@@ -176,8 +176,15 @@ class DocxExporter:
         if document.build_template_id == "use-case":
             self._render_use_case_form(docx_document, document, list_num_ids)
         else:
+            faq_heading_layout = document.build_template_id == "faq"
             for node in document.nodes:
-                self._render_node(docx_document, node, list_num_ids, toc_bookmarks)
+                self._render_node(
+                    docx_document,
+                    node,
+                    list_num_ids,
+                    toc_bookmarks,
+                    faq_heading_layout=faq_heading_layout,
+                )
 
         self._request_field_update_on_open(docx_document)
         buffer = BytesIO()
@@ -389,7 +396,10 @@ class DocxExporter:
     def _prepend_field_begin(self, paragraph: Any, instruction: str) -> None:
         """Insert `begin`/`instrText`/`separate` right after the paragraph's pPr."""
         p_pr = paragraph._p.get_or_add_pPr()
-        begin = parse_xml(f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="begin"/></w:r>')
+        begin = parse_xml(
+            f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="begin" '
+            'w:dirty="true"/></w:r>'
+        )
         instr = parse_xml(
             f'<w:r {nsdecls("w")}><w:instrText xml:space="preserve">'
             f"{xml_escape(instruction)}</w:instrText></w:r>"
@@ -706,6 +716,8 @@ class DocxExporter:
         node: DocumentNode,
         list_num_ids: dict[bool, int],
         toc_bookmarks: dict[int, str],
+        *,
+        faq_heading_layout: bool,
     ) -> None:
         """Render a single node and then all of its children.
 
@@ -715,7 +727,12 @@ class DocxExporter:
         every node kind may carry children, and all must render.
         """
         if node.kind == NodeKind.HEADING:
-            self._render_heading(docx_document, node, toc_bookmarks)
+            self._render_heading(
+                docx_document,
+                node,
+                toc_bookmarks,
+                faq_heading_layout=faq_heading_layout,
+            )
         elif node.kind == NodeKind.PARAGRAPH:
             self._render_paragraph(docx_document, node)
         elif node.kind == NodeKind.LIST:
@@ -728,24 +745,36 @@ class DocxExporter:
             self._render_gap(docx_document, node)
 
         for child in node.children:
-            self._render_node(docx_document, child, list_num_ids, toc_bookmarks)
+            self._render_node(
+                docx_document,
+                child,
+                list_num_ids,
+                toc_bookmarks,
+                faq_heading_layout=faq_heading_layout,
+            )
 
     def _render_heading(
         self,
         docx_document: docx.document.Document,
         node: DocumentNode,
         toc_bookmarks: dict[int, str],
+        *,
+        faq_heading_layout: bool,
     ) -> None:
         level = node.data.get("level", 1)
         if not isinstance(level, int):
             level = 1
         level = max(1, min(6, level))
-        # FAQ sections are authored as h2 blocks in the editor. The template's
-        # Heading 2 carries outline numbering, while its corporate subtitle is
-        # the blue, unnumbered visual used by the supplied FAQ layout.
-        style = _SECTION_STYLE if level == 2 else _HEADING_STYLE_NAMES[level]
+        # Only assembled FAQ sections use the blue, unnumbered subtitle.
+        # Imported/no-template documents must retain the template's numbered
+        # Heading 2 style when they round-trip through the HTML editor.
+        style = (
+            _SECTION_STYLE
+            if faq_heading_layout and level == 2
+            else _HEADING_STYLE_NAMES[level]
+        )
         paragraph = docx_document.add_paragraph(node.text or "", style=style)
-        if level == 2:
+        if faq_heading_layout and level == 2:
             # The cover uses this style as a page-level block. FAQ sections
             # need the same typography without starting a blank page first.
             paragraph.paragraph_format.page_break_before = False
