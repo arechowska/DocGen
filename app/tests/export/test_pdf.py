@@ -122,6 +122,14 @@ def test_colvir_pdf_has_valid_header_and_expected_text(
     assert "Colvir" in text
     assert "Оглавление" in text
 
+    pdf = pymupdf.open(stream=rendered.content, filetype="pdf")
+    try:
+        contents_heading = pdf[1].search_for("Оглавление")
+    finally:
+        pdf.close()
+    assert len(contents_heading) == 1
+    assert contents_heading[0].y0 < 90
+
 
 def test_colvir_pdf_contents_uses_real_destination_pages(
     colvir_pdf_template: FormattingTemplate,

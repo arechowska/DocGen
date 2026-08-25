@@ -277,6 +277,14 @@ def test_docx_replaces_template_sample_body_with_contents(docx_template: Formatt
     assert "Введите название документа" not in full_text
     assert "Введите заголовок первого уровня" not in full_text
     assert "Оглавление" in full_text
+    contents_index, contents = next(
+        (index, paragraph)
+        for index, paragraph in enumerate(package.paragraphs)
+        if paragraph.text == "Оглавление"
+    )
+    assert contents.paragraph_format.page_break_before is True
+    assert contents.paragraph_format.space_before.pt == 0
+    assert contents_index == 3
 
 
 def test_docx_contents_uses_document_headings(docx_template: FormattingTemplate) -> None:
@@ -407,12 +415,11 @@ def test_docx_contents_is_a_real_updatable_toc_field(
     assert "separate" in field_chars
     assert "end" in field_chars
 
-    # No forced auto-update on open: an earlier version set this, but
-    # letting Word silently recompute the field on its own turned out to
-    # be unreliable in practice, so the reliable cached content (asserted
-    # elsewhere) is what a reader sees unless they ask for an update.
+    # Word refreshes the genuine TOC/PAGEREF fields when the file opens.
     settings = package.settings.element
-    assert settings.find(qn("w:updateFields")) is None
+    update_fields = settings.find(qn("w:updateFields"))
+    assert update_fields is not None
+    assert update_fields.get(qn("w:val")) == "true"
 
 
 def test_docx_contents_with_no_headings_shows_placeholder(

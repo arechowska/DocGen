@@ -179,6 +179,7 @@ class DocxExporter:
             for node in document.nodes:
                 self._render_node(docx_document, node, list_num_ids, toc_bookmarks)
 
+        self._request_field_update_on_open(docx_document)
         buffer = BytesIO()
         docx_document.save(buffer)
 
@@ -256,9 +257,10 @@ class DocxExporter:
         if title_index is None:
             raise ValueError("В шаблоне Colvir не найден стиль названия обложки")
 
-        # The supplied template's cover consists of two title lines, the
-        # title itself, a subtitle and an introductory paragraph.
-        cover_paragraphs = paragraphs[: title_index + 3]
+        # The two paragraphs after the cover title are sample body content.
+        # Keeping them as empty paragraphs pushes the generated contents
+        # down the next page, so retain only the actual cover paragraphs.
+        cover_paragraphs = paragraphs[: title_index + 1]
         cover_elements = set()
         for paragraph in cover_paragraphs:
             cover_elements.add(paragraph._p)
@@ -327,7 +329,8 @@ class DocxExporter:
         otherwise show an empty/stale TOC.
         """
         title = docx_document.add_paragraph("Оглавление", style=_SECTION_STYLE)
-        title.paragraph_format.page_break_before = False
+        title.paragraph_format.page_break_before = True
+        title.paragraph_format.space_before = Pt(0)
 
         if document.build_template_id == "use-case":
             for heading, level in self._iter_headings(document.nodes):
@@ -401,6 +404,17 @@ class DocxExporter:
 
     def _append_field_end(self, paragraph: Any) -> None:
         paragraph._p.append(parse_xml(f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="end"/></w:r>'))
+
+    def _request_field_update_on_open(
+        self, docx_document: docx.document.Document
+    ) -> None:
+        """Ask Word to refresh TOC/PAGEREF fields when the file is opened."""
+        settings = docx_document.settings.element
+        update_fields = settings.find(qn("w:updateFields"))
+        if update_fields is None:
+            update_fields = OxmlElement("w:updateFields")
+            settings.append(update_fields)
+        update_fields.set(qn("w:val"), "true")
 
     def _wrap_bookmark(self, paragraph: Any, name: str) -> None:
         """Surround a rendered heading paragraph with a named bookmark.
