@@ -452,9 +452,11 @@ def test_project_detail_result_panel_offers_export_without_a_submit_button(
 
     stylesheet = client.get("/static/css/docgen.css")
     assert stylesheet.status_code == 200
-    assert ".result-actions{min-width:0;display:flex;flex-flow:row wrap" in stylesheet.text
-    assert ".result-actions>.button,.result-actions>.export-result{flex:1 1 160px}" in stylesheet.text
+    assert ".result-actions{min-width:0;display:flex;flex-flow:row nowrap" in stylesheet.text
+    assert ".result-actions>.button,.result-actions>.export-result{min-width:0;flex:1 1 0}" in stylesheet.text
     assert ".result-actions .button{width:100%;min-width:0" in stylesheet.text
+    assert ".export-result{min-width:0;display:flex;flex-flow:row nowrap" in stylesheet.text
+    assert ".export-result>.button,.export-result>form{min-width:0;flex:1 1 0}" in stylesheet.text
     assert ".chat-result-spacer{min-height:0}" in stylesheet.text
     assert ".chat-result-divider{height:3px" in stylesheet.text
     assert "grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,.39417cm) auto auto" in stylesheet.text

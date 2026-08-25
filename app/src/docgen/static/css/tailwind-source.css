@@ -1884,7 +1884,7 @@
 .result-actions {
   min-width: 0;
   display: flex;
-  flex-flow: row wrap;
+  flex-flow: row nowrap;
   align-items: center;
   gap: 8px;
   margin-top: 12px;
@@ -1892,7 +1892,8 @@
 
 .result-actions > .button,
 .result-actions > .export-result {
-  flex: 1 1 160px;
+  min-width: 0;
+  flex: 1 1 0;
 }
 
 .result-actions .button {
@@ -1906,14 +1907,15 @@
 .export-result {
   min-width: 0;
   display: flex;
-  flex-flow: row wrap;
+  flex-flow: row nowrap;
   align-items: center;
   gap: 6px;
 }
 
 .export-result > .button,
 .export-result > form {
-  flex: 1 1 160px;
+  min-width: 0;
+  flex: 1 1 0;
 }
 
 .export-result > form .button {
