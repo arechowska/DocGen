@@ -228,6 +228,29 @@ def test_start_export_rejects_stale_revision(
     assert _jobs_for_project(client, project_with_document.id) == []
 
 
+@pytest.mark.parametrize("revision", [None, "None", "invalid"])
+def test_start_export_renders_friendly_error_for_invalid_revision(
+    client: TestClient,
+    project_with_document: Project,
+    revision: str | None,
+) -> None:
+    data = {"format": "docx", "template_id": "docgen-light"}
+    if revision is not None:
+        data["revision"] = revision
+
+    response = client.post(
+        f"/projects/{project_with_document.id}/export",
+        data=data,
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    assert '"detail"' not in response.text
+    assert "Нажмите «Сохранить в проект»" in response.text
+    assert _jobs_for_project(client, project_with_document.id) == []
+
+
 def test_start_export_requires_a_saved_document(
     client: TestClient, other_project: Project
 ) -> None:

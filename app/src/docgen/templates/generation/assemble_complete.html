@@ -9,6 +9,8 @@
   {% endif %}
 </div>
 
+<input id="exportRevision" type="hidden" name="revision" value="{{ revision }}" hx-swap-oob="outerHTML">
+
 {% set source_panel_oob = true %}
 {% set review_button_oob = true %}
 {% include "projects/source_panel.html" %}

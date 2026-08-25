@@ -46,6 +46,9 @@ _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
 _FAILED_MESSAGE = "Не удалось выполнить экспорт"
 _PROJECT_ACTIVE_MESSAGE = "Проект уже обрабатывается"
 _DOCUMENT_MISSING_MESSAGE = "Документ не найден"
+_DOCUMENT_REVISION_MESSAGE = (
+    "Нажмите «Сохранить в проект» — документ станет доступен для экспорта"
+)
 _DOCUMENT_STALE_MESSAGE = "Документ изменён; обновите страницу и повторите экспорт"
 _TEMPLATE_MISSING_MESSAGE = "Шаблон не найден для выбранного формата"
 _EXPORT_PENDING_MESSAGE = "Экспорт ещё выполняется"
@@ -94,7 +97,7 @@ def start_export(
     session: SessionDependency,
     format: Annotated[OutputFormat, Form()],
     template_id: Annotated[str, Form()],
-    revision: Annotated[int, Form()],
+    revision: Annotated[str | None, Form()] = None,
 ) -> Response:
     _project_or_404(session, project_id)
 
@@ -104,7 +107,15 @@ def start_export(
             request, _DOCUMENT_MISSING_MESSAGE, status.HTTP_422_UNPROCESSABLE_CONTENT
         )
     _, current_revision = stored
-    if revision != current_revision:
+    try:
+        requested_revision = int(revision) if revision is not None else None
+    except ValueError:
+        requested_revision = None
+    if requested_revision is None:
+        return _error_response(
+            request, _DOCUMENT_REVISION_MESSAGE, status.HTTP_422_UNPROCESSABLE_CONTENT
+        )
+    if requested_revision != current_revision:
         return _error_response(request, _DOCUMENT_STALE_MESSAGE, status.HTTP_409_CONFLICT)
 
     try:
@@ -120,7 +131,7 @@ def start_export(
             JobKind.EXPORT,
             template_id,
             export_format=format,
-            requested_document_revision=revision,
+            requested_document_revision=requested_revision,
         )
     except ActiveProjectJobExists:
         return _error_response(request, _PROJECT_ACTIVE_MESSAGE, status.HTTP_409_CONFLICT)

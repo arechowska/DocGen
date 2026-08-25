@@ -1403,6 +1403,12 @@ def test_succeeded_assemble_job_updates_docgen2_editor_out_of_band(
     assert "Оплата заказа" in response.text
     assert 'id="editor-shell"' not in response.text
     assert 'id="generation-status"' in response.text
+    revision_input = BeautifulSoup(response.text, "html.parser").find(
+        "input", id="exportRevision"
+    )
+    assert revision_input is not None
+    assert revision_input["value"] == "1"
+    assert revision_input["hx-swap-oob"] == "outerHTML"
     assert 'hx-trigger="every 2s"' not in response.text
 
 
