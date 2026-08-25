@@ -78,7 +78,8 @@ class CheckWorkflow:
             raise WorkflowError(_CHECK_KIND_ERROR)
 
         progress(10, "Загружены проект, шаблон и документ")
-        if self._projects.get(job.project_id) is None:
+        project = self._projects.get(job.project_id)
+        if project is None:
             raise WorkflowError(_PROJECT_NOT_FOUND)
         template = self._templates.get(job.template_id)
         target_kind = job.check_target_kind or (
@@ -117,6 +118,7 @@ class CheckWorkflow:
                     job.target_source_id,
                     template.id,
                     evidence_blocks,
+                    fallback_title=project.name,
                 )
         assert document is not None
         if self._grounding.validate(document, {block.id: block for block in blocks}):
@@ -161,6 +163,8 @@ def _target_document(
     target_source_id: str,
     template_id: str,
     blocks: list[NormalizedBlock],
+    *,
+    fallback_title: str,
 ) -> WorkingDocument:
     del template_id
     target_blocks = _target_blocks(target_source_id, blocks)
@@ -170,7 +174,7 @@ def _target_document(
             for block in target_blocks
             if block.kind is BlockKind.HEADING and block.text.strip()
         ),
-        "Документ для проверки",
+        fallback_title,
     )
     return WorkingDocument(
         title=title,

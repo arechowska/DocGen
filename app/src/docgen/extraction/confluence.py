@@ -431,7 +431,10 @@ def _block_from_element(
             return None
         return _make_block(source_id, BlockKind.TEXT, "paragraph", element.get_text(" ", strip=True), {}, counters)
     if element.name in {"ul", "ol"}:
-        if element.find_parent(["li"]) is not None:
+        # A table is normalized as one atomic block. Lists inside its cells are
+        # already included in the table cell text and must not be emitted again
+        # as standalone blocks after the table.
+        if element.find_parent(["li", "td", "th"]) is not None:
             return None
         items = [item.get_text(" ", strip=True) for item in element.find_all("li", recursive=False)]
         return _make_block(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -38,7 +39,7 @@ from docgen.workflows.normalize import NormalizedProject
 @dataclass
 class FakeProjects:
     def get(self, project_id: str) -> object | None:
-        return object() if project_id == "p1" else None
+        return SimpleNamespace(name="Имя проекта") if project_id == "p1" else None
 
 
 @dataclass
@@ -506,9 +507,15 @@ def test_standalone_target_uses_source_provenance_not_block_id_prefix() -> None:
         confidence=1,
     )
 
-    document = _target_document("source-1", "use-case", [block])
+    document = _target_document(
+        "source-1",
+        "use-case",
+        [block],
+        fallback_title="Имя проекта",
+    )
 
     assert [node.text for node in document.nodes] == ["Описание из файла"]
+    assert document.title == "Имя проекта"
 
 
 def test_standalone_check_reports_unavailable_selected_source(

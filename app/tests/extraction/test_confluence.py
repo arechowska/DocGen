@@ -124,6 +124,32 @@ def test_fetch_confluence_page_maps_storage_html_to_normalized_blocks(
     assert result.page_units == 2
 
 
+def test_fetch_keeps_list_inside_table_only_in_table_block() -> None:
+    transport = httpx.MockTransport(
+        lambda request: _page_response(
+            "<table>"
+            "<tr><td>Предусловия</td><td><ol><li>Первое</li><li>Второе</li></ol></td></tr>"
+            "<tr><td>Статус</td><td>ЧЕРНОВИК</td></tr>"
+            "</table>"
+        )
+    )
+    client = ConfluenceClient(
+        api_base="https://wiki.example.test/rest/api",
+        token="secret",
+        transport=transport,
+    )
+
+    result = client.fetch("https://wiki.example.test/pages/viewpage.action?pageId=42")
+
+    assert [block.kind for block in result.blocks] == [BlockKind.TABLE]
+    assert result.blocks[0].data == {
+        "rows": [
+            ["Предусловия", "Первое Второе"],
+            ["Статус", "ЧЕРНОВИК"],
+        ]
+    }
+
+
 def test_fetch_confluence_page_maps_native_attachment_image_macros() -> None:
     transport = _native_attachment_transport(
         '<ac:image><ri:attachment ri:filename="architecture.png" /></ac:image>'
