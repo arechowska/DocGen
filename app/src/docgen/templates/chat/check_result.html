@@ -33,7 +33,6 @@
       {% if auto_recheck | default(false) %}hx-trigger="load"{% endif %}
     >
       <input type="hidden" name="template_id" value="{{ report.template_id }}">
-      {% if report_target_source_id %}<input type="hidden" name="target_source_id" value="{{ report_target_source_id }}">{% endif %}
       <button type="submit" class="check-result-apply">Проверить снова</button>
     </form>
   {% endif %}

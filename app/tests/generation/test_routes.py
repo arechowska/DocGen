@@ -26,7 +26,7 @@ from docgen.export.storage import ExportStorage
 from docgen.extraction.registry import ExtractionResult, ExtractorRegistry
 from docgen.extraction.schemas import BlockKind, NormalizedBlock, Provenance
 from docgen.formatting.schemas import OutputFormat
-from docgen.jobs.models import Job, JobKind
+from docgen.jobs.models import CheckTargetKind, Job, JobKind
 from docgen.jobs.repository import JobRepository
 from docgen.jobs.runner import JobRunner
 from docgen.models import Project
@@ -1303,28 +1303,32 @@ def test_report_view_missing_returns_friendly_page_not_raw_json(
 
 
 def test_stale_report_remains_visible_and_can_start_a_real_recheck(
-    client: TestClient, project_with_source: Project
+    client: TestClient, configured_models: None, project_with_source: Project
 ) -> None:
     document = _document()
     _save_document(client, project_with_source.id, document)
-    _save_report(
-        client,
-        project_with_source.id,
-        CheckReport(
-            template_id="use-case",
-            findings=[
-                CheckFinding(
-                    code="confirmed",
-                    severity=Severity.ERROR,
-                    confidence=0.9,
-                    message="Шаг не пронумерован",
-                    suggestion="Добавьте номер шага",
-                    node_id="node-1",
-                    rule_id="use-case-structure",
-                )
-            ],
-        ),
+    report = CheckReport(
+        template_id="use-case",
+        findings=[
+            CheckFinding(
+                code="confirmed",
+                severity=Severity.ERROR,
+                confidence=0.9,
+                message="Шаг не пронумерован",
+                suggestion="Добавьте номер шага",
+                node_id="node-1",
+                rule_id="use-case-structure",
+            )
+        ],
     )
+    with _session(client) as session:
+        source = SourceRepository(session).list_for_project(project_with_source.id)[0]
+        DocumentRepository(session).save_report(
+            project_with_source.id,
+            report,
+            target_source_id=source.id,
+        )
+        session.commit()
     _save_document(client, project_with_source.id, document)
 
     with _session(client) as session:
@@ -1345,6 +1349,18 @@ def test_stale_report_remains_visible_and_can_start_a_real_recheck(
     assert "Отчёт сохранён для сравнения" in card.text
     assert "Проверить снова" in card.text
     assert "Предложить правку" not in card.text
+    assert 'name="target_source_id"' not in page.text
+    assert 'name="target_source_id"' not in card.text
+
+    recheck = client.post(
+        f"/projects/{project_with_source.id}/jobs/check",
+        data={"template_id": report.template_id},
+    )
+
+    assert recheck.status_code == 202
+    job = _jobs_for_project(client, project_with_source.id)[-1]
+    assert job.target_source_id is None
+    assert job.check_target_kind is CheckTargetKind.CURRENT
 
 
 def test_project_page_shows_persistent_report_link_only_when_report_exists(
