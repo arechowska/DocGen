@@ -67,6 +67,22 @@ def _append_container_text(paragraph, container_tag: str, text: str) -> None:
     paragraph._p.append(container)
 
 
+def _append_field_marker(paragraph, field_type: str) -> None:
+    run = OxmlElement("w:r")
+    marker = OxmlElement("w:fldChar")
+    marker.set(qn("w:fldCharType"), field_type)
+    run.append(marker)
+    paragraph._p.append(run)
+
+
+def _append_field_instruction(paragraph, instruction: str) -> None:
+    run = OxmlElement("w:r")
+    instruction_element = OxmlElement("w:instrText")
+    instruction_element.text = instruction
+    run.append(instruction_element)
+    paragraph._p.append(run)
+
+
 @pytest.fixture
 def workspace_fidelity_docx(tmp_path: Path) -> Path:
     path = tmp_path / "workspace-fidelity.docx"
@@ -221,6 +237,48 @@ def test_docx_workspace_keeps_numbered_heading_out_of_ordered_list(
     assert result.blocks[0].text == "Введение"
     assert result.blocks[0].data == {"level": 2, "html": "Введение"}
     assert result.blocks[1].data["items"] == ["Обычный пункт"]
+
+
+def test_docx_extraction_omits_cached_word_toc_but_keeps_document_headings(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "word-toc.docx"
+    document = Document()
+    document.add_heading("Оглавление", level=1)
+    first_entry = document.add_paragraph()
+    _append_field_marker(first_entry, "begin")
+    _append_field_instruction(first_entry, ' TOC \\o "1-3" \\h \\z \\u ')
+    _append_field_marker(first_entry, "separate")
+    first_entry.add_run("1. Введение\t4")
+    last_entry = document.add_paragraph("1.1. Область применения\t4")
+    _append_field_marker(last_entry, "end")
+    document.add_heading("Введение", level=1)
+    document.add_paragraph("Основной текст")
+    document.save(path)
+
+    extractor = DocxExtractor()
+    regular = extractor.extract(make_source(), path)
+    workspace = extractor.extract_workspace(make_source(), path)
+
+    assert [block.text for block in regular.blocks] == ["Введение", "Основной текст"]
+    assert [block.text for block in workspace.blocks] == ["Введение", "Основной текст"]
+
+
+def test_docx_extraction_keeps_plain_contents_heading_without_toc_field(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "plain-contents-heading.docx"
+    document = Document()
+    document.add_heading("Оглавление", level=1)
+    document.add_paragraph("Описание раздела")
+    document.save(path)
+
+    result = DocxExtractor().extract_workspace(make_source(), path)
+
+    assert [block.text for block in result.blocks] == [
+        "Оглавление",
+        "Описание раздела",
+    ]
 
 
 def test_docx_workspace_preserves_text_inside_unsupported_containers(

@@ -416,11 +416,12 @@ def test_docx_contents_is_a_real_updatable_toc_field(
     assert "separate" in field_chars
     assert "end" in field_chars
 
-    # Do not ask Word to refresh every field on open: on macOS that produces
-    # an alarming external-file prompt even though these links are internal.
+    # Word must refresh the generated page-reference values on open; without
+    # this request the cached fallback values remain "1" until a manual update.
     settings = package.settings.element
     update_fields = settings.find(qn("w:updateFields"))
-    assert update_fields is None
+    assert update_fields is not None
+    assert update_fields.get(qn("w:val")) == "true"
 
 
 def test_docx_contents_with_no_headings_shows_placeholder(

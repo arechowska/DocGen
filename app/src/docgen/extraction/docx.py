@@ -29,6 +29,8 @@ from docgen.models import Source
 
 _HEADING_STYLE_ID = re.compile(r"^Heading([1-9])$", re.IGNORECASE)
 _LIST_STYLE_ID = re.compile(r"^List(?:Bullet|Number)(?:[1-9]\d*)?$", re.IGNORECASE)
+_TOC_FIELD_INSTRUCTION = re.compile(r"(?:^|\s)TOC(?:\s|$)", re.IGNORECASE)
+_TOC_TITLES = frozenset({"оглавление", "содержание"})
 _MAX_HEADING_WORDS = 20
 _MAX_HEADING_CHARS = 150
 
@@ -68,14 +70,19 @@ class DocxExtractor:
         blocks: list[NormalizedBlock] = []
         paragraph_index = 0
         table_index = 0
-        for element in document.element.body.iterchildren():
+        skipped_body_indexes = _toc_body_indexes(document)
+        for body_index, element in enumerate(document.element.body.iterchildren()):
             if element.tag.endswith("}p"):
                 paragraph_index += 1
+                if body_index in skipped_body_indexes:
+                    continue
                 paragraph = Paragraph(element, document)
                 if paragraph.text.strip():
                     blocks.append(self._paragraph_block(source, paragraph, paragraph_index))
             elif element.tag.endswith("}tbl"):
                 table_index += 1
+                if body_index in skipped_body_indexes:
+                    continue
                 blocks.append(self._table_block(source, Table(element, document), table_index))
         return ExtractionResult(
             blocks=blocks,
@@ -108,9 +115,15 @@ class DocxExtractor:
         paragraph_index = 0
         table_index = 0
         pending_list: _WorkspaceListGroup | None = None
-        for element in document.element.body.iterchildren():
+        skipped_body_indexes = _toc_body_indexes(document)
+        for body_index, element in enumerate(document.element.body.iterchildren()):
             if element.tag.endswith("}p"):
                 paragraph_index += 1
+                if body_index in skipped_body_indexes:
+                    if pending_list is not None:
+                        blocks.append(pending_list.to_block())
+                        pending_list = None
+                    continue
                 paragraph = Paragraph(element, document)
                 paragraph_text = _workspace_paragraph_text(paragraph).strip()
                 if not paragraph_text:
@@ -170,6 +183,8 @@ class DocxExtractor:
                     blocks.append(pending_list.to_block())
                     pending_list = None
                 table_index += 1
+                if body_index in skipped_body_indexes:
+                    continue
                 blocks.append(self._table_block(source, Table(element, document), table_index))
         if pending_list is not None:
             blocks.append(pending_list.to_block())
@@ -178,6 +193,7 @@ class DocxExtractor:
             page_units=VirtualPageCalculator().from_blocks(blocks),
             warnings=[],
         )
+
 
     @staticmethod
     def _paragraph_block(
@@ -227,6 +243,61 @@ class DocxExtractor:
             provenance=[Provenance(source_id=source.id, locator=f"table:{index}")],
             confidence=1.0,
         )
+
+
+def _toc_body_indexes(document: Document) -> set[int]:
+    """Return body elements occupied by a cached Word table of contents.
+
+    A complex ``TOC`` field can start in one paragraph and end several
+    paragraphs later. Its cached display text must not become editable body
+    content, because exports create their own contents from headings.
+    """
+    body_elements = list(document.element.body.iterchildren())
+    skipped: set[int] = set()
+    field_stack: list[list[int | bool]] = []
+
+    for body_index, element in enumerate(body_elements):
+        for descendant in element.iter():
+            if descendant.tag == qn("w:fldSimple"):
+                instruction = descendant.get(qn("w:instr"), "")
+                if _is_toc_instruction(instruction):
+                    skipped.add(body_index)
+                continue
+            if descendant.tag == qn("w:fldChar"):
+                field_type = descendant.get(qn("w:fldCharType"))
+                if field_type == "begin":
+                    field_stack.append([body_index, False])
+                elif field_type == "end" and field_stack:
+                    start_index, is_toc = field_stack.pop()
+                    if is_toc:
+                        skipped.update(range(int(start_index), body_index + 1))
+                continue
+            if (
+                descendant.tag == qn("w:instrText")
+                and field_stack
+                and _is_toc_instruction(descendant.text or "")
+            ):
+                field_stack[-1][1] = True
+
+    if not skipped:
+        return skipped
+
+    first_toc_index = min(skipped)
+    for body_index in range(first_toc_index - 1, -1, -1):
+        element = body_elements[body_index]
+        if not element.tag.endswith("}p"):
+            break
+        text = _workspace_paragraph_text(Paragraph(element, document)).strip()
+        if not text:
+            continue
+        if " ".join(text.casefold().split()).strip(".:—–-") in _TOC_TITLES:
+            skipped.add(body_index)
+        break
+    return skipped
+
+
+def _is_toc_instruction(instruction: str) -> bool:
+    return _TOC_FIELD_INSTRUCTION.search(instruction.strip()) is not None
 
 
 def _looks_like_heading(text: str) -> bool:

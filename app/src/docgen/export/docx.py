@@ -179,6 +179,7 @@ class DocxExporter:
             for node in document.nodes:
                 self._render_node(docx_document, node, list_num_ids, toc_bookmarks)
 
+        self._request_field_update_on_open(docx_document)
         buffer = BytesIO()
         docx_document.save(buffer)
 
@@ -402,6 +403,17 @@ class DocxExporter:
 
     def _append_field_end(self, paragraph: Any) -> None:
         paragraph._p.append(parse_xml(f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="end"/></w:r>'))
+
+    def _request_field_update_on_open(
+        self, docx_document: docx.document.Document
+    ) -> None:
+        """Ask Word to refresh the generated TOC/PAGEREF fields on open."""
+        settings = docx_document.settings.element
+        update_fields = settings.find(qn("w:updateFields"))
+        if update_fields is None:
+            update_fields = OxmlElement("w:updateFields")
+            settings.append(update_fields)
+        update_fields.set(qn("w:val"), "true")
 
     def _wrap_bookmark(self, paragraph: Any, name: str) -> None:
         """Surround a rendered heading paragraph with a named bookmark.
