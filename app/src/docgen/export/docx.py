@@ -100,8 +100,9 @@ _TOC_EMPTY_MESSAGE = "Список разделов пуст"
 _LIST_INDENT_LEFT_TWIPS = 720
 _LIST_INDENT_HANGING_TWIPS = 360
 _FAQ_ITEM_PATTERN = re.compile(
-    r"^\s*Вопрос\s*:\s*(?P<question>.+?)\s+Ответ\s*:\s*(?P<answer>.+?)\s*$",
-    re.DOTALL,
+    r"^\s*(?:Вопрос|Question)\s*:\s*(?P<question>.+?)\s+"
+    r"(?:Ответ|Answer)\s*:\s*(?P<answer>.+?)\s*$",
+    re.DOTALL | re.IGNORECASE,
 )
 
 
@@ -119,6 +120,8 @@ class DocxExporter:
         self,
         image_loader: ImageLoader | None = None,
         templates_dir: Path | None = None,
+        *,
+        request_field_update_on_open: bool = True,
     ) -> None:
         """Create a DocxExporter.
 
@@ -128,9 +131,13 @@ class DocxExporter:
             templates_dir: Directory containing the `.docx` assets named by
                 a FormattingTemplate's `assets` list. Defaults to the
                 built-in formatting/templates catalog directory.
+            request_field_update_on_open: Mark the TOC stale and ask Word to
+                rebuild it on open. PDF conversion disables this so
+                LibreOffice preserves the generated, numbered cached TOC.
         """
         self._image_loader = image_loader
         self._templates_dir = (templates_dir or _TEMPLATES_DIR).resolve()
+        self._request_field_update = request_field_update_on_open
 
     def render(
         self, document: WorkingDocument, template: FormattingTemplate
@@ -186,7 +193,8 @@ class DocxExporter:
                     faq_heading_layout=faq_heading_layout,
                 )
 
-        self._request_field_update_on_open(docx_document)
+        if self._request_field_update:
+            self._request_field_update_on_open(docx_document)
         buffer = BytesIO()
         docx_document.save(buffer)
 
@@ -344,11 +352,37 @@ class DocxExporter:
                 entry.paragraph_format.left_indent = Cm(0.6 * max(0, level - 1))
             return
 
-        entries = [
-            (node.text or "", self._heading_level(node), toc_bookmarks[id(node)])
-            for node in heading_nodes
-        ]
+        entries = self._toc_entries(document, heading_nodes, toc_bookmarks)
         self._render_toc_field(docx_document, entries)
+
+    def _toc_entries(
+        self,
+        document: WorkingDocument,
+        heading_nodes: list[DocumentNode],
+        toc_bookmarks: dict[int, str],
+    ) -> list[tuple[str, int, str]]:
+        counters = [0] * 6
+        entries: list[tuple[str, int, str]] = []
+        faq_heading_layout = document.build_template_id == "faq"
+        for node in heading_nodes:
+            level = max(1, min(6, self._heading_level(node)))
+            text = node.text or ""
+            numbered = (
+                not self._request_field_update
+                and node.kind is NodeKind.HEADING
+                and not (faq_heading_layout and level == 2)
+            )
+            if numbered:
+                for ancestor in range(level - 1):
+                    if counters[ancestor] == 0:
+                        counters[ancestor] = 1
+                counters[level - 1] += 1
+                for deeper in range(level, len(counters)):
+                    counters[deeper] = 0
+                prefix = ".".join(str(value) for value in counters[:level])
+                text = f"{prefix}. {text}"
+            entries.append((text, level, toc_bookmarks[id(node)]))
+        return entries
 
     def _render_toc_field(
         self,
@@ -396,9 +430,9 @@ class DocxExporter:
     def _prepend_field_begin(self, paragraph: Any, instruction: str) -> None:
         """Insert `begin`/`instrText`/`separate` right after the paragraph's pPr."""
         p_pr = paragraph._p.get_or_add_pPr()
+        dirty = ' w:dirty="true"' if self._request_field_update else ""
         begin = parse_xml(
-            f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="begin" '
-            'w:dirty="true"/></w:r>'
+            f'<w:r {nsdecls("w")}><w:fldChar w:fldCharType="begin"{dirty}/></w:r>'
         )
         instr = parse_xml(
             f'<w:r {nsdecls("w")}><w:instrText xml:space="preserve">'
@@ -736,7 +770,13 @@ class DocxExporter:
         elif node.kind == NodeKind.PARAGRAPH:
             self._render_paragraph(docx_document, node)
         elif node.kind == NodeKind.LIST:
-            self._render_list(docx_document, node, list_num_ids, toc_bookmarks)
+            self._render_list(
+                docx_document,
+                node,
+                list_num_ids,
+                toc_bookmarks,
+                faq_heading_layout=faq_heading_layout,
+            )
         elif node.kind == NodeKind.TABLE:
             self._render_table(docx_document, node)
         elif node.kind == NodeKind.IMAGE:
@@ -794,6 +834,8 @@ class DocxExporter:
         node: DocumentNode,
         list_num_ids: dict[bool, int],
         toc_bookmarks: dict[int, str],
+        *,
+        faq_heading_layout: bool,
     ) -> None:
         items = node.data.get("items", [])
         if not isinstance(items, list):
@@ -811,9 +853,18 @@ class DocxExporter:
         item_styles = node.data.get("item_styles")
         for index, item in enumerate(items):
             text = item if isinstance(item, str) else str(item)
-            faq_item = _FAQ_ITEM_PATTERN.match(text)
-            if faq_item is not None:
-                self._render_faq_item(docx_document, faq_item)
+            if faq_heading_layout:
+                faq_item = _FAQ_ITEM_PATTERN.match(text)
+                if faq_item is not None:
+                    self._render_faq_item(docx_document, faq_item)
+                else:
+                    paragraph = docx_document.add_paragraph(
+                        text, style=_PARAGRAPH_STYLE
+                    )
+                    self._apply_node_style(paragraph, node)
+                    if isinstance(item_styles, list) and index < len(item_styles):
+                        self._apply_style_attribute(paragraph, item_styles[index])
+                    paragraph.paragraph_format.space_after = Pt(28)
                 continue
             paragraph = docx_document.add_paragraph(text, style=_LIST_STYLE)
             self._apply_node_style(paragraph, node)

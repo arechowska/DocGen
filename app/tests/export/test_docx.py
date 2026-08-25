@@ -460,6 +460,47 @@ def test_docx_no_template_level_two_heading_uses_numbered_heading_style(
     assert heading.style.name == "Heading 2"
 
 
+def test_docx_pdf_mode_keeps_numbered_cached_contents_without_update_request(
+    docx_template: FormattingTemplate,
+) -> None:
+    document = WorkingDocument(
+        title="Импортированный документ",
+        template_id="no-template",
+        origin=DocumentOrigin.IMPORTED,
+        source_id="source-1",
+        nodes=[
+            DocumentNode(kind=NodeKind.HEADING, text="Аннотация", data={"level": 1}),
+            DocumentNode(kind=NodeKind.HEADING, text="Введение", data={"level": 1}),
+            DocumentNode(
+                kind=NodeKind.HEADING,
+                text="Область применения",
+                data={"level": 2},
+            ),
+        ],
+    )
+
+    rendered = DocxExporter(request_field_update_on_open=False).render(
+        document, docx_template
+    )
+    package = _open(rendered.content)
+    contents_text = [
+        paragraph.text.split("\t", 1)[0]
+        for paragraph in package.paragraphs
+        if paragraph.style.name.startswith("toc ")
+    ]
+
+    assert contents_text == [
+        "1. Аннотация",
+        "2. Введение",
+        "2.1. Область применения",
+    ]
+    assert package.settings.element.find(qn("w:updateFields")) is None
+    assert not any(
+        element.get(qn("w:dirty")) == "true"
+        for element in package.element.body.iter(qn("w:fldChar"))
+    )
+
+
 def test_docx_contents_with_no_headings_shows_placeholder(
     docx_template: FormattingTemplate,
 ) -> None:
@@ -526,7 +567,12 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
                         (
                             "Вопрос: Для чего предназначен модуль? "
                             "Ответ: Для ведения Главной Книги."
-                        )
+                        ),
+                        (
+                            "Вопрос: Как настроить разделение книг? "
+                            "Answer: Установить системный параметр."
+                        ),
+                        "Пояснение без меток вопроса и ответа.",
                     ]
                 },
             ),
@@ -560,6 +606,21 @@ def test_docx_uses_short_cover_title_and_faq_paragraphs(
     assert question._p.pPr.find(qn("w:numPr")) is None
     assert question.paragraph_format.space_after.twips == Pt(8).twips
     assert answer.paragraph_format.space_after.twips == Pt(28).twips
+    mixed_question = next(
+        p for p in package.paragraphs if "Как настроить разделение книг?" in p.text
+    )
+    mixed_answer = next(
+        p for p in package.paragraphs if "Установить системный параметр." in p.text
+    )
+    fallback = next(
+        p for p in package.paragraphs if p.text == "Пояснение без меток вопроса и ответа."
+    )
+    assert mixed_question.text.startswith("Вопрос:")
+    assert mixed_answer.text.startswith("Ответ:")
+    assert mixed_question._p.pPr.find(qn("w:numPr")) is None
+    assert mixed_answer._p.pPr.find(qn("w:numPr")) is None
+    assert fallback.style.name == "Colvir_Абзац"
+    assert fallback._p.pPr.find(qn("w:numPr")) is None
 
 
 # --- heading level mapping --------------------------------------------------

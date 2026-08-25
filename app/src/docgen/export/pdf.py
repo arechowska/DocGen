@@ -124,6 +124,7 @@ class PdfExporter:
         rendered_docx = DocxExporter(
             image_loader=self._image_loader,
             templates_dir=self._templates_dir,
+            request_field_update_on_open=False,
         ).render(document, template)
         with TemporaryDirectory(prefix="docgen-pdf-") as temporary_directory:
             workspace = Path(temporary_directory)
