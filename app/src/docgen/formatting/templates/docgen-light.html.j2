@@ -35,7 +35,6 @@
     {% set has_headers = headers is sequence and headers is not string and headers|length > 0 %}
     {% set has_rows = rows is sequence and rows is not string and rows|length > 0 %}
     {% if has_headers or has_rows %}
-      {% if node.text %}<p class="dg-caption">{{ node.text }}</p>{% endif %}
       <div class="dg-table-wrap">
         <table{{ node_style_attribute(node) }}>
           {% if has_headers %}
